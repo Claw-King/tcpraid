@@ -712,7 +712,10 @@ func lingerOf(t *testing.T, c net.Conn) (on, sec int32) {
 // any close -- the one the kernel does for a process that was killed included. A session
 // that ends cleanly takes that back before it closes: the destination here has not yet
 // read the end of the stream when the exit end closes its connection, and still gets
-// every byte and then a clean end.
+// every byte and then a clean end. (That part does not catch a clean end that resets:
+// the last part fits into the destination's receive buffer, where a reset does not
+// take it away. TestCleanCloseSendsWhatTheSocketHolds does; the socket buffers are left
+// at the system's sizes here, because the stream ends only once all of it is written.)
 func TestApplicationConnectionsAreArmedForReset(t *testing.T) {
 	const size, held = 24 << 20, 256 << 10
 	// the destination: it closes its own direction at once, reads all but the last
@@ -734,9 +737,6 @@ func TestApplicationConnectionsAreArmedForReset(t *testing.T) {
 			return
 		}
 		defer c.Close()
-		// a small receive buffer: the last part cannot all sit in this socket, so a
-		// reset at the clean end of the session would lose some of it
-		c.(*net.TCPConn).SetReadBuffer(16 << 10)
 		c.(*net.TCPConn).CloseWrite()
 		b := make([]byte, size-held)
 		if _, err := io.ReadFull(c, b); err != nil {
