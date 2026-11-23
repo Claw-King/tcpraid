@@ -65,7 +65,7 @@ func ParsePortRange(s string, anyHost bool) (PortRange, error) {
 	case host == "":
 		return PortRange{}, fmt.Errorf("%q: no IP address", s)
 	case net.ParseIP(host) == nil:
-		return PortRange{}, fmt.Errorf("%q: %q is not an IP address (host names are not supported yet)", s, host)
+		return PortRange{}, fmt.Errorf("%q: %q is not an IP address (host names are not supported)", s, host)
 	}
 	first, last, ranged := strings.Cut(ports, "-")
 	if !ranged {
@@ -144,7 +144,7 @@ func (r Rule) Check() error {
 		return nil
 	}
 	if r.Listen == "" || r.Destination == "" {
-		return errors.New("a fixed rule needs listen and destination; a transparent rule needs match")
+		return errors.New("a fixed rule needs listen and destination, and a transparent rule needs match")
 	}
 	_, _, err := r.Ranges()
 	return err
@@ -159,7 +159,7 @@ func (r Rule) Ranges() (listen, destination PortRange, err error) {
 		return listen, destination, fmt.Errorf("destination %w", err)
 	}
 	if listen.Ports() != destination.Ports() {
-		return listen, destination, fmt.Errorf("listen has %d ports and destination %d: the two ranges must have the same length", listen.Ports(), destination.Ports())
+		return listen, destination, fmt.Errorf("listen has %d ports and destination %d, but the two ranges must have the same length", listen.Ports(), destination.Ports())
 	}
 	return listen, destination, nil
 }

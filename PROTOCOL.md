@@ -1,17 +1,17 @@
 # tcpraid wire protocol
 
-Version 1 (`wireVer = 1`). All integers are big-endian unless stated otherwise;
+Version 1 (`wireVer = 1`). All integers are big-endian unless stated otherwise.
 `uvarint` is the unsigned LEB128 encoding used by Go's `encoding/binary`.
 
 ## Roles
 
 A **session** carries one TCP stream in each direction between a client and a
-server. The client opens all sub-connections (TCP); the server listens. Each
+server. The client opens all sub-connections (TCP), and the server listens. Each
 sub-connection is either a **data** sub (carries chunks and snapshots), a
 **repair** sub (a data sub that carries re-sent chunks only, and new chunks only
 while no ordinary data sub of the session is up) or a **control** sub (snapshots
 only). Optionally, snapshots also travel as UDP
-datagrams. Both ends send data and snapshots; the protocol is symmetric after
+datagrams. Both ends send data and snapshots. The protocol is symmetric after
 the handshake.
 
 ## Keys
@@ -25,7 +25,7 @@ snapKeyS2C = HMAC-SHA256(psk, "tcpraid v1 snapshot s2c")   (snapshots sent by th
 MAC(k, m)  = first 16 bytes of HMAC-SHA256(k, m)
 ```
 
-Without a PSK all MAC fields are zero and are not checked; UDP needs a PSK.
+Without a PSK all MAC fields are zero and are not checked. UDP needs a PSK.
 
 ## Sub-connection header (client -> server, 69 bytes)
 
@@ -44,7 +44,7 @@ Without a PSK all MAC fields are zero and are not checked; UDP needs a PSK.
 | 53 | 16 | `MAC(hdrKey, bytes 0..52)` |
 
 With a PSK the server rejects a bad MAC or a time more than 10 minutes off.
-Only a sub with the *new session* flag may create a session; any other sub for
+Only a sub with the *new session* flag may create a session. Any other sub for
 an unknown session is answered "gone".
 
 ## Reply (server -> client, 8 bytes)
@@ -65,11 +65,11 @@ the server half-closes and lingers briefly so the reply survives relays.
 | 4 DIALFAIL | type | server: the destination is unreachable or not allowed |
 
 `seq` numbers chunks from 0 per direction. `send time` is the sender's
-monotonic clock in nanoseconds; only the sender interprets echoed send times.
+monotonic clock in nanoseconds. Only the sender interprets echoed send times.
 
 ## Snapshot
 
-A snapshot is one end's complete state; a newer one (higher `seqNo`) replaces
+A snapshot is one end's complete state. A newer one (higher `seqNo`) replaces
 every older one, so snapshots may be lost, duplicated or reordered freely.
 
 ```
@@ -93,13 +93,13 @@ flags      1 byte    bit 0: the peer's stream was delivered up to its end
                             connection failed or it is exiting); reset yours as for ABORT
 ```
 
-Ranges and gaps are the ones nearest `cum`; a snapshot that cannot hold them
+Ranges and gaps are the ones nearest `cum`. A snapshot that cannot hold them
 all is truncated, and the reader must not infer anything beyond the last
 range. Rules for the receiver of data (the sender of the snapshot):
 
 1. A chunk reported received is never discarded before it is delivered.
-2. A chunk below the highest one received is always accepted; a new highest one
-   only within the reorder budget.
+2. A chunk below the highest one received is always accepted. A new highest one
+   is accepted only within the reorder budget.
 
 ## UDP datagram
 
@@ -110,7 +110,7 @@ key   = HMAC-SHA256(snapKey of the sender's direction, session id)
 nonce = 4 zero bytes || 8-byte counter (per session and direction)
 ```
 
-One end listens on a configured address; the other sends to it. A datagram whose
+One end listens on a configured address, and the other sends to it. A datagram whose
 counter is not above the highest one accepted for that session and direction is
 dropped (replay guard). The listener answers each session at the source address
 of the last accepted datagram. Datagrams that fail authentication are dropped
@@ -119,7 +119,7 @@ of the last accepted datagram. Datagrams that fail authentication are dropped
 ## Sending side behaviour (informative)
 
 - Each data sub holds at most its delivery rate x (base feedback loop + target)
-  of unreported data; the base loop is the lowest send-to-echo time seen on the
+  of unreported data. The base loop is the lowest send-to-echo time seen on the
   sub.
 - Chunks reported received are released at once (window and memory).
 - A chunk in a gap is re-sent alone, to the sub with the shortest queue (not the
@@ -187,8 +187,8 @@ status (1) | n (1) | name (n)
 ```
 
 with status 0 and its own name when it accepted, or another status and
-nothing more when it did not; it does not say why. A code is accepted once,
-before its expiry; after five wrong proofs it is revoked. The whole exchange
+nothing more when it did not. It does not say why. A code is accepted once,
+before its expiry. After five wrong proofs it is revoked. The whole exchange
 has 15 seconds.
 
 Both ends then take the **pair secret**: 32 bytes exported from the same
@@ -232,7 +232,7 @@ the others.
 | 3 | the control connection (below) |
 | 4 | a check: the listening node answers `status (1) = 0` and `MAC(openingKey, "tcpraid link check v1" \| 0x00 \| nonce)`, 17 bytes in all, and the connection ends |
 
-A session belongs to the pair of nodes that created it: a sub-connection from
+A session belongs to the pair of nodes that created it. A sub-connection from
 another peer that names its id is answered like one for a session the server
 does not hold (status 2).
 
@@ -247,7 +247,7 @@ MAC        = MAC(controlKey, length | JSON)
 ```
 
 `length` counts the JSON, at most 16384 bytes. A longer message, or a wrong
-MAC, ends the connection. The JSON is an object with a `type`; a type or a
+MAC, ends the connection. The JSON is an object with a `type`. A type or a
 field that the receiving end does not know is ignored.
 
 | `type` | Sent | Fields | Meaning |
@@ -267,7 +267,7 @@ after the node was restarted or killed and started again. A new process holds
 none of the sessions of the old one. An end that receives a `hello` whose
 `instance` differs from the one it last received from that peer resets the
 sessions it still holds with the peer, if they began before the last message
-it received on a control connection of the old process; a session that began
+it received on a control connection of the old process. A session that began
 after that message is left to the ordinary rules. Nothing is reset on the
 first `instance` an end receives from a peer, on the same one again, on the
 one before the current one (a late message of the old process), or on a
@@ -276,15 +276,15 @@ one before the current one (a late message of the old process), or on a
 **A session whose sub-connections the exit end opens.** A node that has to
 carry a connection to a peer it holds no path to creates the session, picks a
 `request` number and sends `open` on a control connection with that peer. The
-peer dials back over its own paths -- the request names no address -- as many
+request names no address. The peer dials back over its own paths, as many
 connections as its paths ask for, each with an opening of type 2 that carries
 the `request`, the index of the path among the dialing node's paths, and the
 role (0 data, 1 repair, 2 control). On each, the node that asked sends the
 ordinary 69-byte header of the session (with the `new` bit until the peer has
-answered once) and the peer answers with the ordinary 8-byte reply; from there
+answered once) and the peer answers with the ordinary 8-byte reply. From there
 on the sub-connection is like any other. The roles of the two ends in the
-transport are unchanged: the node that asked is the client of the session, the
-node that dialed is the server.
+transport are unchanged. The node that asked is the client of the session, and
+the node that dialed is the server.
 
 The node that dialed keeps the number of sub-connections up while the session
 lives, with a client's limits on redials, each session counted on its own. The node that asked

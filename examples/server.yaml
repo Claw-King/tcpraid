@@ -6,4 +6,4 @@ control:
   udp: { dial: client.example.org:8445 }
 send: { window: 256MB }
 grace: 900s
-limits: { maxrss_mb: 700, maxsess: 64 }
+limits: { maxrss_mb: 700, maxsess: 64 }   # maxrss_mb: Linux only; leave it out on macOS and Windows

@@ -2,12 +2,13 @@
 
 rsync can talk to a remote system in two ways: through a remote shell such as
 ssh, or directly to an **rsync daemon** over TCP, normally on port 873. A run
-of rsync talks to the daemon over one TCP connection; its manual has no option
-to use several. This tutorial puts that connection through tcpraid.
+of rsync talks to the daemon over one TCP connection, and its manual has no
+option to use several. This tutorial puts that connection through tcpraid.
 
-**What was tried.** Exactly the commands below, in a container: a real rsync
-daemon behind one node, a real rsync client through a rule on the other node,
-43 MB in three files; `diff -r` found no difference afterwards. **Not tried:**
+**What was tried.** Exactly the commands below were run in a container, with
+a real rsync daemon behind one node and a real rsync client going through a
+rule on the other node. They transferred 43 MB in three files, and `diff -r`
+found no difference afterwards. **Not tried:**
 any NAS. The notes on NAS products at the end come from their documentation.
 
 ## The setup
@@ -39,17 +40,18 @@ site-a# rsync --daemon --config=/etc/rsyncd.conf --port=873
 ```
 
 This daemon accepts anyone who can reach it. For real use, restrict who may
-use the module, as the rsync documentation (`rsyncd.conf`) describes. Mind one
-thing: through a rule, the daemon sees every client as coming from `nas-a`, so
-a restriction by client address (`hosts allow`) can no longer tell clients
-apart -- whoever can reach the rule's port on `nas-b` arrives as `nas-a`.
+use the module, as the rsync documentation (`rsyncd.conf`) describes. Through
+a rule, the daemon sees every client as coming from `nas-a`, so a restriction
+by client address (`hosts allow`) can no longer tell clients apart. Anyone who
+can reach the rule's port on `nas-b` arrives as `nas-a`.
 Restrict by user and password instead (`auth users` and `secrets file`), and
 make the rule listen only where the clients you mean can reach it.
 
 ## Step 2: a rule on nas-b
 
-In the web page of `nas-b`: Rules > "New rule", listen address and port
-`0.0.0.0:8873`, peer `nas-a`, destination `192.0.2.10:873`. Or:
+In the web page of `nas-b`, go to Rules > "New rule". Set the listen address
+and port to `0.0.0.0:8873`, the peer to `nas-a`, and the destination to
+`192.0.2.10:873`. Or:
 
 ```
 nas-b$ tcpraid rules add rsync -peer nas-a -listen 0.0.0.0:8873 -dest 192.0.2.10:873
@@ -92,14 +94,14 @@ data flows.
 ## What is protected
 
 The rsync daemon protocol itself is not encrypted. Between the two nodes the
-connection is inside TLS 1.3; between rsync and its node at each site it is
+connection is inside TLS 1.3. Between rsync and its node at each site it is
 plain, on the local network.
 
 ## rsync on NAS products
 
 rsync to a daemon is the transfer that is known to fit tcpraid on NAS products
-other than TrueNAS; whether their other replication features open one
-connection or several is not documented by the vendors, and was not tested.
+other than TrueNAS. Whether their other replication features open one
+connection or several is not documented by the vendors and was not tested.
 
 - **Synology**: the documentation lists port 873 for rsync without transfer
   encryption (Shared Folder Sync, Hyper Backup to an rsync server).
@@ -110,8 +112,9 @@ connection or several is not documented by the vendors, and was not tested.
 
 Where the product lets you set the server's address and port, put in the
 node's address and the rule's port. Where it only lets you set the address,
-let the rule listen on port 873 -- which works only if nothing else on the
-node's host uses that port, so not on a NAS that runs its own rsync server.
+let the rule listen on port 873. That works only if nothing else on the
+node's host uses that port, so it does not work on a NAS that runs its own
+rsync server.
 None of this was tried on the products.
 
 ## Sources

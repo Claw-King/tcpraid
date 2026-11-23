@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Claw-King/tcpraid/internal/node"
 )
 
 // Two nodes on loopback, driven through the commands only: pair, make a rule, carry a
@@ -114,17 +117,17 @@ func TestRulesCommands(t *testing.T) {
 		t.Fatalf("a transparent rule on a node with -transparent: %q", out)
 	}
 	for what, args := range map[string][]string{
-		"-peer is missing":     {"rules", "add", "x", "-data", dirB, "-listen", "127.0.0.1:1", "-dest", "192.0.2.1:1"},
-		"no peer is called":    {"rules", "add", "x", "-data", dirB, "-peer", "nobody", "-listen", "127.0.0.1:1", "-dest", "192.0.2.1:1"},
-		"not supported yet":    {"rules", "add", "x", "-data", dirB, "-peer", "alpha", "-listen", "127.0.0.1:1", "-dest", "nas.example.net:1"},
-		"same length":          {"rules", "add", "x", "-data", dirB, "-peer", "alpha", "-listen", "127.0.0.1:1-2", "-dest", "192.0.2.1:1"},
-		"not both":             {"rules", "add", "x", "-data", dirB, "-peer", "alpha", "-listen", "127.0.0.1:1", "-dest", "192.0.2.1:1", "-match", "192.0.2.0/24"},
-		"already takes":        {"rules", "add", "x", "-data", dirB, "-peer", "alpha", "-listen", in, "-dest", "192.0.2.1:1"},
-		"no rule is called":    {"rules", "enable", "nope", "-data", dirB},
-		"not found":            {"rules", "remove", "nope", "-data", dirB},
-		"takes 1 argument(s)":  {"rules", "add", "-data", dirB, "-peer", "alpha"},
-		"unknown command":      {"rules", "frobnicate", "-data", dirB},
-		"flag provided but no": {"rules", "add", "x", "-data", dirB, "-nonsense"},
+		"-peer is missing":             {"rules", "add", "x", "-data", dirB, "-listen", "127.0.0.1:1", "-dest", "192.0.2.1:1"},
+		"no peer is called":            {"rules", "add", "x", "-data", dirB, "-peer", "nobody", "-listen", "127.0.0.1:1", "-dest", "192.0.2.1:1"},
+		"host names are not supported": {"rules", "add", "x", "-data", dirB, "-peer", "alpha", "-listen", "127.0.0.1:1", "-dest", "nas.example.net:1"},
+		"same length":                  {"rules", "add", "x", "-data", dirB, "-peer", "alpha", "-listen", "127.0.0.1:1-2", "-dest", "192.0.2.1:1"},
+		"not both":                     {"rules", "add", "x", "-data", dirB, "-peer", "alpha", "-listen", "127.0.0.1:1", "-dest", "192.0.2.1:1", "-match", "192.0.2.0/24"},
+		"already takes":                {"rules", "add", "x", "-data", dirB, "-peer", "alpha", "-listen", in, "-dest", "192.0.2.1:1"},
+		"no rule is called":            {"rules", "enable", "nope", "-data", dirB},
+		"not found":                    {"rules", "remove", "nope", "-data", dirB},
+		"takes 1 argument(s)":          {"rules", "add", "-data", dirB, "-peer", "alpha"},
+		"unknown command":              {"rules", "frobnicate", "-data", dirB},
+		"flag provided but no":         {"rules", "add", "x", "-data", dirB, "-nonsense"},
 	} {
 		code, _, _, stderr := call(args...)
 		if code == 0 || !strings.Contains(stderr, what) {
@@ -161,8 +164,13 @@ func TestRulesSurviveRestart(t *testing.T) {
 	if _, err := net.DialTimeout("tcp", in, time.Second); err == nil {
 		t.Fatal("the rule's listener outlived the node")
 	}
+	// the address file of the first run goes, so that nothing reads it while the
+	// node of the second run writes its own (a file that is open cannot always be
+	// replaced on Windows)
+	if err := os.Remove(filepath.Join(dirB, node.AddrFile)); err != nil {
+		t.Fatal(err)
+	}
 	startNodeWith(t, runOptions{dataDir: dirB})
-	// the address file of the first run is still there until the node has replaced it
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
 		code, _, out, stderr := call("rules", "-data", dirB)
 		if code == 0 && strings.Contains(out, "keep") && strings.Contains(out, "listening") {

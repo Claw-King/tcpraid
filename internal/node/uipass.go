@@ -93,7 +93,7 @@ func ReadUIPassword(dir string) (string, error) {
 	}
 	hash := strings.TrimSpace(string(b))
 	if _, _, _, err := parsePasswordHash(hash); err != nil {
-		return "", fmt.Errorf("%s: %w; the file is left as it is (remove it to have a new password made)", path, err)
+		return "", fmt.Errorf("%s: %w. The file is left as it is. Remove it to have a new password made.", path, err)
 	}
 	return hash, nil
 }

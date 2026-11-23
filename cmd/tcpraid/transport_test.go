@@ -46,21 +46,28 @@ func TestRunTransportDefaults(t *testing.T) {
 
 // Each transport flag reaches the engine's settings, and nothing else changes.
 func TestRunTransportFlags(t *testing.T) {
-	o, code, done, stderr := runFlagsOf("-data", "/x", "-udp-listen", "192.0.2.1:8446",
-		"-window", "256MB", "-budget", "384MB", "-grace", "3600s", "-hol", "500ms", "-timeline", "2s", "-maxrss", "900")
-	if done {
-		t.Fatalf("ended with code %d: %s", code, stderr)
-	}
+	args := []string{"-data", "/x", "-udp-listen", "192.0.2.1:8446",
+		"-window", "256MB", "-budget", "384MB", "-grace", "3600s", "-hol", "500ms", "-timeline", "2s"}
 	want := engine.DefaultConfig()
 	want.Version, want.UDPListen = version, "192.0.2.1:8446"
 	want.Window, want.Budget = 256<<20, 384<<20
 	want.Grace, want.Hol, want.Timeline = time.Hour, 500*time.Millisecond, 2*time.Second
-	want.MaxRSS = 900
+	logged := "window=256MB budget=384MB grace=1h0m0s hol=500ms timeline=2s maxrss=off"
+	if engine.RSSSupported {
+		// -maxrss exists only where the resident memory can be read
+		args = append(args, "-maxrss", "900")
+		want.MaxRSS = 900
+		logged = "window=256MB budget=384MB grace=1h0m0s hol=500ms timeline=2s maxrss=900MB"
+	}
+	o, code, done, stderr := runFlagsOf(args...)
+	if done {
+		t.Fatalf("ended with code %d: %s", code, stderr)
+	}
 	if got := o.engineConfig(); !reflect.DeepEqual(got, want) {
 		t.Errorf("got  %+v\nwant %+v", got, want)
 	}
-	if got, want := o.transport.String(), "window=256MB budget=384MB grace=1h0m0s hol=500ms timeline=2s maxrss=900MB"; got != want {
-		t.Errorf("logged as %q, want %q", got, want)
+	if got := o.transport.String(); got != logged {
+		t.Errorf("logged as %q, want %q", got, logged)
 	}
 	d := defaultTransport()
 	if got, want := d.String(), defaultTransportLine; got != want {
@@ -107,12 +114,17 @@ func TestRunTransportRefused(t *testing.T) {
 		}
 	}
 	// the lowest limit that fits the budget is taken
-	for _, args := range [][]string{
-		{"-maxrss", "612"},
-		{"-budget", "192MB", "-maxrss", "500"},
+	accepted := [][]string{
 		{"-budget", "1MB", "-window", "1MB"},
 		{"-timeline", "0"},
-	} {
+	}
+	if engine.RSSSupported {
+		accepted = append(accepted, []string{"-maxrss", "612"}, []string{"-budget", "192MB", "-maxrss", "500"})
+	} else if _, code, done, stderr := runFlagsOf("-data", "/x", "-maxrss", "612"); !done || code != 2 || !strings.Contains(stderr, "-maxrss") {
+		// where the resident memory cannot be read, every limit is refused
+		t.Errorf("-maxrss 612 on a system without it: done=%v code=%d stderr=%q", done, code, stderr)
+	}
+	for _, args := range accepted {
 		if _, code, done, stderr := runFlagsOf(append([]string{"-data", "/x"}, args...)...); done {
 			t.Errorf("%q: refused with code %d: %s", args, code, stderr)
 		}
@@ -172,6 +184,9 @@ func TestCheckTransport(t *testing.T) {
 // and says why. The limit here is one that any process is above; the command refuses
 // such a value, so the options are made by hand.
 func TestRunStopsAboveMaxRSS(t *testing.T) {
+	if !engine.RSSSupported {
+		t.Skip("this system does not let the program read its resident memory; -maxrss is refused")
+	}
 	// the limit also sets the memory limit of the Go runtime: put it back
 	defer debug.SetMemoryLimit(math.MaxInt64)
 	tr := defaultTransport()

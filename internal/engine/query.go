@@ -89,7 +89,7 @@ func (e *Engine) Counters() []Counter {
 		{Name: "fb_gaps_1s", Value: e.mFbGaps.Load()},
 		{Name: "bad_snapshots", Value: e.mBadSnap.Load()},
 		{Name: "unacked_mb", Value: e.globalB.Load() >> 20, Gauge: true},
-		{Name: "rss_mb", Value: int64(rssMB()), Gauge: true},
+		{Name: "rss_mb", Value: int64(rssMB()), Gauge: true}, // taken out below where it is not read
 		{Name: "sojourn_ms_max", Value: e.maxSojourn(), Gauge: true},
 		{Name: "udp_in", Value: e.mUDPIn.Load()},
 		{Name: "udp_out", Value: e.mUDPOut.Load()},
@@ -97,6 +97,16 @@ func (e *Engine) Counters() []Counter {
 		{Name: "udp_too_big", Value: e.mUDPBig.Load()},
 		{Name: "udp_old", Value: e.mUDPOld.Load()},
 		{Name: "send_write_ms", Value: e.writeUs.Load() / 1000},
+	}
+	if !RSSSupported {
+		// no figure is better than a zero that reads as one
+		kept := cs[:0]
+		for _, c := range cs {
+			if c.Name != "rss_mb" {
+				kept = append(kept, c)
+			}
+		}
+		cs = kept
 	}
 	for i, n := range waitNames {
 		cs = append(cs, Counter{Name: "send_wait_ms", Label: "reason", Key: n, Value: e.waitUs[i].Load() / 1000})

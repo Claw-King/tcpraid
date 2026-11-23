@@ -26,7 +26,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"unicode"
 	"unicode/utf8"
 )
@@ -106,24 +105,6 @@ func (n *Node) Close() error {
 	return n.lock.Close()
 }
 
-// lockDir takes the exclusive lock on the data directory without waiting for it. The
-// lock belongs to the returned file and ends when the file is closed or the process
-// ends, so a node that crashed leaves no stale lock.
-func lockDir(dir string) (*os.File, error) {
-	f, err := os.OpenFile(filepath.Join(dir, LockFile), os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, fmt.Errorf("the data directory %s is in use by another tcpraid", dir)
-		}
-		return nil, fmt.Errorf("lock %s: %w (the data directory must be on a file system that supports file locks)", f.Name(), err)
-	}
-	return f, nil
-}
-
 // load does the work of Open in a locked directory.
 func load(dir, name string) (*Node, error) {
 	// The state file is read first: one that this program cannot use ends the start
@@ -144,7 +125,7 @@ func load(dir, name string) (*Node, error) {
 	}
 	if name == "" {
 		if name, _ = os.Hostname(); name == "" {
-			return nil, errors.New("the node has no name and this host has no host name to use: set -name")
+			return nil, errors.New("the node has no name and this host has no host name to use. Set -name.")
 		}
 		source = "the host name"
 	}
@@ -152,7 +133,7 @@ func load(dir, name string) (*Node, error) {
 		if source == "-name" {
 			return nil, fmt.Errorf("-name %q: %w", name, err)
 		}
-		return nil, fmt.Errorf("%s, %q, cannot be the node's name: %w; set -name", source, name, err)
+		return nil, fmt.Errorf("%s, %q, cannot be the node's name: %w. Set -name.", source, name, err)
 	}
 	// a directory that has a state file has had an identity: none is made for it again
 	id, err := loadOrCreateIdentity(dir, fresh)
@@ -194,7 +175,7 @@ func CheckName(name string) error {
 	}
 	for _, r := range name {
 		if !unicode.IsPrint(r) {
-			return errors.New("the node name contains a character that is not printable (control, invisible and formatting characters are not allowed)")
+			return errors.New("the node name contains a character that is not printable, such as a control, invisible or formatting character")
 		}
 	}
 	if strings.TrimSpace(name) != name {
@@ -208,8 +189,12 @@ func CheckName(name string) error {
 // key and the token, whatever their own modes), and a key or token file that group or
 // others can read. The node works all the same. A directory that others can only read,
 // such as the usual 0755 of a volume, is not reported: the files in it are created 0600.
+// On Windows nothing is reported: access there is not expressed by these mode bits.
 func (n *Node) Warnings() []string {
 	var ws []string
+	if !modesMeanAccess {
+		return ws
+	}
 	if fi, err := os.Stat(n.Dir); err == nil {
 		if mode := fi.Mode().Perm(); mode&0o022 != 0 {
 			ws = append(ws, fmt.Sprintf("%s is writable by group or others (mode %04o)", n.Dir, mode))
@@ -254,7 +239,7 @@ func ReadToken(dir string) (string, error) {
 	}
 	token := strings.TrimSpace(string(b))
 	if raw, err := hex.DecodeString(token); err != nil || len(raw) != tokenBytes {
-		return "", fmt.Errorf("%s: not a token (want %d hex digits); the file is left as it is", path, 2*tokenBytes)
+		return "", fmt.Errorf("%s: not a token (want %d hex digits). The file is left as it is.", path, 2*tokenBytes)
 	}
 	return token, nil
 }

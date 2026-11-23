@@ -602,7 +602,7 @@ func (s *Server) putPeer(w http.ResponseWriter, r *http.Request, arg map[string]
 		return
 	}
 	if req.Paths == nil && req.Allow == nil && req.UDPDial == nil {
-		writeError(w, http.StatusBadRequest, "the request changes nothing: it has none of the fields \"paths\" (an empty list removes every path), \"allow\", \"udp_dial\"")
+		writeError(w, http.StatusBadRequest, "the request changes nothing, because it has none of the fields \"paths\", \"allow\", \"udp_dial\". An empty list for \"paths\" removes every path.")
 		return
 	}
 	var paths *[]node.Path

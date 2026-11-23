@@ -190,6 +190,9 @@ func TestChangeIsUndoneWhenTheFileCannotBeWritten(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("the super-user writes to a read-only directory")
 	}
+	if !modesMeanAccess {
+		t.Skip("a directory cannot be made read-only through its mode on this system")
+	}
 	n := openNode(t, "alpha")
 	if _, err := n.PutPeer(testPeer("one", 1)); err != nil {
 		t.Fatal(err)
@@ -549,6 +552,9 @@ func TestSetPeerPaths(t *testing.T) {
 func TestSetPeerPathsIsUndoneWhenTheFileCannotBeWritten(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("the super-user writes to a read-only directory")
+	}
+	if !modesMeanAccess {
+		t.Skip("a directory cannot be made read-only through its mode on this system")
 	}
 	n := openNode(t, "alpha")
 	if _, err := n.PutPeer(testPeer("one", 1)); err != nil {

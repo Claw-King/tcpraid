@@ -230,7 +230,9 @@ func (e *Engine) PublishExpvar() {
 	}
 	expvar.Publish("sessions_active", expvar.Func(func() any { return e.nSessions.Load() }))
 	expvar.Publish("unacked_mb", expvar.Func(func() any { return e.globalB.Load() >> 20 }))
-	expvar.Publish("rss_mb", expvar.Func(func() any { return rssMB() }))
+	if RSSSupported {
+		expvar.Publish("rss_mb", expvar.Func(func() any { return rssMB() }))
+	}
 	expvar.Publish("sojourn_ms_max", expvar.Func(func() any { return e.maxSojourn() }))
 	expvar.Publish("udp_in", expvar.Func(func() any { return e.mUDPIn.Load() }))
 	expvar.Publish("udp_out", expvar.Func(func() any { return e.mUDPOut.Load() }))
@@ -385,8 +387,8 @@ func (e *Engine) GuardWith(exit func(format string, a ...interface{})) {
 			last = time.Now()
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)
-			log.Printf("stats sessions=%d goroutines=%d rss=%dMB heap=%dMB unacked=%dMB resends=%d kicks=%d/%d/%d rxdrop=%d udp in/out/bad/toobig/old=%d/%d/%d/%d/%d",
-				e.nSessions.Load(), runtime.NumGoroutine(), rss, m.HeapInuse>>20, e.globalB.Load()>>20, e.mResend.Load(),
+			log.Printf("stats sessions=%d goroutines=%d rss=%s heap=%dMB unacked=%dMB resends=%d kicks=%d/%d/%d rxdrop=%d udp in/out/bad/toobig/old=%d/%d/%d/%d/%d",
+				e.nSessions.Load(), runtime.NumGoroutine(), rssText(rss), m.HeapInuse>>20, e.globalB.Load()>>20, e.mResend.Load(),
 				e.mKickSlow.Load(), e.mKickSilent.Load(), e.mKickWrite.Load(), e.mRxDrop.Load(),
 				e.mUDPIn.Load(), e.mUDPOut.Load(), e.mUDPBad.Load(), e.mUDPBig.Load(), e.mUDPOld.Load())
 			e.registry.Range(func(k, _ any) bool {

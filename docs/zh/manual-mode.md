@@ -1,6 +1,6 @@
 # 手动模式
 
-不带子命令时，`tcpraid` 以**手动模式**运行：没有节点，没有配对，没有网页界面。一个进程是 **client**，靠近应用；一个是 **server**，靠近目的地。一切都由命令行参数或配置文件给出。它是这个程序最底下的一层，适合用在小型路由器上、脚本里，以及你想自己设置传输参数的场合。
+不带子命令时，`tcpraid` 以**手动模式**运行，这时没有节点，没有配对，也没有网页界面。一个进程是 **client**，靠近应用，另一个是 **server**，靠近目的地。一切都由命令行参数或配置文件给出。它是这个程序最底下的一层，适合用在小型路由器上、脚本里，以及你想自己设置传输参数的场合。
 
 ```
  app --> [client] ==== data sub-connections (TCP, any path) ====> [server] --> destination
@@ -8,7 +8,7 @@
             +------- feedback: UDP / control connection / piggyback -+
 ```
 
-- client 接受应用的连接，打开子连接，并告诉 server 应用原本要去哪里。它需要能向 server 发起 TCP 连接，直接连，或者经过中继、端口转发或 SOCKS5 代理；server 从不主动连 client。
+- client 接受应用的连接，打开子连接，并告诉 server 应用原本要去哪里。它需要能向 server 发起 TCP 连接，直接连，或者经过中继、端口转发或 SOCKS5 代理。server 从不主动连 client。
 - server 接受子连接，并在它的允许列表准许的情况下，打开通往目的地的真正连接。
 
 **手动模式不加密数据流。** 见下面的“安全”。
@@ -40,12 +40,12 @@ tcpraid -mode client -listen 127.0.0.1:9801 -remote server.example.org:9901 \
 
 ```
 $ tcpraid -check -mode client -listen 127.0.0.1:9801 -remote server.example.org:9901 -dst 192.0.2.5:873 -psk psk
-ok: 0.1.3 client paths [data/data x8], window 128 MB, budget 256 MB, maxrss 0 MB, grace 15m0s, psk true, udp listen "" dial ""
+ok: 0.2.0 client paths [data/data x8], window 128 MB, budget 256 MB, maxrss 0 MB, grace 15m0s, psk true, udp listen "" dial ""
 ```
 
 ## 透明使用
 
-不带 `-dst` 时，client 取每条被重定向过来的连接的原始目的地(Linux 的 `SO_ORIGINAL_DST`，IPv4 和 IPv6)。应用继续连它平常的地址。用 nftables，配在 client 所在的主机上，或者流量经过的路由器上(那里需要 root 权限)：
+不带 `-dst` 时，client 取每条被重定向过来的连接的原始目的地(Linux 的 `SO_ORIGINAL_DST`，IPv4 和 IPv6)。这种用法只在 Linux 上有。在 macOS 和 Windows 上 client 必须带 `-dst`，否则启动时会报错说明。应用继续连它平常的地址。用 nftables，配在 client 所在的主机上，或者流量经过的路由器上(那里需要 root 权限)：
 
 ```
 table ip tcpraid {
@@ -60,7 +60,7 @@ table ip tcpraid {
 
 ## 路径和角色
 
-一个 client 可以同时使用多条路径。路径是连到 server 的一种方式：一个地址，可以经过一个 SOCKS5 代理。每条路径有一个或多个角色：
+一个 client 可以同时使用多条路径。路径是连到 server 的一种方式，也就是一个地址，可以经过一个 SOCKS5 代理。每条路径有一个或多个角色：
 
 | 角色 | 承担 | 默认连接数 |
 |---|---|---|
@@ -68,15 +68,15 @@ table ip tcpraid {
 | `repair` | 只有重发的数据块；只有当没有任何 `data` 子连接连着时才传新块 | 2(`subs`) |
 | `control` | 只有快照 | 1(`ctrl`) |
 
-`data` 和 `repair` 不能放在同一条路径上。典型的配置是一条主路径承担 `data`，另一条独立的路径承担 `repair` 和 `control`：缺的块从第二条路径补上，回执不用排在大量数据后面，第一条路径断了的时候由第二条顶上。
+`data` 和 `repair` 不能放在同一条路径上。典型的配置是一条主路径承担 `data`，另一条独立的路径承担 `repair` 和 `control`。这样缺的块从第二条路径补上，回执不用排在大量数据后面，第一条路径断了的时候由第二条顶上。
 
-路径在配置文件里设置(见下)。命令行参数描述的是常见情形：一条数据路径(`-remote`、`-n`、`-socks`)，可选地再加控制连接(`-ctrl`、`-ctrlremote`、`-ctrlsocks`)。
+路径在配置文件里设置(见下)。命令行参数描述的是常见情形，即一条数据路径(`-remote`、`-n`、`-socks`)，可选地再加控制连接(`-ctrl`、`-ctrlremote`、`-ctrlsocks`)。
 
-想让某条路径走特定的线路而又不需要额外权限，就让它指向一个目的地是 tcpraid server 的代理或端口转发。`mark`(SO_MARK)可以用于策略路由，但需要 CAP_NET_ADMIN。
+想让某条路径走特定的线路而又不需要额外权限，就让它指向一个目的地是 tcpraid server 的代理或端口转发。`mark`(SO_MARK)可以用于策略路由，但需要 CAP_NET_ADMIN。它只在 Linux 上有，在别的系统上，带 mark 的路径会在启动时被拒绝。
 
 ## 回执通道
 
-在有些线路上，正向忙着传数据时，反向丢包很严重。普通的 TCP 不在乎这一点(它的 ACK 是累计的，而且很多)，但在那个方向上作为 TCP 数据发送的回执，会卡在一个丢失的报文段后面几秒甚至几十秒。所以 tcpraid 会在你给它的每一条通道上都发送回执，哪一条先到就用哪一条：
+在有些线路上，正向忙着传数据时，反向丢包很严重。普通的 TCP 不在乎这一点，因为它的 ACK 是累计的，而且很多，但在那个方向上作为 TCP 数据发送的回执，会卡在一个丢失的报文段后面几秒甚至几十秒。所以 tcpraid 会在你给它的每一条通道上都发送回执，哪一条先到就用哪一条：
 
 | 通道 | 是什么 | 什么时候用 |
 |---|---|---|
@@ -84,7 +84,7 @@ table ip tcpraid {
 | `control` 路径 | 一条不承载数据的 TCP 连接，走它自己的路径 | 你有第二条路径，而且数据不会压在它上面 |
 | 捎带(piggyback) | 走数据子连接(始终开着；别的通道正常工作时每秒一次) | 兜底 |
 
-用 UDP 时，端口可达的一端监听，另一端发给它；监听的一端按来源地址回复，所以发送的一端可以在 NAT 后面。两端都需要密钥。
+用 UDP 时，端口可达的一端监听，另一端发给它。监听的一端按来源地址回复，所以发送的一端可以在 NAT 后面。两端都需要密钥。
 
 ```
 client: ... -udplisten 0.0.0.0:8445
@@ -115,10 +115,10 @@ limits: { maxrss_mb: 700, maxsess: 64 }
 
 ```
 $ tcpraid -config client.yaml -check
-ok: 0.1.3 client paths [main/data x8, second/repair x4, second/control x1, proxy/data x4], window 128 MB, budget 256 MB, maxrss 700 MB, grace 15m0s, psk true, udp listen "0.0.0.0:8445" dial ""
+ok: 0.2.0 client paths [main/data x8, second/repair x4, second/control x1, proxy/data x4], window 128 MB, budget 256 MB, maxrss 700 MB, grace 15m0s, psk true, udp listen "0.0.0.0:8445" dial ""
 ```
 
-`addr` 是 client 经这条路径要去连的地址：tcpraid server 的监听，或者通往它的入口；对于目的地固定的端口转发或代理入口，它就是那个转发的地址。server 不需要 `paths`：
+`addr` 是 client 经这条路径要去连的地址。它是 tcpraid server 的监听，或者通往它的入口。对于目的地固定的端口转发或代理入口，它就是那个转发的地址。server 不需要 `paths`：
 
 ```yaml
 mode: server
@@ -158,7 +158,7 @@ control:
 | `-grace` | `grace` | 900 s | 对端沉默这么久之内，保留会话 |
 | `-dead` | `dead` | 20 s | 子连接上有在途数据却这么久没有进展，就换掉它 |
 | `-kickratio` | | 5 | 一条忙碌的子连接，交付速度连续 10 秒低于所在路径中位数除以这个值，就换掉它 |
-| `-maxrss` | `limits.maxrss_mb` | 关闭 | 超过这么多 MB 就退出；至少为 2 × `budget` + 100 MB(启动时检查) |
+| `-maxrss` | `limits.maxrss_mb` | 关闭 | 超过这么多 MB 就退出；至少为 2 × `budget` + 100 MB(启动时检查)。只在 Linux 上有：在 macOS 和 Windows 上启动时会被拒绝，那里的配置文件里不要写 `limits.maxrss_mb` |
 | `-maxsess` | `limits.maxsess` | 64 | 超过这个数目就拒绝新会话 |
 | `-timeline` | `timeline` | 关闭 | 每隔这么久为每个会话记一行诊断信息 |
 | `-stats` | | 关闭 | 每隔这么久记录会话、内存和每条子连接的状态 |
@@ -168,13 +168,13 @@ control:
 
 其余的调节参数和测试参数见 `tcpraid -h`。
 
-**内存。** 最坏情况下一个进程持有大约两倍 `budget` 的流数据：默认值下约 512 MB。在小机器上请调低 `budget` 和 `window`。
+**内存。** 最坏情况下一个进程持有大约两倍 `budget` 的流数据，默认值下约 512 MB。在小机器上请调低 `budget` 和 `window`。
 
 ## 运行
 
 **停止。** 遇到 SIGINT / SIGTERM、`-maxrss` 或 `-life` 时，tcpraid 先通知每一个对端，然后重置它的应用连接并退出。对端会立刻丢弃这些会话，而不是连同缓存的数据一起保留 `grace` 那么久。
 
-**重启。** 会话状态在内存里。重启之后的进程没法恢复它的会话；应用会看到连接被重置，必须重试。
+**重启。** 会话状态在内存里。重启之后的进程没法恢复它的会话，所以应用会看到连接被重置，必须重试。
 
 **可观测性。** `-timeline 1s` 为每个会话记录：已发送(`tx`)、重发(`re`)、已确认(`ack`)、已接收(`rx`)和已交付(`dlv`)的 MB/s，未确认和乱序的积压，回执的新旧程度以及它是从哪些通道到达的(`fbc` 控制连接，`fbu` UDP)，达到上限的子连接数，等待缺失块的最老的块等了多久(`holage`)，读取方等待窗口的时间占比(`pumpwait`)，以及回执周期的 p50 / p95(毫秒，`loop`)。最先暴露回执问题的两个数字是 `pumpwait` 和回执周期的 p95。`troubleshooting.md` 逐个解释了这一行的每个字段，以及会话结束时记的那两行。
 
@@ -187,4 +187,4 @@ control:
 
 ## 兼容性
 
-client 和 server 必须运行相同的线路协议版本；没有协商。节点和手动模式的进程之间不能互通：节点之间的连接以一段开场白开头，而手动模式不发送它。
+client 和 server 必须运行相同的线路协议版本，没有协商。节点和手动模式的进程之间不能互通，因为节点之间的连接以一段开场白开头，而手动模式不发送它。

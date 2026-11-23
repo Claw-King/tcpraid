@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Claw-King/tcpraid/internal/node"
+	"github.com/Claw-King/tcpraid/internal/pair"
 )
 
 // failingListener fails the first n calls of Accept the way a process out of file
@@ -101,7 +102,7 @@ func TestServeEndsWhenListenerIsClosed(t *testing.T) {
 func closedSoon(c net.Conn) bool {
 	c.SetReadDeadline(time.Now().Add(time.Second))
 	_, err := c.Read(make([]byte, 1))
-	return errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET)
+	return errors.Is(err, io.EOF) || pair.IsReset(err)
 }
 
 // Connections that have not proved who they are are bounded, and a newcomer is never the

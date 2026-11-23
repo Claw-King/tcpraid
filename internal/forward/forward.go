@@ -476,7 +476,7 @@ func (rt *Runtime) Rules() []RuleStatus {
 		case r.Transparent():
 			st.Listening = rt.transparent
 			if !rt.transparent {
-				st.Error = "the node has no transparent listener (tcpraid run -transparent ADDR)"
+				st.Error = "the node has no transparent listener. Start it with \"tcpraid run -transparent ADDR\"."
 			}
 		default:
 			_, st.Listening = rt.running[r.Name]

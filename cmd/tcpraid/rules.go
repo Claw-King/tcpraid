@@ -24,7 +24,7 @@ func ruleState(r api.Rule) string {
 	case r.Error != "" && !r.Listening:
 		return "FAILED: " + r.Error
 	case r.Error != "":
-		return "listening; last connection: " + r.Error
+		return "listening, last connection: " + r.Error
 	case r.Listening:
 		return "listening"
 	}
@@ -84,14 +84,14 @@ func cmdRules(args []string, stdout, stderr io.Writer) int {
 			name: "rules add", usage: "NAME -peer PEER (-listen IP:PORT[-PORT] -dest IP:PORT[-PORT] | -match NETWORKS)", nargs: 1,
 			flags: func(fs *flag.FlagSet) {
 				fs.StringVar(&spec.Peer, "peer", "", "name of the peer the connections go to")
-				fs.StringVar(&spec.Listen, "listen", "", "fixed rule: where this node listens, IP:port or IP:first-last (the IP may be left out: every address)")
+				fs.StringVar(&spec.Listen, "listen", "", "fixed rule: where this node listens, IP:port or IP:first-last (without the IP: every address)")
 				fs.StringVar(&spec.Destination, "dest", "", "fixed rule: where the connections go at the peer's end, IP:port or IP:first-last (same number of ports as -listen)")
-				fs.StringVar(&spec.Match, "match", "", "transparent rule: original destinations it takes, networks with optional ports (192.0.2.0/24:873,[2001:db8::/32]:5000-5010); needs tcpraid run -transparent")
+				fs.StringVar(&spec.Match, "match", "", "transparent rule: original destinations it takes, networks with optional ports such as 192.0.2.0/24:873,[2001:db8::/32]:5000-5010 (needs tcpraid run -transparent)")
 				fs.BoolVar(&disabled, "disabled", false, "store the rule switched off")
 			},
 			run: func(dataDir string, args []string, stdout, _ io.Writer) error {
 				if spec.Peer == "" {
-					return errors.New("-peer is missing: name the peer the connections go to (tcpraid peers lists them)")
+					return errors.New("-peer is missing. Name the peer the connections go to. \"tcpraid peers\" lists them.")
 				}
 				spec.Name = args[0]
 				enabled := !disabled
@@ -113,7 +113,7 @@ func cmdRules(args []string, stdout, stderr io.Writer) int {
 				if err := apiCall(dataDir, http.MethodDelete, rulePath(args[0]), nil, nil, shortCall); err != nil {
 					return err
 				}
-				fmt.Fprintf(stdout, "rule %s removed; connections it carries now run to their end\n", args[0])
+				fmt.Fprintf(stdout, "rule %s removed. Connections it carries now run to their end.\n", args[0])
 				return nil
 			},
 		},

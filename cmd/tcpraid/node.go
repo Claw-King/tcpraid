@@ -38,7 +38,6 @@ import (
 )
 
 const (
-	defaultDataDir = "/var/lib/tcpraid"
 	defaultAPIAddr = "127.0.0.1:9850"
 
 	// shutdownWait is how long a stopping node waits for connections from other nodes
@@ -133,15 +132,15 @@ func runFlags(args []string, stderr io.Writer) (o runOptions, code int, done boo
 	fs.SetOutput(stderr)
 	dataDir := fs.String("data", defaultDataDir, "data directory (created if missing)")
 	apiAddr := fs.String("api", defaultAPIAddr, "listen address of the local API")
-	name := fs.String("name", "", "name of this node (default: the name it already has; at the first start, the host name)")
+	name := fs.String("name", "", "name of this node (default: the name it already has, or the host name at the first start)")
 	fs.StringVar(&o.listen, "listen", "", "listen address for other nodes, TLS (empty: this node can join others, but not be joined)")
 	fs.StringVar(&o.listenPlain, "listen-plain", "", "listen address for peers without TLS, for paths that are already encrypted (empty: off)")
-	fs.StringVar(&o.certFile, "cert", "", "certificate (PEM) shown to peers that use the owncert tier; needs -key and -listen")
+	fs.StringVar(&o.certFile, "cert", "", "certificate (PEM) shown to peers that use the owncert tier (needs -key and -listen)")
 	fs.StringVar(&o.keyFile, "key", "", "private key (PEM) of -cert")
-	fs.Var(&o.advertise, "advertise", "HOST:PORT at which other nodes reach -listen, put into pairing codes; may be given more than once")
-	fs.StringVar(&o.transparent, "transparent", "", "listen address for connections that the host redirects to this node (an nftables or iptables redirect rule); transparent rules decide where they go (empty: off)")
+	fs.Var(&o.advertise, "advertise", "HOST:PORT at which other nodes reach -listen, put into pairing codes (may be given more than once)")
+	fs.StringVar(&o.transparent, "transparent", "", "listen address for connections that an nftables or iptables redirect rule of the host sends to this node, to be routed by transparent rules (empty: off)")
 	fs.StringVar(&o.udpListen, "udp-listen", "", "listen address (UDP) for feedback from peers that are told to send it here (empty: off)")
-	fs.StringVar(&o.uiPasswordFile, "ui-password-file", "", "file with the password of the web interface; without it the environment variable "+uiPasswordEnv+" is used, and without that a password is made at the first start and logged once")
+	fs.StringVar(&o.uiPasswordFile, "ui-password-file", "", "file with the password of the web interface (default: the environment variable "+uiPasswordEnv+", or else a password made at the first start and logged once)")
 	transport := defaultTransport()
 	transport.flags(fs)
 	fs.DurationVar(&o.stats, "stats", 0, "log one line of the node's totals, and one for each session, this often (0: off)")
@@ -149,7 +148,7 @@ func runFlags(args []string, stderr io.Writer) (o runOptions, code int, done boo
 		return o, code, true
 	}
 	if *dataDir == "" {
-		fmt.Fprintln(stderr, "tcpraid run: -data is empty: name the data directory")
+		fmt.Fprintln(stderr, "tcpraid run: -data is empty. Name the data directory.")
 		return o, 2, true
 	}
 	o.dataDir, o.apiAddr, o.name, o.transport = *dataDir, *apiAddr, *name, &transport
@@ -184,7 +183,7 @@ func (o *runOptions) check() error {
 		return errors.New("-cert and -key go together")
 	}
 	if o.certFile != "" && o.listen == "" {
-		return errors.New("-cert is shown at -listen: set -listen")
+		return errors.New("-cert is shown at -listen. Set -listen as well.")
 	}
 	for _, a := range o.advertise {
 		if err := pair.CheckAddress(a); err != nil {
@@ -193,6 +192,9 @@ func (o *runOptions) check() error {
 	}
 	if o.stats < 0 {
 		return errors.New("-stats must not be negative (0: off)")
+	}
+	if o.transparent != "" && !engine.TransparentSupported {
+		return errors.New("-transparent is only available on Linux, because it needs the host to redirect connections to the node")
 	}
 	if o.transport != nil {
 		return o.transport.check()
@@ -318,8 +320,17 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 	transport := transportOptions{window: cfg.Window, budget: cfg.Budget, grace: cfg.Grace, hol: cfg.Hol, timeline: cfg.Timeline, maxRSS: cfg.MaxRSS}
 	log.Printf("transport %s", &transport)
 
+	// where the web page is, as something to type into a browser: the line above says
+	// only "api=", and a person who starts a node for the first time looks for this
+	if a, ok := listeners[0].ln.Addr().(*net.TCPAddr); ok {
+		host := a.IP.String()
+		if a.IP.IsUnspecified() {
+			host = "127.0.0.1" // every address of this machine: its own is the one sure to work
+		}
+		log.Printf("web interface: open http://%s in a browser on this machine", net.JoinHostPort(host, strconv.Itoa(a.Port)))
+	}
 	if a, ok := listeners[0].ln.Addr().(*net.TCPAddr); ok && !a.IP.IsLoopback() {
-		log.Printf("the web interface and the API at %s are plain HTTP and reachable from other hosts: use them on a network you trust, or put a reverse proxy with TLS in front", a)
+		log.Printf("the web interface and the API at %s are plain HTTP and reachable from other hosts. Use them on a network you trust, or put a reverse proxy with TLS in front.", a)
 	}
 	// One listener that fails stops the others; the first error is the node's.
 	ctx, cancel := context.WithCancel(ctx)
@@ -362,7 +373,7 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 	// (a pairing stores a peer): it gets a moment to finish before the lock on the data
 	// directory goes.
 	if !lsrv.Wait(shutdownWait) {
-		log.Printf("connections from other nodes were still open after %v; stopping anyway", shutdownWait)
+		log.Printf("connections from other nodes were still open after %v, stopping anyway", shutdownWait)
 	}
 	if first != nil {
 		return first
@@ -393,7 +404,7 @@ func cmdStatus(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	if *dataDir == "" {
-		fmt.Fprintln(stderr, "tcpraid status: -data is empty: name the data directory")
+		fmt.Fprintln(stderr, "tcpraid status: -data is empty. Name the data directory.")
 		return 2
 	}
 	st, body, err := queryStatus(*dataDir)

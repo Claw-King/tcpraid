@@ -9,7 +9,6 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/Claw-King/tcpraid/internal/node"
@@ -127,9 +126,8 @@ func newWaiting(limit int) *waiting {
 // descriptors for the connections that carry traffic and for the node's own files.
 func defaultLimit() int {
 	limit := DefaultMaxUnauthenticated
-	var rl syscall.Rlimit
-	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rl); err == nil && rl.Cur/4 < uint64(limit) {
-		limit = int(rl.Cur / 4)
+	if files, ok := openFileLimit(); ok && files/4 < uint64(limit) {
+		limit = int(files / 4)
 	}
 	return max(limit, 4)
 }
@@ -442,7 +440,7 @@ func (s *Server) serve(ctx context.Context, ln net.Listener, handle func(c net.C
 		if evicted != nil {
 			// its handler sees the connection fail and returns
 			evicted.Close()
-			s.LogRefused("closed a waiting connection from %s to make room: too many connections that have not proved who they are", evicted.RemoteAddr())
+			s.LogRefused("closed a waiting connection from %s to make room, because too many connections have not proved who they are", evicted.RemoteAddr())
 		}
 		s.handlers.Add(1)
 		go func() {

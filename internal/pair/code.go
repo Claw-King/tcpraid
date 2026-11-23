@@ -53,9 +53,9 @@ const (
 
 // Errors of Parse. Callers match them with errors.Is.
 var (
-	ErrNotACode  = errors.New("this is not a tcpraid pairing code (it does not start with " + prefix + ")")
+	ErrNotACode  = errors.New("this does not start with " + prefix + " and is not a tcpraid pairing code")
 	ErrVersion   = errors.New("the pairing code is of a version this program does not know")
-	ErrChecksum  = errors.New("the pairing code is damaged (its checksum does not match): copy it again, complete and unchanged")
+	ErrChecksum  = errors.New("the pairing code is damaged. Its checksum does not match. Copy it again, complete and unchanged.")
 	ErrMalformed = errors.New("the pairing code is malformed")
 	ErrExpired   = errors.New("the pairing code has expired")
 )
@@ -207,7 +207,7 @@ func Parse(text string, now time.Time) (*Code, error) {
 		return nil, fmt.Errorf("%w: it holds no address, too many, or one that is not host:port", ErrMalformed)
 	}
 	if !c.Expires.After(now) {
-		return nil, fmt.Errorf("%w (at %s): ask for a new one", ErrExpired, c.Expires.UTC().Format(time.RFC3339))
+		return nil, fmt.Errorf("%w. It expired at %s. Ask for a new one.", ErrExpired, c.Expires.UTC().Format(time.RFC3339))
 	}
 	return c, nil
 }

@@ -58,19 +58,19 @@ func (id *Identity) TLSCertificate() tls.Certificate {
 func loadOrCreateIdentity(dir string, create bool) (*Identity, error) {
 	keyPath := filepath.Join(dir, KeyFile)
 	certPath := filepath.Join(dir, CertFile)
-	const kept = "the file is left as it is"
+	const kept = "The file is left as it is."
 
 	var key ed25519.PrivateKey
 	keyPEM, err := os.ReadFile(keyPath)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		if _, err := os.Lstat(certPath); err == nil {
-			return nil, fmt.Errorf("%s exists without %s: not creating a new identity over it", certPath, keyPath)
+			return nil, fmt.Errorf("%s exists without %s, so no new identity is created over it", certPath, keyPath)
 		} else if !errors.Is(err, fs.ErrNotExist) {
 			return nil, err
 		}
 		if !create {
-			return nil, fmt.Errorf("%s has a state file but neither %s nor %s: its identity is lost, and a new one is not created in its place", dir, KeyFile, CertFile)
+			return nil, fmt.Errorf("%s has a state file but neither %s nor %s. Its identity is lost, and a new one is not created in its place.", dir, KeyFile, CertFile)
 		}
 		if _, key, err = ed25519.GenerateKey(rand.Reader); err != nil {
 			return nil, err
@@ -83,10 +83,10 @@ func loadOrCreateIdentity(dir string, create bool) (*Identity, error) {
 			return nil, err
 		}
 	case err != nil:
-		return nil, fmt.Errorf("%w; %s", err, kept)
+		return nil, fmt.Errorf("%w. %s", err, kept)
 	default:
 		if key, err = parseKey(keyPEM); err != nil {
-			return nil, fmt.Errorf("%s: %w; %s", keyPath, err, kept)
+			return nil, fmt.Errorf("%s: %w. %s", keyPath, err, kept)
 		}
 	}
 
@@ -102,14 +102,14 @@ func loadOrCreateIdentity(dir string, create bool) (*Identity, error) {
 			return nil, err
 		}
 	case err != nil:
-		return nil, fmt.Errorf("%w; %s", err, kept)
+		return nil, fmt.Errorf("%w. %s", err, kept)
 	}
 	cert, err := parseCert(certPEM)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w; %s", certPath, err, kept)
+		return nil, fmt.Errorf("%s: %w. %s", certPath, err, kept)
 	}
 	if pub, ok := cert.PublicKey.(ed25519.PublicKey); !ok || !pub.Equal(key.Public()) {
-		return nil, fmt.Errorf("%s does not belong to the key in %s; both files are left as they are", certPath, keyPath)
+		return nil, fmt.Errorf("%s does not belong to the key in %s. Both files are left as they are.", certPath, keyPath)
 	}
 	return &Identity{Key: key, Cert: cert}, nil
 }

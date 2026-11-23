@@ -1,0 +1,3 @@
+# Text files keep their line ends as they are in the repository on every system: the
+# web page is built into the program from these files, and the tests read them.
+* text=auto eol=lf

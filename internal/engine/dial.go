@@ -2,8 +2,8 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"net"
-	"syscall"
 	"time"
 )
 
@@ -19,25 +19,14 @@ type DialGroup struct {
 	Dial   func() (net.Conn, error)
 }
 
-func markControl(mark int) func(_, _ string, rc syscall.RawConn) error {
-	if mark == 0 {
-		return nil
-	}
-	return func(_, _ string, rc syscall.RawConn) error {
-		var serr error
-		if err := rc.Control(func(fd uintptr) {
-			serr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_MARK, mark)
-		}); err != nil {
-			return err
-		}
-		return serr
-	}
-}
-
 // NewDial returns a function that opens one TCP connection to addr: directly, or through
 // the SOCKS5 proxy given as socks5://[user:pass@]host:port (empty = direct). A non-zero
-// mark sets SO_MARK on the socket (needs CAP_NET_ADMIN).
+// mark sets SO_MARK on the socket (needs CAP_NET_ADMIN); only Linux has it
+// (MarkSupported), and elsewhere a non-zero mark is an error.
 func NewDial(addr, proxy string, mark int) (func() (net.Conn, error), error) {
+	if mark != 0 && !MarkSupported {
+		return nil, errors.New("a socket mark (SO_MARK) can only be set on Linux")
+	}
 	d := &net.Dialer{Timeout: 10 * time.Second, Control: markControl(mark)}
 	px, err := parseSocks(proxy)
 	if err != nil {

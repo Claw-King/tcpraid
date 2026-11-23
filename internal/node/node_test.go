@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -74,6 +75,13 @@ func perm(t *testing.T, path string) os.FileMode {
 	return fi.Mode().Perm()
 }
 
+// wrongMode says whether the file at path has another mode than want. Where the mode
+// bits do not express access (Windows), no mode is wrong.
+func wrongMode(t *testing.T, path string, want os.FileMode) bool {
+	t.Helper()
+	return modesMeanAccess && perm(t, path) != want
+}
+
 func read(t *testing.T, path string) []byte {
 	t.Helper()
 	b, err := os.ReadFile(path)
@@ -91,8 +99,8 @@ func TestOpenCreatesThenLoads(t *testing.T) {
 	for name, want := range map[string]os.FileMode{
 		".": 0o700, KeyFile: 0o600, CertFile: 0o644, StateFile: 0o600, TokenFile: 0o600,
 	} {
-		if got := perm(t, filepath.Join(dir, name)); got != want {
-			t.Errorf("%s: mode %o, want %o", name, got, want)
+		if wrongMode(t, filepath.Join(dir, name), want) {
+			t.Errorf("%s: mode %o, want %o", name, perm(t, filepath.Join(dir, name)), want)
 		}
 	}
 	fp := a.Identity.Fingerprint()
@@ -263,8 +271,8 @@ func TestStateRoundTrip(t *testing.T) {
 	if err := s.Save(path); err != nil {
 		t.Fatal(err)
 	}
-	if got := perm(t, path); got != 0o600 {
-		t.Fatalf("mode %o, want 600", got)
+	if wrongMode(t, path, 0o600) {
+		t.Fatalf("mode %o, want 600", perm(t, path))
 	}
 	var generic map[string]any
 	if err := json.Unmarshal(read(t, path), &generic); err != nil {
@@ -402,6 +410,14 @@ func TestNodeName(t *testing.T) {
 	}
 
 	fresh := t.TempDir()
+	if CheckName(host) != nil {
+		// the host name of this machine cannot be a node's name (too long, for one):
+		// a node without a name does not start, and says what to do
+		if _, err := Open(fresh, ""); err == nil || !strings.Contains(err.Error(), "Set -name") {
+			t.Fatalf("new directory without a name on a host called %q: %v, want an error that says to set -name", host, err)
+		}
+		return
+	}
 	if n := mustOpen(t, fresh, ""); n.Name() != host || stored(fresh) != host {
 		t.Fatalf("new directory without a name: node %q, state file %q, want the host name %q", n.Name(), stored(fresh), host)
 	}
@@ -503,8 +519,8 @@ func TestCreateFileIsExclusive(t *testing.T) {
 	if err := createFile(path, []byte("first"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := perm(t, path); got != 0o600 || string(read(t, path)) != "first" {
-		t.Fatalf("created with mode %o and content %q", got, read(t, path))
+	if wrongMode(t, path, 0o600) || string(read(t, path)) != "first" {
+		t.Fatalf("created with mode %o and content %q", perm(t, path), read(t, path))
 	}
 	err := createFile(path, []byte("second"), 0o600)
 	if !errors.Is(err, fs.ErrExist) {
@@ -529,6 +545,9 @@ func TestKeyAndTokenAreCreatedNotReplaced(t *testing.T) {
 	// a dangling link: reading it says "does not exist", yet the name is taken
 	for _, name := range []string{KeyFile, TokenFile} {
 		if err := os.Symlink(filepath.Join(dir, "nowhere"), filepath.Join(dir, name)); err != nil {
+			if runtime.GOOS == "windows" {
+				t.Skipf("no symbolic link could be made (it takes a privilege on Windows): %v", err)
+			}
 			t.Fatal(err)
 		}
 	}
@@ -580,6 +599,9 @@ func TestStateWithoutIdentity(t *testing.T) {
 }
 
 func TestWarnings(t *testing.T) {
+	if !modesMeanAccess {
+		t.Skip("the mode bits do not express access on this system; nothing is reported")
+	}
 	dir := filepath.Join(t.TempDir(), "data")
 	n := mustOpen(t, dir, "alpha")
 	if ws := n.Warnings(); len(ws) != 0 {
@@ -651,8 +673,8 @@ func TestAPIAddr(t *testing.T) {
 	if got, err := ReadAPIAddr(dir); err != nil || got != "[2001:db8::1]:9850" {
 		t.Fatalf("read %q, %v", got, err)
 	}
-	if got := perm(t, filepath.Join(dir, AddrFile)); got != 0o600 {
-		t.Fatalf("mode %o, want 600", got)
+	if wrongMode(t, filepath.Join(dir, AddrFile), 0o600) {
+		t.Fatalf("mode %o, want 600", perm(t, filepath.Join(dir, AddrFile)))
 	}
 }
 
@@ -663,7 +685,7 @@ func TestCreateDirectIsExclusive(t *testing.T) {
 	if err := createDirect(path, []byte("one"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+	if fi, err := os.Stat(path); err != nil || (modesMeanAccess && fi.Mode().Perm() != 0o600) {
 		t.Fatalf("mode %v, err %v", fi.Mode().Perm(), err)
 	}
 	err := createDirect(path, []byte("two"), 0o600)
@@ -732,7 +754,7 @@ func TestBadNameOnExistingNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = Open(dir, "")
-	if err == nil || !strings.Contains(err.Error(), StateFile) || !strings.Contains(err.Error(), "set -name") {
+	if err == nil || !strings.Contains(err.Error(), StateFile) || !strings.Contains(err.Error(), "Set -name") {
 		t.Fatalf("Open with a bad stored name: %v", err)
 	}
 	if !bytes.Equal(read(t, statePath), stored) {

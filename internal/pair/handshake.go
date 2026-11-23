@@ -28,7 +28,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"syscall"
 	"time"
 
 	"github.com/Claw-King/tcpraid/internal/node"
@@ -49,7 +48,7 @@ const (
 
 // ErrRefused: the node that made the code did not accept it. It does not say why: the
 // code may be wrong, used, expired or revoked.
-var ErrRefused = errors.New("the other node did not accept the pairing code: it is wrong, was used, has expired or was revoked")
+var ErrRefused = errors.New("the other node did not accept the pairing code. It is wrong, was used, has expired or was revoked.")
 
 // Result is what a completed pairing gives each node about the other.
 type Result struct {
@@ -96,8 +95,8 @@ func Join(conn net.Conn, cert tls.Certificate, code *Code, name string) (*Result
 		},
 	})
 	if err := tc.Handshake(); err != nil {
-		if errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET) {
-			return nil, fmt.Errorf("%w (the other node closed the connection during the handshake; it may be busy: try again)", err)
+		if errors.Is(err, io.EOF) || IsReset(err) {
+			return nil, fmt.Errorf("%w. The other node closed the connection during the handshake and may be busy. Try again.", err)
 		}
 		return nil, err
 	}

@@ -12,4 +12,4 @@ control:
   udp: { listen: 0.0.0.0:8445 }   # the server sends its feedback here (works behind NAT on its side)
 send: { window: 128MB, target: 300ms }
 grace: 900s
-limits: { maxrss_mb: 700, maxsess: 64 }   # at least 2 x send.budget (default 256 MB) + 100
+limits: { maxrss_mb: 700, maxsess: 64 }   # at least 2 x send.budget (default 256 MB) + 100; Linux only, leave maxrss_mb out on macOS and Windows

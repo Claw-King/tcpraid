@@ -1,28 +1,28 @@
 # 用容器运行节点
 
-在 NAS 上运行 tcpraid 就用这种方式。两个站点各需要一个节点。这里的步骤是在一台 Linux 机器上用 Docker 跑的；没有任何一步在真实的 NAS 上试过(见“各平台怎么用”)。
+在 NAS 上运行 tcpraid 就用这种方式。两个站点各需要一个节点。这里的步骤是在一台 Linux 机器上用 Docker 跑的。没有任何一步在真实的 NAS 上试过(见“各平台怎么用”)。
 
 ## 容器需要什么
 
 | | |
 |---|---|
-| 镜像 | `ghcr.io/claw-king/tcpraid:0.1.3`(也可以用 `deploy/Dockerfile` 自己构建) |
+| 镜像 | `ghcr.io/claw-king/tcpraid:0.2.0`(也可以用 `deploy/Dockerfile` 自己构建) |
 | 数据 | 挂载到 `/data` 的一个目录。里面有节点的私钥、它的对端和它的规则。保留好，像备份私钥那样备份它，绝不要让两个节点共用 |
 | 端口 9850 | 网页界面和本机 API。明文 HTTP：只在你信任的网络上开放 |
 | 端口 9851 | 其他节点连到这里。能被另一个节点连到的那个节点需要它；另一个节点开着也无妨 |
 | 端口 50000-50010 | 给转发规则用。在网页界面里建的规则必须监听你映射出来的端口之一，地址用 `0.0.0.0` |
 | `TCPRAID_UI_PASSWORD` | 可选：网页界面的密码。不设的话，节点会生成一个，并在日志里显示一次 |
 
-`deploy/docker-compose.yml` 里这些都有，并带注释。给规则用的端口段只是默认值：把映射两边改成相同的端口即可。文件里还给出了另一种做法：不映射端口，而是共用主机的网络；这样规则可以监听主机上任何空闲的端口。
+`deploy/docker-compose.yml` 里这些都有，并带注释。给规则用的端口段只是默认值。要改的话，把映射两边改成相同的端口即可。文件里还给出了另一种做法，就是不映射端口，而是共用主机的网络。这样规则可以监听主机上任何空闲的端口。
 
-**共用主机网络时，要写明网页界面在哪里监听。** 镜像启动节点时用的是 `-api 0.0.0.0:9850`，在端口映射后面这是对的。共用主机网络时，它会把网页界面和 API(明文 HTTP)开在主机的每一个地址上，包括朝向别的网络的那个地址，比如在路由器或网关上。这种情况下给容器写上它自己的命令，指明页面该开在哪个地址——只在主机本机，或者局域网的某一个地址：
+**共用主机网络时，要写明网页界面在哪里监听。** 镜像启动节点时用的是 `-api 0.0.0.0:9850`，在端口映射后面这是对的。共用主机网络时，它会把网页界面和 API(明文 HTTP)开在主机的每一个地址上，包括朝向别的网络的地址，比如在路由器或网关上。这种情况下给容器写上它自己的命令，指明页面该开在哪个地址，可以只开在主机本机，也可以开在局域网的某一个地址：
 
 ```
     network_mode: host
     command: ["run", "-data", "/data", "-api", "127.0.0.1:9850", "-listen", "0.0.0.0:9851"]
 ```
 
-用 `127.0.0.1` 时，页面只能从主机本机打开；从别的机器要经过一条隧道，例如 `ssh -L 9850:127.0.0.1:9850 HOST`。
+用 `127.0.0.1` 时，页面只能从主机本机打开。从别的机器打开要经过一条隧道，例如 `ssh -L 9850:127.0.0.1:9850 HOST`。
 
 ## 启动
 
@@ -31,23 +31,24 @@ $ docker compose up -d
 $ docker logs tcpraid
 ... web interface: no password was set, so one was made. It is shown this once: y7ygtkha76gshsnt
 ... web interface: to set your own, start the node with -ui-password-file FILE or the environment variable TCPRAID_UI_PASSWORD
-... node 0.1.3 name="nas-a" fingerprint=056f8829...e2e077d8 data=/data api=[::]:9850 listen=[::]:9851 listen-plain=off transparent=off udp-listen=off
+... node 0.2.0 name="nas-a" fingerprint=056f8829...e2e077d8 data=/data api=[::]:9850 listen=[::]:9851 listen-plain=off transparent=off udp-listen=off
 ... transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
-... the web interface and the API at [::]:9850 are plain HTTP and reachable from other hosts: use them on a network you trust, or put a reverse proxy with TLS in front
+... web interface: open http://127.0.0.1:9850 in a browser on this machine
+... the web interface and the API at [::]:9850 are plain HTTP and reachable from other hosts. Use them on a network you trust, or put a reverse proxy with TLS in front.
 ```
 
 打开 `http://主机的地址:9850/`，用那个密码登录。
 
-**配对之前先给节点起名字。** 节点第一次启动时用容器的主机名作为自己的名字：compose 文件原样是 `tcpraid`，每台机器上都一样。给每个节点起一个自己的名字——本页用 `nas-a` 和 `nas-b`——可以在第一次启动之前改 compose 文件里的 `hostname:`，也可以启动之后在 设置 >“本节点的名字”里改。要在配对之前做：每个节点记下的是对端在那一刻的名字，规则靠这个名字指明对端，之后再改名传不到另一个节点。
+**配对之前先给节点起名字。** 节点第一次启动时用容器的主机名作为自己的名字。compose 文件原样写的是 `tcpraid`，每台机器上都一样。给每个节点起一个自己的名字，可以在第一次启动之前改 compose 文件里的 `hostname:`，也可以启动之后在 设置 >“本节点的名字”里改。本页用的是 `nas-a` 和 `nas-b`。要在配对之前做，因为每个节点记下的是对端在那一刻的名字，规则靠这个名字指明对端，之后再改名传不到另一个节点。
 
 ## 把两个节点配对
 
-其中一个节点的 9851 端口必须能被另一个连到。把它叫做 `nas-a`，可以通过 `nas-a.example.org` 连到；另一个叫 `nas-b`。(两个站点都没有公网地址的话，先看 `connecting.md`。)
+其中一个节点的 9851 端口必须能被另一个连到。把它叫做 `nas-a`，可以通过 `nas-a.example.org` 连到，另一个叫 `nas-b`。两个站点都没有公网地址的话，先看 `connecting.md`。
 
 在网页界面里：
 
-1. 在 `nas-a` 上：对端 >“生成配对码”。在“对方用什么地址连到本节点”里填 `nas-a.example.org:9851`。(容器里的节点不知道自己对外的地址，所以要告诉它。)点“生成”，然后复制配对码。它只显示一次、只能用一次，有效期一小时。
-2. 在 `nas-b` 上：对端 >“输入配对码”，粘贴，点“配对”。
+1. 在 `nas-a` 上，打开 对端 >“生成配对码”。在“对方用什么地址连到本节点”里填 `nas-a.example.org:9851`。容器里的节点不知道自己对外的地址，所以要告诉它。点“生成”，然后复制配对码。它只显示一次、只能用一次，有效期一小时。
+2. 在 `nas-b` 上，打开 对端 >“输入配对码”，粘贴配对码，点“配对”。
 3. 现在两边的页面都列出了对方，几秒之内显示为在线。在 `nas-b` 上，对端的“详情”里有一个“检查连接”按钮。
 
 也可以用命令。在容器里程序是 `/tcpraid`，数据目录是 `/data`：
@@ -55,7 +56,7 @@ $ docker logs tcpraid
 ```
 nas-a$ docker exec tcpraid /tcpraid pair create -data /data -addr nas-a.example.org:9851
 pairing code a101905f, valid until Thu, 15 Jan 2026 11:00:00 UTC, for one use.
-Enter it on the other node: tcpraid pair join (it then reads the code from standard input)
+Enter it on the other node with "tcpraid pair join", which then reads the code from standard input.
 It is shown this once and is a secret until it is used.
 tcpraid-pair-1-iiph6pbe4iey...
 
@@ -72,22 +73,22 @@ NAME   STATE   FINGERPRINT           PAIRED                PATHS
 nas-b  online  36dc0793...0fe0ca7f   2026-01-15T10:00:00Z  none: this node cannot reach it
 ```
 
-(指纹是 64 位十六进制，这里缩短了。)不带 `-addr` 时，容器里的 `pair create` 会回答：
+指纹是 64 位十六进制，这里缩短了。不带 `-addr` 时，容器里的 `pair create` 会回答：
 
 ```
-tcpraid pair create: no address for the other node to connect to: name one in the request, or start the node with -advertise HOST:PORT
+tcpraid pair create: no address for the other node to connect to. Name one in the request, or start the node with -advertise HOST:PORT.
 ```
 
-`nas-a` 上显示 "none: this node cannot reach it" 是正常的：`nas-b` 保持着一条通往 `nas-a` 的连接，`nas-a` 上的规则用它来请 `nas-b` 连过来(见 `concepts.md` 的“由哪个节点发起连接”)。
+`nas-a` 上显示 "none: this node cannot reach it" 是正常的。`nas-b` 保持着一条通往 `nas-a` 的连接，`nas-a` 上的规则用它来请 `nas-b` 连过来，详见 `concepts.md` 的“由哪个节点发起连接”。
 
 ## 建一条规则
 
-在发起传输的应用旁边的那个节点上——比如 `nas-b`——规则 >“新建规则”：
+在发起传输的应用旁边的节点上，比如 `nas-b`，打开 规则 >“新建规则”：
 
 - 名字：随便起，例如 `rsync`。
 - 监听地址和端口：`0.0.0.0:50000`(你映射出来的一个端口)。
 - 对端：`nas-a`。
-- 对端那边的目的 IP 和端口：另一个站点的服务，按 `nas-a` 连它的方式写，例如 `192.0.2.10:873`。要写 IP 地址；暂不支持主机名。
+- 对端那边的目的 IP 和端口：另一个站点的服务，按 `nas-a` 连它的方式写，例如 `192.0.2.10:873`。要写 IP 地址，因为不支持主机名。
 
 或者：
 
@@ -98,7 +99,7 @@ rule rsync added: listening
 
 现在让应用连 `nas-b` 的地址、50000 端口，而不是 `192.0.2.10` 的 873 端口。各篇教程会针对具体的应用演示这一步。
 
-要从另一台 NAS 自己的容器里访问那台 NAS **本机**上的服务，目的地要写 NAS 的局域网地址，不要写 `127.0.0.1`：在容器里，`127.0.0.1` 是容器自己。
+要从另一台 NAS 自己的容器里访问那台 NAS **本机**上的服务，目的地要写 NAS 的局域网地址，不要写 `127.0.0.1`，因为在容器里 `127.0.0.1` 是容器自己。
 
 ## 各平台怎么用
 
@@ -110,8 +111,8 @@ rule rsync added: listening
 | Unraid | 容器模板 `deploy/unraid/tcpraid.xml` |
 | 任何装了 Docker 的 Linux | `docker compose up -d` |
 
-这些文件的说明在 `deploy/README.md`(只有英文)。以上都没有在真实的产品上试过：菜单名称来自各厂商的文档，模板只对照公开的格式核对过。在 NAS 上，数据目录请用数据集或共享文件夹上的绝对路径。
+这些文件的说明在 `deploy/README.md`(只有英文)。以上都没有在真实的产品上试过。菜单名称来自各厂商的文档，模板只对照公开的格式核对过。在 NAS 上，数据目录请用数据集或共享文件夹上的绝对路径。
 
 ## 更新
 
-换掉镜像，用同一个数据目录重新启动容器。节点会保留它的身份、它的对端和它的规则。正在运行的会话会被重置；应用需要重试。
+换掉镜像，用同一个数据目录重新启动容器。节点会保留它的身份、它的对端和它的规则。正在运行的会话会被重置，应用需要重试。

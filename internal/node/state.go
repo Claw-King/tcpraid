@@ -187,17 +187,17 @@ func loadState(path string) (s *State, old bool, err error) {
 	if err != nil {
 		return nil, false, err
 	}
-	const kept = "the file is left as it is"
+	const kept = "The file is left as it is."
 	// The schema version is read on its own first: a file of another version is reported
 	// as that, whatever else in it this version would not understand.
 	var probe struct {
 		Schema *int `json:"schema"`
 	}
 	if err := json.Unmarshal(b, &probe); err != nil {
-		return nil, false, fmt.Errorf("%s: %w; %s", path, err, kept)
+		return nil, false, fmt.Errorf("%s: %w. %s", path, err, kept)
 	}
 	if probe.Schema == nil {
-		return nil, false, fmt.Errorf("%s: no schema version; %s", path, kept)
+		return nil, false, fmt.Errorf("%s: no schema version. %s", path, kept)
 	}
 	dec := json.NewDecoder(bytes.NewReader(b))
 	// a field this version does not know would be lost at the next save
@@ -206,37 +206,37 @@ func loadState(path string) (s *State, old bool, err error) {
 	case 1:
 		var v1 stateV1
 		if err := dec.Decode(&v1); err != nil {
-			return nil, false, fmt.Errorf("%s: %w; %s", path, err, kept)
+			return nil, false, fmt.Errorf("%s: %w. %s", path, err, kept)
 		}
 		if len(v1.Peers) > 0 || len(v1.Rules) > 0 {
-			return nil, false, fmt.Errorf("%s: schema version 1 with peers or rules, which no version 1 program wrote; %s", path, kept)
+			return nil, false, fmt.Errorf("%s: schema version 1 with peers or rules, which no version 1 program wrote. %s", path, kept)
 		}
 		s, old = &State{Schema: SchemaVersion, Node: v1.Node}, true
 	case 2:
 		var v2 stateV2
 		if err := dec.Decode(&v2); err != nil {
-			return nil, false, fmt.Errorf("%s: %w; %s", path, err, kept)
+			return nil, false, fmt.Errorf("%s: %w. %s", path, err, kept)
 		}
 		if len(v2.Rules) > 0 {
-			return nil, false, fmt.Errorf("%s: schema version 2 with rules, which no version 2 program wrote; %s", path, kept)
+			return nil, false, fmt.Errorf("%s: schema version 2 with rules, which no version 2 program wrote. %s", path, kept)
 		}
 		for _, p := range v2.Peers {
 			if p.Allow != "" || p.UDPDial != "" {
-				return nil, false, fmt.Errorf("%s: schema version 2 with fields of version 3; %s", path, kept)
+				return nil, false, fmt.Errorf("%s: schema version 2 with fields of version 3. %s", path, kept)
 			}
 		}
 		s, old = &State{Schema: SchemaVersion, Node: v2.Node, Peers: v2.Peers, PairingCodes: v2.PairingCodes}, true
 	case SchemaVersion:
 		s = &State{}
 		if err := dec.Decode(s); err != nil {
-			return nil, false, fmt.Errorf("%s: %w; %s", path, err, kept)
+			return nil, false, fmt.Errorf("%s: %w. %s", path, err, kept)
 		}
 	default:
-		return nil, false, fmt.Errorf("%s: schema version %d, this program reads versions 1 to %d; %s", path, *probe.Schema, SchemaVersion, kept)
+		return nil, false, fmt.Errorf("%s: schema version %d, this program reads versions 1 to %d. %s", path, *probe.Schema, SchemaVersion, kept)
 	}
 	s.fill()
 	if err := s.validate(); err != nil {
-		return nil, false, fmt.Errorf("%s: %w; %s", path, err, kept)
+		return nil, false, fmt.Errorf("%s: %w. %s", path, err, kept)
 	}
 	return s, old, nil
 }
@@ -391,7 +391,7 @@ func (p Path) Check() error {
 		switch p.Verify {
 		case "", VerifyPin:
 			if !IsFingerprint(p.Pin) {
-				return errors.New("security owncert with verify pin needs pin: the fingerprint of the listener's certificate key, 64 lower-case hex digits")
+				return errors.New("security owncert with verify pin needs pin, the fingerprint of the listener's certificate key as 64 lower-case hex digits")
 			}
 		case VerifyCA:
 			if p.Pin != "" {
@@ -419,7 +419,7 @@ func (p Path) Check() error {
 		seen[r] = true
 	}
 	if seen[RoleData] && seen[RoleRepair] {
-		return errors.New("a path cannot have both the data and the repair role: a repair path is a separate path")
+		return errors.New("a path cannot have both the data and the repair role, because a repair path is a separate path")
 	}
 	if p.Subs < 1 || p.Subs > MaxSubs {
 		return fmt.Errorf("%d sub-connections (want 1 to %d)", p.Subs, MaxSubs)

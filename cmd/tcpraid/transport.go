@@ -24,8 +24,11 @@ func checkTransport(chunk, window, budget, maxRSS int) error {
 	// stream data is bounded by -budget twice (unacked sent data, out-of-order received
 	// data): a lower -maxrss is reached in normal operation (-budget 512 MB under -maxrss
 	// 600 was, in a test)
+	if maxRSS > 0 && !engine.RSSSupported {
+		return errors.New("-maxrss is only available on Linux, because this system does not let the program read its resident memory")
+	}
 	if need := 2*(budget>>20) + 100; maxRSS > 0 && maxRSS < need {
-		return fmt.Errorf("-maxrss %d MB is below 2 x -budget + 100 MB = %d MB: lower -budget or raise -maxrss", maxRSS, need)
+		return fmt.Errorf("-maxrss %d MB is below 2 x -budget + 100 MB = %d MB. Lower -budget or raise -maxrss.", maxRSS, need)
 	}
 	return nil
 }

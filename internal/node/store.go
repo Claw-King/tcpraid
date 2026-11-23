@@ -354,7 +354,7 @@ func (n *Node) RedeemPairingCode(id string, now time.Time, proofOK func(secretHa
 			}); err != nil {
 				return Peer{}, err
 			}
-			return Peer{}, fmt.Errorf("%w; that was wrong proof number %d and the code is revoked", ErrCodeProof, MaxProofFailures)
+			return Peer{}, fmt.Errorf("%w. That was wrong proof number %d, and the code is revoked.", ErrCodeProof, MaxProofFailures)
 		}
 		return Peer{}, ErrCodeProof
 	}

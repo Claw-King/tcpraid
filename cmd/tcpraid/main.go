@@ -23,8 +23,8 @@ import (
 	"github.com/Claw-King/tcpraid/internal/engine"
 )
 
-// version is set at build time: go build -ldflags "-X main.version=0.1.3"
-var version = "0.1.3-dev"
+// version is set at build time: go build -ldflags "-X main.version=0.2.0"
+var version = "0.2.0-dev"
 
 var (
 	showVer   = flag.Bool("version", false, "print the version and exit")
@@ -35,12 +35,12 @@ var (
 	nsub      = flag.Int("n", 8, "client: data sub-connections to keep alive")
 	ctrlN     = flag.Int("ctrl", 0, "client: control sub-connections to keep alive (snapshots only)")
 	ctrlRem   = flag.String("ctrlremote", "", "client: server address the control subs dial (default -remote)")
-	udpListen = flag.String("udplisten", "", "listen for UDP feedback here (the end with a reachable UDP port; needs -psk)")
+	udpListen = flag.String("udplisten", "", "listen for UDP feedback here, at the end with a reachable UDP port (needs -psk)")
 	udpDial   = flag.String("udpdial", "", "send UDP feedback to the peer's -udplisten address (needs -psk)")
 	udpLoss   = flag.Float64("udploss", 0, "drop this share of our outgoing UDP feedback (testing)")
 	socksData = flag.String("socks", "", "client: reach -remote through this SOCKS5 proxy (socks5://[user:pass@]host:port)")
 	socksCtrl = flag.String("ctrlsocks", "", "client: reach the control address through this SOCKS5 proxy")
-	ctrlMark  = flag.Int("ctrlmark", 0, "client: SO_MARK on control sub sockets (test convenience; prefer a fixed-target proxy inbound)")
+	ctrlMark  = flag.Int("ctrlmark", 0, "client: SO_MARK on control sub sockets, a test convenience (prefer a fixed-target proxy inbound)")
 	chunkSz   = flag.Int("chunk", 256*1024, "chunk size")
 	window    = flag.Int("window", 128<<20, "send window and reorder budget (bytes, whole MB)")
 	target    = flag.Duration("target", 300*time.Millisecond, "data each sub may hold on top of its feedback loop, as time at its rate")
@@ -54,7 +54,7 @@ var (
 	fbSubs    = flag.Int("fbsubs", 3, "without a control sub: send each snapshot on this many data subs")
 	fbEvery   = flag.Duration("fbevery", 20*time.Millisecond, "snapshot interval while something changes (1 s otherwise)")
 	holAge    = flag.Duration("hol", time.Second, "re-send a missing chunk once later ones have waited this long for it (x attempts)")
-	timelineT = flag.Duration("timeline", 0, "log one line per session this often (diagnostics; 0 = off)")
+	timelineT = flag.Duration("timeline", 0, "log one diagnostic line per session this often (0 = off)")
 	allow     = flag.String("allow", "", "server: allowed destinations, comma-separated CIDR[:port[-port]] (empty = any)")
 	pskFile   = flag.String("psk", "", "file with the pre-shared key (both ends): MACs on headers and snapshots")
 	metrics   = flag.String("metrics", "", "serve expvar metrics at http://ADDR/debug/vars (empty = off)")
@@ -65,7 +65,7 @@ var (
 	maxSess   = flag.Int("maxsess", 64, "refuse new sessions beyond this many")
 	statsT    = flag.Duration("stats", 0, "log sessions / memory / per-sub state this often (0 = off)")
 	budget    = flag.Int("budget", 256<<20, "max unacked bytes summed over all sessions")
-	life      = flag.Duration("life", 0, "exit after this long (test deployments; 0 = never)")
+	life      = flag.Duration("life", 0, "exit after this long, for test deployments (0 = never)")
 )
 
 // loadPSK reads the pre-shared key file (nil without -psk).
@@ -137,6 +137,9 @@ func main() {
 	}
 	if (*udpListen != "" || *udpDial != "") && *pskFile == "" {
 		log.Fatal("-udplisten / -udpdial need -psk")
+	}
+	if *mode == "client" && *fixedDst == "" && !engine.TransparentSupported {
+		log.Fatal("a client without -dst takes connections that the host redirects to it, which only works on Linux. Give -dst.")
 	}
 	if *checkOnly {
 		psk := loadPSK()

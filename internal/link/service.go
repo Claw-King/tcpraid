@@ -97,7 +97,7 @@ func (s *Service) CreatePairingCode(addresses []string, ttl time.Duration) (text
 		addresses = s.Advertise
 	}
 	if len(addresses) == 0 {
-		return "", rec, inputError{errors.New("no address for the other node to connect to: name one in the request, or start the node with -advertise HOST:PORT")}
+		return "", rec, inputError{errors.New("no address for the other node to connect to. Name one in the request, or start the node with -advertise HOST:PORT.")}
 	}
 	if ttl == 0 {
 		ttl = pair.DefaultTTL
@@ -146,7 +146,7 @@ func (s *Service) Join(ctx context.Context, codeText, address string) (node.Peer
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	if code.Fingerprint == s.Node.Identity.FingerprintBytes() {
-		return node.Peer{}, inputError{errors.New("this pairing code was made by this node itself: enter it on the other node")}
+		return node.Peer{}, inputError{errors.New("this pairing code was made by this node itself. Enter it on the other node.")}
 	}
 	addrs := code.Addresses
 	if address != "" {
@@ -177,7 +177,7 @@ func (s *Service) Join(ctx context.Context, codeText, address string) (node.Peer
 		s.logf("joining with %s failed: %v", code, err)
 		if noneConnected(failures) {
 			// for the person who reads the answer: the usual reasons
-			err = fmt.Errorf("%w\nno connection was made: is the other node listening there, and can this node reach that port?", err)
+			err = fmt.Errorf("%w\nno connection was made. Is the other node listening there, and can this node reach that port?", err)
 		}
 		return node.Peer{}, err
 	}
@@ -249,7 +249,7 @@ func (s *Service) HandlePair(conn *tls.Conn) {
 		// This node has a new peer and the code is used, whatever happened to the
 		// connection afterwards: that is always on record. Only a holder of a valid
 		// code can cause this line, so it needs no limit.
-		s.logf("paired with %q (fingerprint %s) from %s, using pairing code %s, but the answer did not reach it (%v): it will report a failure; pair the two nodes again", stored.Name, stored.Fingerprint, from, id, err)
+		s.logf("paired with %q (fingerprint %s) from %s, using pairing code %s, but the answer did not reach it (%v). It will report a failure. Pair the two nodes again.", stored.Name, stored.Fingerprint, from, id, err)
 	case errors.Is(err, net.ErrClosed):
 		// this node closed the connection itself, to make room or to stop, before
 		// anything was accepted: that has its own line

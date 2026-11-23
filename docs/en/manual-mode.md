@@ -1,8 +1,8 @@
 # Manual mode
 
-Without a subcommand, `tcpraid` runs in **manual mode**: no node, no pairing,
-no web page. One process is the **client**, near the application; one is the
-**server**, near the destination. Everything is given by flags or a
+Without a subcommand, `tcpraid` runs in **manual mode**, which has no node, no
+pairing and no web page. One process is the **client**, near the application,
+and one is the **server**, near the destination. Everything is given by flags or a
 configuration file. It is the lowest layer of the program, useful on small
 routers, in scripts, and where you want to set the transport's parameters
 yourself.
@@ -16,7 +16,7 @@ yourself.
 - The client accepts the application's connection, opens the sub-connections
   and tells the server where the application wanted to go. It needs to be able
   to open TCP connections to the server, directly or through a relay, port
-  forward or SOCKS5 proxy; the server never connects to the client.
+  forward or SOCKS5 proxy. The server never connects to the client.
 - The server accepts sub-connections and opens the real connection to the
   destination, if its allow list permits.
 
@@ -49,13 +49,14 @@ Now connect the application to `127.0.0.1:9801` instead of `192.0.2.5:873`.
 
 ```
 $ tcpraid -check -mode client -listen 127.0.0.1:9801 -remote server.example.org:9901 -dst 192.0.2.5:873 -psk psk
-ok: 0.1.3 client paths [data/data x8], window 128 MB, budget 256 MB, maxrss 0 MB, grace 15m0s, psk true, udp listen "" dial ""
+ok: 0.2.0 client paths [data/data x8], window 128 MB, budget 256 MB, maxrss 0 MB, grace 15m0s, psk true, udp listen "" dial ""
 ```
 
 ## Transparent use
 
 Without `-dst`, the client takes the original destination of each connection
-redirected to it (Linux `SO_ORIGINAL_DST`, IPv4 and IPv6). The application
+redirected to it (Linux `SO_ORIGINAL_DST`, IPv4 and IPv6). This is for Linux
+only. On macOS and Windows a client needs `-dst` and says so at its start. The application
 keeps connecting to its normal address. With nftables, on the client host or a
 router the traffic passes through (this needs root there):
 
@@ -72,8 +73,9 @@ table ip tcpraid {
 
 ## Paths and roles
 
-A client can use several paths at once. A path is a way to reach the server:
-an address, optionally through a SOCKS5 proxy. Each path has one or more roles:
+A client can use several paths at once. A path is a way to reach the server,
+that is, an address, optionally through a SOCKS5 proxy. Each path has one or
+more roles:
 
 | Role | Carries | Default connections |
 |---|---|---|
@@ -82,24 +84,25 @@ an address, optionally through a SOCKS5 proxy. Each path has one or more roles:
 | `control` | snapshots only | 1 (`ctrl`) |
 
 `data` and `repair` cannot share a path. A typical setup has a main path for
-`data` and a second, independent path for `repair` and `control`: holes are
-filled over the second path, feedback does not queue behind bulk data, and the
-second path takes over when the first is down.
+`data` and a second, independent path for `repair` and `control`. Holes are
+then filled over the second path, feedback does not queue behind bulk data,
+and the second path takes over when the first is down.
 
 Paths are set in a configuration file (below). The flags describe the common
-case: one data path (`-remote`, `-n`, `-socks`) and optionally control
-connections (`-ctrl`, `-ctrlremote`, `-ctrlsocks`).
+case, which is one data path (`-remote`, `-n`, `-socks`) and optionally
+control connections (`-ctrl`, `-ctrlremote`, `-ctrlsocks`).
 
 To send a path a particular way without extra privileges, point it at a proxy
 or port forward whose destination is the tcpraid server. `mark` (SO_MARK) is
-available for policy routing but needs CAP_NET_ADMIN.
+available for policy routing but needs CAP_NET_ADMIN. It exists on Linux
+only, and elsewhere a path with a mark is refused at the start.
 
 ## Feedback channels
 
 On some paths the reverse direction loses packets heavily while the forward
-direction is busy. Plain TCP does not mind (its ACKs are cumulative and
-plentiful), but feedback sent as TCP data in that direction gets stuck behind a
-lost segment for seconds or tens of seconds. tcpraid therefore sends its
+direction is busy. Plain TCP does not mind, because its ACKs are cumulative
+and plentiful, but feedback sent as TCP data in that direction gets stuck
+behind a lost segment for seconds or tens of seconds. tcpraid therefore sends its
 feedback on every channel you give it and uses whichever arrives first:
 
 | Channel | What it is | Use it when |
@@ -108,7 +111,7 @@ feedback on every channel you give it and uses whichever arrives first:
 | `control` path | A TCP connection that carries no data, on a path of its own | You have a second path that the data does not load |
 | piggyback | On the data sub-connections (always on; once a second while another channel works) | Fallback |
 
-For UDP, the end with a reachable port listens and the other sends to it; the
+For UDP, the end with a reachable port listens and the other sends to it. The
 listener answers to the source address, so the sending end may be behind NAT.
 Both ends need the key.
 
@@ -144,13 +147,13 @@ limits: { maxrss_mb: 700, maxsess: 64 }
 
 ```
 $ tcpraid -config client.yaml -check
-ok: 0.1.3 client paths [main/data x8, second/repair x4, second/control x1, proxy/data x4], window 128 MB, budget 256 MB, maxrss 700 MB, grace 15m0s, psk true, udp listen "0.0.0.0:8445" dial ""
+ok: 0.2.0 client paths [main/data x8, second/repair x4, second/control x1, proxy/data x4], window 128 MB, budget 256 MB, maxrss 700 MB, grace 15m0s, psk true, udp listen "0.0.0.0:8445" dial ""
 ```
 
-`addr` is the address the client dials over that path: the tcpraid server's
-listener, or the entry that leads to it; for a port
-forward or a proxy inbound with a fixed destination it is that forward's
-address. The server needs no `paths`:
+`addr` is the address the client dials over that path. It is the tcpraid
+server's listener, or the entry that leads to it. For a port forward or a
+proxy inbound with a fixed destination it is that forward's address. The
+server needs no `paths`:
 
 ```yaml
 mode: server
@@ -192,7 +195,7 @@ in the file (`128MB`). Durations use Go syntax (`300ms`, `15m`).
 | `-grace` | `grace` | 900 s | keep a session whose peer is silent this long |
 | `-dead` | `dead` | 20 s | replace a sub-connection with data in flight and no progress this long |
 | `-kickratio` | | 5 | replace a busy sub-connection delivering below the median of its path divided by this for 10 s |
-| `-maxrss` | `limits.maxrss_mb` | off | exit above this many MB; at least 2 x `budget` + 100 MB (checked at start) |
+| `-maxrss` | `limits.maxrss_mb` | off | exit above this many MB; at least 2 x `budget` + 100 MB (checked at start). Linux only: refused at start on macOS and Windows, so leave `limits.maxrss_mb` out of a configuration file there |
 | `-maxsess` | `limits.maxsess` | 64 | refuse new sessions beyond this many |
 | `-timeline` | `timeline` | off | one diagnostic line per session this often |
 | `-stats` | | off | log sessions, memory and per-sub-connection state this often |
@@ -203,18 +206,18 @@ in the file (`128MB`). Durations use Go syntax (`300ms`, `15m`).
 `tcpraid -h` lists the remaining tuning and test flags.
 
 **Memory.** In the worst case a process holds about twice `budget` of stream
-data: about 512 MB with the defaults. Lower `budget` and `window` on small
+data, which is about 512 MB with the defaults. Lower `budget` and `window` on small
 machines.
 
 ## Operation
 
 **Stopping.** On SIGINT / SIGTERM, `-maxrss` or `-life`, tcpraid tells every
 peer first, then resets its application connections and exits. The peer drops
-those sessions at once instead of holding them, with their buffered data, for
-`grace`.
+those sessions immediately instead of holding them, with their buffered data,
+for `grace`.
 
 **Restarts.** Session state is in memory. A process that restarts cannot resume
-its sessions; the application sees a reset and must retry.
+its sessions, so the application sees a reset and must retry.
 
 **Observability.** `-timeline 1s` logs per session: MB/s sent (`tx`), re-sent
 (`re`), acknowledged (`ack`), received (`rx`) and delivered (`dlv`), the
@@ -244,7 +247,7 @@ lines a session logs at its end.
 
 ## Compatibility
 
-A client and a server must run the same wire protocol version; there is no
-negotiation. A node and a manual-mode process do not talk to each other:
-connections between nodes start with an opening that manual mode does not
-send.
+A client and a server must run the same wire protocol version, and there is
+no negotiation. A node and a manual-mode process do not talk to each other,
+because connections between nodes start with an opening that manual mode does
+not send.

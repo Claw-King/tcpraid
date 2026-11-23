@@ -211,7 +211,7 @@ func TestRunOptionsRefused(t *testing.T) {
 	}{
 		{[]string{"-cert", "c.pem"}, "-cert and -key go together"},
 		{[]string{"-key", "k.pem"}, "-cert and -key go together"},
-		{[]string{"-cert", "c.pem", "-key", "k.pem"}, "set -listen"},
+		{[]string{"-cert", "c.pem", "-key", "k.pem"}, "Set -listen"},
 		{[]string{"-advertise", "no port"}, "-advertise"},
 	} {
 		code, _, _, stderr := call(append([]string{"run", "-data", dir}, c.args...)...)
@@ -220,7 +220,7 @@ func TestRunOptionsRefused(t *testing.T) {
 		}
 	}
 	// a certificate that cannot be read ends the start
-	code, _, _, stderr := call("run", "-data", dir, "-api", "127.0.0.1:0", "-listen", "127.0.0.1:0", "-cert", filepath.Join(dir, "none.pem"), "-key", filepath.Join(dir, "none.key"))
+	code, _, _, stderr := call("run", "-data", dir, "-name", "gamma", "-api", "127.0.0.1:0", "-listen", "127.0.0.1:0", "-cert", filepath.Join(dir, "none.pem"), "-key", filepath.Join(dir, "none.key"))
 	if code != 1 || !strings.Contains(stderr, "-cert / -key") {
 		t.Errorf("run with a missing certificate: code %d, %q", code, stderr)
 	}
@@ -229,7 +229,7 @@ func TestRunOptionsRefused(t *testing.T) {
 	dirB := filepath.Join(t.TempDir(), "b")
 	startNodeWith(t, runOptions{dataDir: dirB, name: "beta", listen: taken})
 	dirC := filepath.Join(t.TempDir(), "c")
-	code, _, _, stderr = call("run", "-data", dirC, "-api", "127.0.0.1:0", "-listen", taken)
+	code, _, _, stderr = call("run", "-data", dirC, "-name", "gamma", "-api", "127.0.0.1:0", "-listen", taken)
 	if code != 1 || !strings.Contains(stderr, "-listen:") {
 		t.Errorf("run on a taken -listen address: code %d, %q", code, stderr)
 	}

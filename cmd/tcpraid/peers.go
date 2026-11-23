@@ -160,7 +160,7 @@ func (c command) execute(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if *dataDir == "" {
-		fmt.Fprintf(stderr, "tcpraid %s: -data is empty: name the data directory\n", c.name)
+		fmt.Fprintf(stderr, "tcpraid %s: -data is empty. Name the data directory.\n", c.name)
 		return 2
 	}
 	if err := c.run(*dataDir, rest, stdout, stderr); err != nil {
@@ -187,7 +187,7 @@ func dispatch(group, def string, names []string, cmds map[string]command, args [
 		if sub == "" {
 			fmt.Fprintf(stderr, "tcpraid %s: which one? %s\n", group, strings.Join(names, ", "))
 		} else {
-			fmt.Fprintf(stderr, "tcpraid %s: unknown command %q; there are: %s\n", group, sub, strings.Join(names, ", "))
+			fmt.Fprintf(stderr, "tcpraid %s: unknown command %q. The commands are: %s\n", group, sub, strings.Join(names, ", "))
 		}
 		return 2
 	}
@@ -214,7 +214,7 @@ func cmdPair(args []string, stdout, stderr io.Writer) int {
 		"create": {
 			name: "pair create",
 			flags: func(fs *flag.FlagSet) {
-				fs.Var(&addrs, "addr", "HOST:PORT at which the other node reaches this one; may be given more than once (default: the node's -advertise)")
+				fs.Var(&addrs, "addr", "HOST:PORT at which the other node reaches this one (may be given more than once, default: the node's -advertise)")
 				fs.DurationVar(&ttl, "ttl", 0, "how long the code is valid (default 1h)")
 			},
 			run: func(dataDir string, _ []string, stdout, stderr io.Writer) error {
@@ -230,7 +230,7 @@ func cmdPair(args []string, stdout, stderr io.Writer) int {
 				// the code alone on standard output, so that it can be piped; the rest is for the person
 				fmt.Fprintln(stdout, made.Code)
 				fmt.Fprintf(stderr, "pairing code %s, valid until %s, for one use.\n"+
-					"Enter it on the other node: tcpraid pair join (it then reads the code from standard input)\n"+
+					"Enter it on the other node with \"tcpraid pair join\", which then reads the code from standard input.\n"+
 					"It is shown this once and is a secret until it is used.\n", made.ID, made.Expires.Local().Format(time.RFC1123))
 				return nil
 			},
@@ -284,10 +284,10 @@ func cmdPair(args []string, stdout, stderr io.Writer) int {
 						return fmt.Errorf("reading the pairing code from standard input: %w", err)
 					}
 					if len(b) > maxCodeInput {
-						return fmt.Errorf("standard input holds more than %d bytes: that is not a pairing code", maxCodeInput)
+						return fmt.Errorf("standard input holds more than %d bytes, which is not a pairing code", maxCodeInput)
 					}
 					if code = strings.TrimSpace(string(b)); code == "" {
-						return errors.New("no pairing code: give it as the argument, or on standard input")
+						return errors.New("no pairing code was given. Give it as the argument, or on standard input.")
 					}
 				}
 				var p api.Peer
@@ -375,7 +375,7 @@ func cmdPeersPath(args []string, stdout, stderr io.Writer) int {
 				verb := "changed"
 				if idx < 0 {
 					if !given["addr"] {
-						return fmt.Errorf("%s has no path %s: a new path needs -addr", peer, pathName)
+						return fmt.Errorf("%s has no path %s, and a new path needs -addr", peer, pathName)
 					}
 					p.Paths = append(p.Paths, api.Path{Name: pathName, Type: "tcp", Security: node.SecurityTLS, Roles: []string{node.RoleData}, Subs: 8})
 					idx, verb = len(p.Paths)-1, "added"
@@ -450,7 +450,7 @@ func cmdPeersPath(args []string, stdout, stderr io.Writer) int {
 				}
 				fmt.Fprintf(stdout, "path %s of %s removed\n", pathName, peer)
 				if len(kept) == 0 {
-					fmt.Fprintf(stdout, "%s has no path left: this node cannot reach it\n", peer)
+					fmt.Fprintf(stdout, "%s has no path left, so this node cannot reach it\n", peer)
 				}
 				return nil
 			},
@@ -469,7 +469,7 @@ func cmdPeers(args []string, stdout, stderr io.Writer) int {
 			name: "peers set", usage: "NAME", nargs: 1,
 			flags: func(fs *flag.FlagSet) {
 				set = fs
-				fs.StringVar(&allow, "allow", "", "destinations the peer may reach through this node: networks with an optional port or range, separated by commas, such as 192.0.2.0/24:873,[2001:db8::/32]:5000-5010 (\"\": any destination)")
+				fs.StringVar(&allow, "allow", "", "destinations the peer may reach through this node, as networks with an optional port or range, separated by commas, such as 192.0.2.0/24:873,[2001:db8::/32]:5000-5010 (\"\": any destination)")
 				fs.StringVar(&udpDial, "udp-dial", "", "HOST:PORT of the peer's -udp-listen, to which this node sends feedback for sessions with it (\"\": none)")
 			},
 			run: func(dataDir string, args []string, stdout, _ io.Writer) error {
@@ -483,7 +483,7 @@ func cmdPeers(args []string, stdout, stderr io.Writer) int {
 					}
 				})
 				if req.Allow == nil && req.UDPDial == nil {
-					return errors.New("nothing to set: give -allow, -udp-dial or both (an empty value clears the setting)")
+					return errors.New("nothing to set. Give -allow, -udp-dial or both. An empty value clears the setting.")
 				}
 				var stored api.Peer
 				if err := apiCall(dataDir, http.MethodPut, peerPath(args[0]), req, &stored, shortCall); err != nil {
@@ -572,7 +572,7 @@ func cmdPeers(args []string, stdout, stderr io.Writer) int {
 				if err := apiCall(dataDir, http.MethodDelete, peerPath(args[0]), nil, nil, shortCall); err != nil {
 					return err
 				}
-				fmt.Fprintf(stdout, "peer %s removed; the other node is not told and still lists this one\n", args[0])
+				fmt.Fprintf(stdout, "peer %s removed. The other node is not told and still lists this one.\n", args[0])
 				return nil
 			},
 		},
@@ -584,7 +584,7 @@ func cmdPeers(args []string, stdout, stderr io.Writer) int {
 					return err
 				}
 				if len(chk.Paths) == 0 {
-					return fmt.Errorf("this node has no path to %s: it can only be reached by it", chk.Peer)
+					return fmt.Errorf("this node has no path to %s and can only be reached by it", chk.Peer)
 				}
 				failed := 0
 				for _, p := range chk.Paths {

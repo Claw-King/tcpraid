@@ -163,7 +163,7 @@ func (u *UI) login(w http.ResponseWriter, r *http.Request) {
 		wait := int(f.until.Sub(now)/time.Second) + 1
 		u.mu.Unlock()
 		w.Header().Set("Retry-After", strconv.Itoa(wait))
-		writeError(w, http.StatusTooManyRequests, "too many wrong passwords from this address: try again in a minute")
+		writeError(w, http.StatusTooManyRequests, "too many wrong passwords from this address. Try again in a minute.")
 		return
 	}
 	u.mu.Unlock()

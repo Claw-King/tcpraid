@@ -182,7 +182,7 @@ func checkConn(conn net.Conn, fingerprint [sha256.Size]byte, pairSecret []byte) 
 	got := make([]byte, checkAnswerLen)
 	if _, err := io.ReadFull(conn, got); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			return errors.New("the other end closed the connection without answering: it is not a tcpraid node listener, it is not paired with this node, or the two nodes hold different pair secrets (pair them again)")
+			return errors.New("the other end closed the connection without answering. Either the address is not a tcpraid listener, or the other node is not paired with this one, or their pair secrets differ. Pairing again fixes the last two.")
 		}
 		return err
 	}

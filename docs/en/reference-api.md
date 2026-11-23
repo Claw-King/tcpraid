@@ -1,16 +1,16 @@
 # The local HTTP API
 
 A node serves an HTTP API at the address given with `-api` (default
-`127.0.0.1:9850`). The commands and the web page are clients of it; anything
-they do, another program on the host can do the same way.
+`127.0.0.1:9850`). The commands and the web page are clients of it, so
+anything they do, another program on the host can do the same way.
 
 The examples are real answers of a node of this version, with addresses,
-times and long values changed for print. JSON is shown on several lines here;
-the node sends it on one.
+times and long values changed for print. JSON is shown on several lines here,
+but the node sends it on one.
 
 ## Access
 
-Every path but `/healthz` (and the files of the web page) needs the access
+Every path except `/healthz` and the files of the web page needs the access
 token of the node, which is in `api.token` in the data directory:
 
 ```
@@ -30,10 +30,10 @@ Www-Authenticate: Bearer
 A browser that is logged in to the web page is authorized by its cookie
 instead (see "Login" at the end). The API is plain HTTP.
 
-Errors are JSON, `{"error": "..."}`: `400` for a request that cannot be
-right, `404` for a path or a name that does not exist, `405` for a method the
-path does not have, `502` for a pairing that the other node did not complete
-and `504` for one that ran out of time.
+Errors are JSON, `{"error": "..."}`. The status is `400` for a request that
+cannot be right, `404` for a path or a name that does not exist, `405` for a
+method the path does not have, `502` for a pairing that the other node did
+not complete and `504` for one that ran out of time.
 
 ## Node
 
@@ -44,7 +44,7 @@ and `504` for one that ran out of time.
 ### GET /api/v1/status
 
 ```
-{"version":"0.1.3","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.2.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
  "sessions":2,"peers":1,"rules":2}
 ```
@@ -62,8 +62,8 @@ $ curl -X PUT ... -d '{"name":"nas-a"}' http://127.0.0.1:9850/api/v1/node
 ### GET /api/v1/sessions
 
 The connections being carried. `role` is `client` on the node that took the
-application's connection (that node also names the `rule`), `server` on the
-node at the other end.
+application's connection, and that node also names the `rule`. It is
+`server` on the node at the other end.
 
 ```
 [{"id":"4fce0d73c066738a655b88c7741c2405","destination":"192.0.2.10:7000","role":"client",
@@ -71,10 +71,10 @@ node at the other end.
   "resent_bytes":0,"subs":8,"peer":"nas-a","rule":"rsync"}]
 ```
 
-`tx_bytes` and `rx_bytes` are stream bytes sent and received; `unacked_bytes`
+`tx_bytes` and `rx_bytes` are stream bytes sent and received. `unacked_bytes`
 is what was read from the application and the other end has not yet reported
-received, whether it has been sent already or still waits to be sent;
-`resent_bytes` counts the bytes queued for sending again; `subs` is the
+received, whether it has been sent already or still waits to be sent.
+`resent_bytes` counts the bytes queued for sending again, and `subs` is the
 number of live sub-connections.
 
 ### GET /metrics
@@ -85,9 +85,9 @@ Counters in the Prometheus text format, prefixed `tcpraid_`.
 
 ### POST /api/v1/pairing-codes
 
-Body `{"addresses": ["host:port", ...], "ttl_seconds": N}`, both optional
-(default: the node's `-advertise` addresses, one hour). The answer holds the
-code, this once.
+Body `{"addresses": ["host:port", ...], "ttl_seconds": N}`. Both are
+optional and default to the node's `-advertise` addresses and one hour. The
+answer holds the code, which is not shown again.
 
 ```
 $ curl -X POST ... -d '{"ttl_seconds":600}' http://127.0.0.1:9850/api/v1/pairing-codes
@@ -115,7 +115,7 @@ Revokes a code. `204`.
 ### POST /api/v1/peers
 
 Pairs with the node that made a code. Body `{"code": "...", "address":
-"host:port"}`; the address is optional and replaces the addresses in the
+"host:port"}`. The address is optional and replaces the addresses in the
 code. The answer is the new peer, as below.
 
 ### GET /api/v1/peers, GET /api/v1/peers/{name}
@@ -124,10 +124,10 @@ code. The answer is the new peer, as below.
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.1.3","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.2.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
-`online`: a control connection with the peer is up. `version` and
+`online` means that a control connection with the peer is up. `version` and
 `last_message` appear once the peer has been heard from. A peer that joined
 this node has no `addresses` and no `paths` here. The pair secret is never in
 an answer, and a proxy is shown without its user and password.
@@ -135,21 +135,23 @@ an answer, and a proxy is shown without its user and password.
 ### PUT /api/v1/peers/{name}
 
 Changes a peer's settings. Body `{"paths": [...], "allow": "...", "udp_dial":
-"..."}`, each optional, at least one. `paths` replaces all paths, each in the
-form the `GET` shows; a path sent back with its proxy as shown keeps the user
-and password it has. Everything is checked first; if something cannot be
-stored, nothing changes. The answer is the peer.
+"..."}`. Each field is optional, and at least one must be there. `paths`
+replaces all paths, each in the form the `GET` shows. A path sent back with
+its proxy as shown keeps the user and password it has. Everything is checked
+first, and if something cannot be stored, nothing changes. The answer is the
+peer.
 
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.1.3",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.2.0",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 
-`allow`: the destinations the peer may reach through this node (networks with
-an optional port or range, separated by commas; empty: any). `udp_dial`:
-where this node sends UDP feedback for sessions with the peer (empty: none).
+`allow` holds the destinations the peer may reach through this node, as
+networks with an optional port or range, separated by commas. Empty means
+any. `udp_dial` is where this node sends UDP feedback for sessions with the
+peer. Empty means none.
 
 ### POST /api/v1/peers/{name}/check
 
@@ -163,7 +165,7 @@ A path that fails has `"ok": false` and an `"error"`.
 
 ### DELETE /api/v1/peers/{name}
 
-Ends the pairing on this node; the sessions with the peer are reset. `204`.
+Ends the pairing on this node and resets the sessions with the peer. `204`.
 
 ## Rules
 
@@ -197,12 +199,12 @@ A rule that cannot be stored:
 ```
 HTTP/1.1 400 Bad Request
 
-{"error":"invalid: rule \"bad\": destination \"example.org:80\": \"example.org\" is not an IP address (host names are not supported yet)"}
+{"error":"invalid: rule \"bad\": destination \"example.org:80\": \"example.org\" is not an IP address (host names are not supported)"}
 ```
 
 ### PUT /api/v1/rules/{name}
 
-Replaces the rule; same body. Switching a rule off is a `PUT` with
+Replaces the rule, with the same body. Switching a rule off is a `PUT` with
 `"enabled": false`:
 
 ```
@@ -224,12 +226,12 @@ HTTP/1.1 204 No Content
 Set-Cookie: tcpraid_session=d4719741...; Path=/; Max-Age=43200; HttpOnly; SameSite=Strict
 ```
 
-A wrong password is `401`; after five in a row from one address, `429` for a
-minute.
+A wrong password is `401`. After five in a row from one address, the answer
+is `429` for a minute.
 
-A request authorized by this cookie that changes something (any method but
-`GET` and `HEAD`) must also carry the header `X-Tcpraid-Request: 1`;
-without it the answer is `403`.
+A request authorized by this cookie that changes something, that is, any
+method but `GET` and `HEAD`, must also carry the header
+`X-Tcpraid-Request: 1`. Without it the answer is `403`.
 
 ### POST /api/v1/logout
 

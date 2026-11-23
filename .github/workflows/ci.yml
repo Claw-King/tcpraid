@@ -1,12 +1,15 @@
-# Every push and pull request: gofmt, go vet, go test -race.
-# A tag "vX.Y.Z": also the three release binaries with their SHA-256 file, attached to a
-# release of that tag, and the container image for linux/amd64 and linux/arm64, pushed
-# to the GitHub container registry as ghcr.io/<owner>/<repository>:X.Y.Z and :latest.
+# Every push to main or to a branch "ci/...", and every pull request: go vet and
+# go test on Linux, macOS and Windows (with the race detector on the first two; gofmt
+# once, on Linux).
+# A tag "vX.Y.Z": also the release binaries (Linux, macOS, Windows) with their SHA-256
+# file, attached to a release of that tag, and the container image for linux/amd64 and
+# linux/arm64, pushed to the GitHub container registry as
+# ghcr.io/<owner>/<repository>:X.Y.Z and :latest.
 name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, "ci/**"]
     tags: ["v*"]
   pull_request:
 
@@ -15,18 +18,28 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: gofmt
+        if: matrix.os == 'ubuntu-latest'
         run: test -z "$(gofmt -l .)"
       - name: go vet
         run: go vet ./...
       - name: go test
+        if: matrix.os != 'windows-latest'
         run: go test -race -count=1 ./...
+      # the race detector needs a C compiler, which the Windows machines may lack
+      - name: go test (Windows, without the race detector)
+        if: matrix.os == 'windows-latest'
+        run: go test -count=1 ./...
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

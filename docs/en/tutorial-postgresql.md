@@ -1,17 +1,18 @@
 # Tutorial: PostgreSQL streaming replication
 
 A PostgreSQL standby gets its data from the primary over ordinary PostgreSQL
-connections: `pg_basebackup` copies the whole cluster over one connection (and
-a second one for the write-ahead log with `-X stream`), and afterwards the
+connections. `pg_basebackup` copies the whole cluster over one connection,
+plus a second one for the write-ahead log with `-X stream`, and afterwards the
 standby streams the log over one connection. This tutorial puts those
 connections through tcpraid. It matters most for the base backup of a large
 database over a long path.
 
-**What was tried.** The commands below, in a container, with PostgreSQL 17:
-a primary behind one node, `pg_basebackup` through a rule on the other node
-(137 MB), the standby started from it, rows inserted on the primary and found
-on the standby. Then the node at the primary's site was stopped for five
-seconds and started again: the standby reconnected by itself and caught up.
+**What was tried.** The commands below were run in a container with
+PostgreSQL 17. A primary sat behind one node, `pg_basebackup` ran through a
+rule on the other node (137 MB), the standby was started from it, and rows
+inserted on the primary were found on the standby. Then the node at the
+primary's site was stopped for five seconds and started again, and the
+standby reconnected by itself and caught up.
 **Not tried:** a large database, a long path, TLS between PostgreSQL client
 and server, authentication other than `trust` on the loopback address.
 
@@ -23,9 +24,9 @@ and server, authentication other than `trust` on the loopback address.
 | tcpraid node | `nas-a` | `nas-b` |
 
 The two nodes are paired. The primary accepts replication connections from
-the address of `nas-a` (to the primary, the connections come from the node at
-its own site): a role with the `REPLICATION` attribute and a matching
-`replication` line in `pg_hba.conf`, as for any standby.
+the address of `nas-a`, because to the primary the connections come from the
+node at its own site. As for any standby, this takes a role with the
+`REPLICATION` attribute and a matching `replication` line in `pg_hba.conf`.
 
 ```
 site-a$ psql -c "create role repl replication login"
@@ -33,28 +34,28 @@ site-a$ psql -c "create role repl replication login"
 host replication repl 192.0.2.5/32 METHOD
 ```
 
-`METHOD` is the authentication method you use for your standbys. (The run for
+`METHOD` is the authentication method you use for your standbys. The run for
 this tutorial had everything on one machine and used `trust` for the loopback
-address, which is for tests only.)
+address, which is for tests only.
 
 ## Step 1: a rule on nas-b
 
-Rules > "New rule" in the web page of `nas-b`: listen address and port
-`127.0.0.1:15432` if the standby is on the same host as the node, otherwise
-an address the standby can reach; peer `nas-a`; destination
-`192.0.2.10:5432`. Or:
+In the web page of `nas-b`, go to Rules > "New rule". Set the listen address
+and port to `127.0.0.1:15432` if the standby is on the same host as the node,
+and otherwise to an address the standby can reach. Set the peer to `nas-a`
+and the destination to `192.0.2.10:5432`. Or:
 
 ```
 nas-b$ tcpraid rules add pg -peer nas-a -listen 127.0.0.1:15432 -dest 192.0.2.10:5432
 rule pg added: listening
 ```
 
-If `nas-b` runs in a container, `127.0.0.1` inside it is the container's own:
-listen on `0.0.0.0` with a port the container publishes (for example 50000),
-and point the standby at the host's address and that port. And if `nas-a` runs
-in a container on the primary's own host, the primary sees the connection
-coming from the container's address on the host, not from 192.0.2.5: the
-`pg_hba.conf` line has to name that address.
+If `nas-b` runs in a container, `127.0.0.1` inside it is the container's own.
+In that case listen on `0.0.0.0` with a port the container publishes, for
+example 50000, and point the standby at the host's address and that port. If
+`nas-a` runs in a container on the primary's own host, the primary sees the
+connection coming from the container's address on the host, not from
+192.0.2.5, so the `pg_hba.conf` line has to name that address.
 
 ## Step 2: the base backup through the rule
 

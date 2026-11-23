@@ -9,11 +9,11 @@ import (
 	"io"
 	"net"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/Claw-King/tcpraid/internal/engine"
 	"github.com/Claw-King/tcpraid/internal/node"
+	"github.com/Claw-King/tcpraid/internal/pair"
 )
 
 // Dialer opens connections to peers.
@@ -37,7 +37,7 @@ func (d *Dialer) Dial(ctx context.Context, peer node.Peer, path node.Path) (net.
 	switch path.Security {
 	case node.SecurityOff:
 	case node.SecurityTLS:
-		cfg = d.pinned(ALPN, peer.Fingerprint, "the node at this address is not the peer: its key has another fingerprint")
+		cfg = d.pinned(ALPN, peer.Fingerprint, "the node at this address is not the peer. Its key has another fingerprint.")
 	case node.SecurityOwnCert:
 		if path.Verify == node.VerifyCA {
 			host, _, err := net.SplitHostPort(path.Addr)
@@ -52,7 +52,7 @@ func (d *Dialer) Dial(ctx context.Context, peer node.Peer, path node.Path) (net.
 				RootCAs:      d.RootCAs,
 			}
 		} else {
-			cfg = d.pinned(ALPNOwn, path.Pin, "the certificate at this address is not the pinned one: its key has another fingerprint")
+			cfg = d.pinned(ALPNOwn, path.Pin, "the certificate at this address is not the pinned one. Its key has another fingerprint.")
 		}
 	}
 	proxy := ""
@@ -156,7 +156,7 @@ func (d *Dialer) Check(ctx context.Context, peer node.Peer, path node.Path) erro
 	}
 	if err != nil && path.Security != node.SecurityOff && strings.Contains(err.Error(), "bad certificate") {
 		// what a TLS server answers when it refuses the client's certificate
-		return fmt.Errorf("the other node does not accept this node: it is not paired with it, or no longer (%w)", err)
+		return fmt.Errorf("the other node does not accept this node, which is not paired with it or no longer is (%w)", err)
 	}
 	return err
 }
@@ -165,8 +165,8 @@ func (d *Dialer) Check(ctx context.Context, peer node.Peer, path node.Path) erro
 // that may mean: a listener closes connections that have not finished their handshake
 // when it has too many of them.
 func closedInHandshake(err error) error {
-	if errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET) {
-		return fmt.Errorf("%w (the other node closed the connection during the handshake; it may be busy: try again)", err)
+	if errors.Is(err, io.EOF) || pair.IsReset(err) {
+		return fmt.Errorf("%w. The other node closed the connection during the handshake and may be busy. Try again.", err)
 	}
 	return err
 }

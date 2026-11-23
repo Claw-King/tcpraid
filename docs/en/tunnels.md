@@ -1,47 +1,47 @@
 # Using tcpraid with a tunnel, an overlay network or a proxy
 
-A path to a peer is just an address that TCP connections can be opened to.
-That address does not have to be the peer's own: it can be the near end of
-anything that carries TCP to the peer's listener. This document says how to
-configure that. Which way to choose, and which tools keep tcpraid's
-connections separate on the way (not all do), is in `connecting.md`.
+A path to a peer is an address that TCP connections can be opened to. That
+address does not have to be the peer's own. It can be the near end of anything
+that carries TCP to the peer's listener. This document says how to configure
+that. `connecting.md` says which way to choose and which tools keep tcpraid's
+connections separate on the way, because not all of them do.
 
 ## The rule
 
 - **The path's address** is the address the dialing node connects to in order
-  to reach the peer's listener: the address of a port forward, of the tunnel's local end, of the
-  peer inside an overlay network, or -- for a SOCKS5 proxy -- the address the
-  proxy should connect to.
-- **The path's tier** says whether tcpraid adds its own TLS on that path:
-  `tls` (the default) does, `off` does not.
+  to reach the peer's listener. That is the address of a port forward, of the
+  tunnel's local end or of the peer inside an overlay network. For a SOCKS5
+  proxy it is the address the proxy should connect to.
+- **The path's tier** says whether tcpraid adds its own TLS on that path.
+  `tls`, the default, adds it, and `off` does not.
 
-Set both on the node that dials, in the web page (Peers > Details > the
-path > Edit) or with `tcpraid peers path set`.
+Set both on the dialing node, either in the web page under Peers > Details >
+the path > Edit, or with `tcpraid peers path set`.
 
 ## A port forward or a tunnel with a fixed far end
 
-Something listens near this node and delivers to the peer's port 9851 (a
-forwarded port on a router, a relay that passes connections on). Point the
-path at the near end:
+Something listens near this node and delivers to the peer's port 9851, for
+example a forwarded port on a router, or a relay that passes connections on.
+Point the path at the near end:
 
 ```
 nas-b$ tcpraid peers path set nas-a default -addr 127.0.0.1:19851
 ```
 
-The tier stays `tls`: the two nodes still authenticate each other and encrypt
-end to end, inside whatever carries the connection.
+The tier stays `tls`, so the two nodes still authenticate each other and
+encrypt end to end, inside whatever carries the connection.
 
 Do not use an SSH port forward (`ssh -L`, `ssh -R`) here. It would work, but
 every connection it forwards is a channel inside the one SSH connection, so
 all of tcpraid's connections would share a single TCP connection and gain
-nothing. The same holds for any forwarder that multiplexes; `connecting.md`
+nothing. The same holds for any forwarder that multiplexes. `connecting.md`
 lists the ones we could check.
 
 ## An overlay network or a VPN
 
 Both nodes have an address in the overlay. Use the peer's overlay address as
-the path's address, and give that address when you make the pairing code
-(the address at which the other node reaches this one). Nothing else changes.
+the path's address, and give that address when you make the pairing code, as
+the address at which the other node reaches this one. Nothing else changes.
 
 ## A path that is already encrypted: the `off` tier
 
@@ -65,12 +65,12 @@ To leave it out:
 
 In the `off` tier the data is not encrypted by tcpraid, and the only proof of
 who connects is a short authenticated opening that could be replayed within
-ten minutes by someone who can read the path (`security.md`). Use it only
-where the tunnel covers the whole way between the two nodes.
+ten minutes by someone who can read the path, as `security.md` explains. Use
+it only where the tunnel covers the whole way between the two nodes.
 
-Pairing itself always needs the TLS listener (`-listen`); a node can run both
-listeners. Rules on the node that does not dial work over an `off` path too:
-it was run with one node listening on the plain listener only, and a rule on
+Pairing itself always needs the TLS listener (`-listen`), and a node can run
+both listeners. Rules on the node that does not dial work over an `off` path too. This
+was run with one node listening on the plain listener only, and a rule on
 that node carried 60 MiB to the other with equal checksums.
 
 ## Through a SOCKS5 proxy
@@ -83,15 +83,15 @@ nas-b$ tcpraid peers path set nas-a side -addr 192.0.2.10:9851 -type socks5 \
            -proxy socks5://user:pass@127.0.0.1:1080 -roles repair,control -subs 2
 ```
 
-A proxy's password given on the command line shows in the process list; the
+A proxy's password given on the command line shows in the process list. The
 web page takes it too, and never shows it again. Paths through a proxy were
 not part of the runs for this documentation.
 
 ## Several paths
 
-A peer can have several paths, over different routes, with different roles
-(`concepts.md`). A common shape: the main route with the role `data`, and a
-second, independent route with `repair` and `control`.
+A peer can have several paths, over different routes and with different
+roles, as `concepts.md` describes. A common shape is the main route with the
+role `data`, and a second, independent route with `repair` and `control`.
 
 ```
 nas-b$ tcpraid peers show nas-a
@@ -99,21 +99,21 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.1.3, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.2.0, last heard 2026-01-15T10:00:05Z
 
 PATH     TYPE    ADDRESS                 PROXY                    SECURITY  VERIFY  PIN  ROLES           SUBS
 default  tcp     nas-a.example.org:9851  -                        tls       -       -    data            8
 side     socks5  192.0.2.10:9851         socks5://127.0.0.1:1080  tls       -       -    repair,control  2
 ```
 
-`tcpraid peers path remove NAME PATH` removes a path. `tcpraid peers check
-NAME` tries each path and says which of them fail.
+`tcpraid peers path remove NAME PATH` removes a path.
+`tcpraid peers check NAME` tries each path and says which of them fail.
 
 ## Your own certificate: the `owncert` tier
 
-Where the listening node should show a certificate of yours instead of its
-identity certificate -- for example one issued by an authority, on a host name
--- start it with `-cert FILE -key FILE` (next to `-listen`) and set the path on
+If the listening node should show a certificate of yours instead of its
+identity certificate, for example one issued by an authority for a host name,
+start it with `-cert FILE -key FILE` next to `-listen`, and set the path on
 the dialing node:
 
 ```
@@ -125,5 +125,5 @@ tcpraid peers path set nas-a default -security owncert -verify ca -addr nas-a.ex
 ```
 
 The dialing node still shows its identity certificate, and the opening still
-proves the pairing. This tier is covered by the program's tests; it was not
-part of the runs for this documentation.
+proves the pairing. This tier is covered by the program's tests, but it was
+not part of the runs for this documentation.

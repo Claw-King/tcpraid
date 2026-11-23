@@ -11,7 +11,7 @@ A rule that cannot carry a connection resets it and keeps the reason:
 ```
 nas-a$ tcpraid rules
 NAME  TAKES         PEER   DESTINATION         SESSIONS  STATE
-back  0.0.0.0:9811  nas-b  198.51.100.20:7100  0         listening; last connection: this node has no path to peer "nas-b", and the peer is not connected to this node (it would open the connections): start the peer, or give this node a path to it (tcpraid peers path set)
+back  0.0.0.0:9811  nas-b  198.51.100.20:7100  0         listening, last connection: this node has no path to peer "nas-b", and the peer, which would open the connections, is not connected to this node. Start the peer, or add a path with "tcpraid peers path set".
 
 nas-b$ tcpraid rules
 NAME   TAKES         PEER   DESTINATION     SESSIONS  STATE
@@ -25,8 +25,8 @@ taken  0.0.0.0:9700  nas-a  192.0.2.10:873  0         FAILED: listening on 0.0.0
 | connection refused before any of this | nothing listens on that port. In a container: is the rule's port published, and does the rule listen on `0.0.0.0`? |
 | the connection is accepted and reset at once | the far node could not reach the destination, or the peer's allow list does not include it. The far node's log says which: `dial ADDRESS: ... connection refused`, or `dial ADDRESS: not in the allow list of the peer`; this node's log says `server could not reach ADDRESS` |
 | reset after 15 seconds, rule on the node without a path | the peer was asked to connect and nothing arrived: the peer can no longer reach this node's listener |
-| reset after 30 seconds, and the rule's status shows no reason | none of the sub-connections came up. One cause: the pairing was ended on the other node. `tcpraid peers check NAME` then says "the other node does not accept this node: it is not paired with it, or no longer", and the other node's log has lines "refused a connection from ...: not a peer of this node". Pair again |
-| "peer ... was restarted while it carried a connection of this rule: the connection was reset" | the other node came back as a new process (it was restarted, killed, or ran out of memory) and this node reset the connection the old process had been carrying. Start the transfer again. If it keeps happening, look at the other node's log and at its memory limits (`-maxrss`, the limit of its container) |
+| reset after 30 seconds, and the rule's status shows no reason | none of the sub-connections came up. One cause: the pairing was ended on the other node. `tcpraid peers check NAME` then says "the other node does not accept this node, which is not paired with it or no longer is", and the other node's log has lines "refused a connection from ...: not a peer of this node". Pair again |
+| "peer ... was restarted while it carried a connection of this rule, and the connection was reset" | the other node came back as a new process (it was restarted, killed, or ran out of memory) and this node reset the connection the old process had been carrying. Start the transfer again. If it keeps happening, look at the other node's log and at its memory limits (`-maxrss`, the limit of its container) |
 
 A destination is an address **as the far node sees it**. With the far node in
 a container, `127.0.0.1` is the container, not the NAS.
@@ -45,34 +45,34 @@ default  nas-a.example.org:9851 (tls): ok
 it holds the pairing. If it fails, the message says where:
 
 - `FAILED: dial tcp ...: connect: connection refused` (or a timeout): the
-  address, a port forward on the way, or the peer's `-listen` port;
+  address, a port forward on the way, or the peer's `-listen` port.
 - `FAILED: tls: first record does not look like a TLS handshake`: the address
   leads to something that is not a node's TLS listener, for example the
-  node's port 9850 instead of 9851;
-- `FAILED: ... connection reset by peer (the other node closed the connection
-  during the handshake; it may be busy: try again)`, every time: besides a
+  node's port 9850 instead of 9851.
+- `FAILED: ... connection reset by peer. The other node closed the connection
+  during the handshake and may be busy. Try again.`, every time: besides a
   busy node, this is what a path of the `tls` tier gets from a node's plain
   listener (`-listen-plain`). Check that the port and the path's tier belong
-  together;
-- "the node at this address is not the peer: its key has another
-  fingerprint": another node answers there, or the peer has a new identity
-  (its data directory was lost);
-- "the other node does not accept this node: it is not paired with it, or no
-  longer": the pairing was ended on the other node;
+  together.
+- "the node at this address is not the peer. Its key has another
+  fingerprint.": another node answers there, or the peer has a new identity
+  because its data directory was lost.
+- "the other node does not accept this node, which is not paired with it or
+  no longer is": the pairing was ended on the other node.
 - "the other end closed the connection without answering": on a path of the
-  tier `off`, the other node is not paired with this one; in any tier, the two
+  tier `off`, the other node is not paired with this one. In any tier, the two
   hold different pair secrets after a pairing that was cut off, or their
-  clocks are more than ten minutes apart (the other node's log then says so).
-  Pair them again, or set the clock.
+  clocks are more than ten minutes apart, in which case the other node's log
+  says so. Pair them again, or set the clock.
 
-A node without a path to its peer cannot check (`this node has no path to
-...: it can only be reached by it`); check from the other side.
+A node without a path to its peer cannot check, and says `this node has no path to
+... and can only be reached by it`. Check from the other side.
 
 ## Pairing fails
 
 - "no address for the other node to connect to": the node does not know its
-  outside address. Give one when making the code (`-addr HOST:PORT`, or the
-  field in the web page), or start the node with `-advertise`.
+  outside address. Give one when making the code, with `-addr HOST:PORT` or
+  the field in the web page, or start the node with `-advertise`.
 - "the other node did not accept the pairing code": the code was used, has
   expired (one hour by default), was revoked or was not copied whole.
 - "the pairing code is damaged": copy it again, complete and unchanged.
@@ -82,30 +82,32 @@ A node without a path to its peer cannot check (`this node has no path to
 
 ## It works but it is not faster
 
-- Measure the path first without tcpraid: `iperf3` with one stream and with
-  eight. If eight together are not clearly faster than one, there is nothing
+- Measure the path first without tcpraid, using `iperf3` with one stream and
+  with eight. If eight together are not clearly faster than one, there is nothing
   for tcpraid to gain.
-- Look at the session (Sessions page, `tcpraid sessions`, or
-  `GET /api/v1/sessions`): `subs` should be the number of connections of the
-  paths (8 by default), and `resent_bytes` a small share of `tx_bytes` (the
-  column `SENT AGAIN` of the command). Many bytes sent again point to
-  a path that loses or stalls; a second path with the roles `repair` and
-  `control`, or UDP feedback, is what helps there (`concepts.md`).
+- Look at the session on the Sessions page, with `tcpraid sessions`, or with
+  `GET /api/v1/sessions`. `subs` should be the number of connections of the
+  paths (8 by default), and `resent_bytes` should be a small share of
+  `tx_bytes`. The command shows that share in the column `SENT AGAIN`. Many
+  bytes sent again point to a path that loses or stalls. A second path with
+  the roles `repair` and `control`, or UDP feedback, is what helps there
+  (`concepts.md`).
 - The speed of the stretch between the application and its node, and between
-  the far node and the destination, counts as well: tcpraid cannot be faster
-  than the slower of them, or than the application itself.
+  the far node and the destination, counts as well, because tcpraid cannot be
+  faster than the slower of them, or than the application itself.
 - When a session ends, both nodes log two lines about it: bytes, chunks sent
   again, sub-connections replaced, time stalled. A node started with
   `-timeline` logs the same kind of figures while the session runs. The next
-  section explains them, and how they tell whether `-window` or `-hol`
-  (`reference-files.md`) is worth changing.
+  section explains them, and how they tell whether to change `-window` or
+  `-hol` (`reference-files.md`).
 
 ## Reading the session lines in the log
 
 When a session ends, each node logs two lines about it. A node started with
 `-timeline 2s` also logs one line per session every two seconds while it
-runs (the first one about half a second after the session begins). The figures are those of the node that logs them: the sending figures
-matter at the end the data comes from, the receiving figures at the other.
+runs, the first one about half a second after the session begins. The figures
+are those of the node that logs them. The sending figures matter at the
+sending end, and the receiving figures at the other.
 
 ### The timeline line
 
@@ -113,7 +115,7 @@ matter at the end the data comes from, the receiving figures at the other.
 [ddc465] tl t=3.0 tx=34.2 re=0.0 ack=37.1 rx=0.0 dlv=0.0 unacked=0 unsent=0 pend=0 infl=0 sacked=63 fbage=0.03 fb=144/9 fbc=0 fbu=0 cap=0/8 holage=0.00 pumpwait=0.28 starve=0.94 loop=243/1521
 ```
 
-Rates are MB/s over the time since the previous line; sizes are MB at the
+Rates are MB/s over the time since the previous line, and sizes are MB at the
 moment of the line.
 
 | Field | Meaning |
@@ -141,24 +143,24 @@ moment of the line.
 What limits a transfer shows at the sending node:
 
 - `pumpwait` near 0 while data moves (`tx` above zero): the node waits for
-  the application; the path is not the limit. (`pumpwait` 0 with `tx` 0 over
-  several lines is one long wait that has not ended yet: read it as one of
-  the cases below.)
+  the application, and the path is not the limit. A `pumpwait` of 0 with `tx`
+  at 0 over several lines is one long wait that has not ended yet, so read it
+  as one of the cases below.
 - `pumpwait` near 1 with `unsent` large and every sub-connection of the data
   paths at its cap: the application delivers faster than the path takes. The
-  window is full of data that has not been sent yet; a larger `-window` holds
-  more of it and sends no faster.
+  window is full of data that has not been sent yet, so a larger `-window`
+  holds more of it and sends no faster.
 - `pumpwait` near 1 with `unsent` near 0: the data is out, and the window is
-  full of what the peer has not reported or cannot deliver yet (`sacked`
-  large). Look at the receiving node. If its `holage` is above zero, data
-  waits there for missing chunks: a larger `-window` at both nodes gives it
+  full of what the peer has not reported or cannot deliver yet, with `sacked`
+  large. Look at the receiving node. If its `holage` is above zero, data
+  waits there for missing chunks. A larger `-window` at both nodes gives it
   more room, and a shorter `-hol` at the sending node sends a missing chunk
   again sooner, at the price of some chunks sent twice. If its `holage` stays
   at zero while its `pend` is large, the application there is slow to take
-  the data (`stall` in its end line says for how long), and no setting of
-  tcpraid changes that. If its `holage` is zero and its `pend` is small as
-  well, nothing waits there: the window is smaller than what the path holds
-  in flight, and a larger `-window` at both nodes may let more through.
+  the data, and no setting of tcpraid changes that. The `stall` figure in its
+  end line says for how long. If its `holage` is zero and its `pend` is small
+  as well, nothing waits there. The window is then smaller than what the path
+  holds in flight, and a larger `-window` at both nodes may let more through.
 
 ### The two lines at the end
 
@@ -206,14 +208,14 @@ stats sessions=1 goroutines=28 rss=20MB heap=6MB unacked=0MB resends=0 kicks=0/0
 [8ac974] 127.0.0.1:7000 9s tx 242MB rx 0MB unacked 0MB sacked 128MB pending 0MB subs: [p0 2277/1812KB/s loop0ms infl0KB cap684KB] [p0 2624/776KB/s loop0ms infl0KB cap790KB]
 ```
 
-The `stats` line. The counters count from the start of the node; the others
-are the state at that moment.
+The `stats` line. The counters count from the start of the node, and the
+others are the state at that moment.
 
 | Field | Meaning |
 |---|---|
 | `sessions` | sessions the node carries now |
 | `goroutines` | goroutines of the process (it grows with sessions and sub-connections; a number that only ever grows is worth a report) |
-| `rss` | resident memory of the process, what `-maxrss` is compared with |
+| `rss` | resident memory of the process, what `-maxrss` is compared with. `n/a` on macOS and Windows, where the program does not read it |
 | `heap` | memory the Go runtime has in use for the heap |
 | `unacked` | data of all sessions that was read from applications and that the peers have not reported received; `-budget` limits it |
 | `resends` | counter: chunks queued to be sent again |
@@ -231,49 +233,50 @@ The line of a session:
 | `tx`, `rx` | stream data sent (first time only) and received, as in the end line |
 | `unacked`, `sacked`, `pending` | the timeline's `unacked`, `sacked` and `pend` |
 | `subs:` | one group for each live sub-connection |
-| `p0` | the path it belongs to: the number of the path, from 0, in the list of paths that the node which opens the connections keeps for the other |
+| `p0` | the path it belongs to: the number of the path, from 0, in the list of paths that the dialing node keeps for the other |
 | `2277/1812KB/s` | what the peer reported as delivered over this sub-connection: the highest rate over a second, and the average of the last two seconds |
 | `loop0ms` | the shortest time seen on this sub-connection from sending data to the report that it arrived |
 | `infl` | sent on this sub-connection and not yet reported received |
 | `cap` | how much this sub-connection may hold in flight |
 | `[ctrl p1]` | a sub-connection of a `control` path: it carries reports, no data |
 
-At the node that receives, the rates and `infl` are zero: it sends no stream
-data.
+At the receiving node, the rates and `infl` are zero, because it sends no
+stream data.
 
 ## The web page
 
-- Forgotten password, or the log line with the generated one is gone (a
-  container that started long ago): set your own. In a container, put it in
-  the environment variable `TCPRAID_UI_PASSWORD` (the compose file and the
-  templates have the entry) and create the container again (`docker compose
-  up -d`; a plain restart keeps the old environment); for a binary, use
-  that variable or `-ui-password-file FILE`. It replaces the old password
-  (`reference-files.md`). Or, for a new generated one: stop the node, delete
-  `ui.password` in the data directory, start the node; the new password is
-  printed once in the log.
+- Forgotten password, or the log line with the generated one is gone, as
+  with a container that started long ago: set your own. In a container, put
+  it in the environment variable `TCPRAID_UI_PASSWORD`, for which the compose
+  file and the templates have the entry, and create the container again with
+  `docker compose up -d`. A plain restart keeps the old environment. For a
+  binary, use that variable or `-ui-password-file FILE`. It replaces the old
+  password (`reference-files.md`). For a new generated one instead, stop the
+  node, delete `ui.password` in the data directory and start the node. The
+  new password is printed once in the log.
 - "too many wrong passwords from this address": wait a minute.
 - Logged out again and again with two nodes on one host: both use the same
-  cookie name. Reach each under a host name of its own.
+  cookie name. Reach each under its own host name.
 - The page does not open from another machine: the API listens on
   `127.0.0.1` unless `-api` says otherwise.
 
 ## The node does not start
 
-- "the data directory ... is in use by another tcpraid": one node per
-  directory; the first one is still running.
-- "... has a state file but neither identity.key nor identity.crt: its
-  identity is lost, and a new one is not created in its place": restore the
+- "the data directory ... is in use by another tcpraid": only one node runs
+  on a directory, and the first one is still running.
+- "... has a state file but neither identity.key nor identity.crt. Its
+  identity is lost, and a new one is not created in its place.": restore the
   files from your backup, or start with an empty directory and pair again.
 - `tcpraid status` says "the node is not running or -data DIR is not its data
-  directory": the commands find the node through its data directory; give the
-  same `-data` as the node has (in the container: `-data /data`).
+  directory": the commands find the node through its data directory. Give the
+  same `-data` as the node has, which in the container is `-data /data`.
 - The log warns when the data directory or its key files can be read or
-  written by others; fix the permissions.
+  written by others. Fix the permissions.
 
 ## Numbers for monitoring
 
-`GET /metrics` gives counters in the Prometheus text format (with the token):
+`GET /metrics` gives counters in the Prometheus text format and needs the
+token:
 
 ```
 # TYPE tcpraid_sessions_total counter
@@ -288,5 +291,5 @@ A node started with `-stats DURATION` writes its totals to the log at that
 interval, for a script that reads the log (see "The lines of `-stats`"
 above).
 
-`tcpraid status` exits with an error when no node answers; the container's
+`tcpraid status` exits with an error when no node answers, and the container's
 health check uses it.

@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -94,7 +96,8 @@ func TestSubcommandFlagErrors(t *testing.T) {
 	}
 	// asking for help is not an error; the flags and their defaults are listed
 	code, _, _, stderr := call("run", "-h")
-	if code != 0 || !strings.Contains(stderr, defaultDataDir) || !strings.Contains(stderr, defaultAPIAddr) || !strings.Contains(stderr, "-name") {
+	// the help quotes the default, which doubles the backslashes of a Windows path
+	if code != 0 || !strings.Contains(stderr, strconv.Quote(defaultDataDir)) || !strings.Contains(stderr, defaultAPIAddr) || !strings.Contains(stderr, "-name") {
 		t.Errorf("run -h: code %d, text %q", code, stderr)
 	}
 }
@@ -404,6 +407,9 @@ func TestRunWarnsAboutPermissions(t *testing.T) {
 	startNode(t, filepath.Join(t.TempDir(), "data"), "127.0.0.1:0", "tight")
 	if strings.Contains(logged.String(), "warning") {
 		t.Fatalf("warning for a directory the node made itself:\n%s", logged.String())
+	}
+	if runtime.GOOS == "windows" {
+		return // the mode bits do not express access there; nothing is reported
 	}
 	dir := filepath.Join(t.TempDir(), "data")
 	n, err := node.Open(dir, "alpha")

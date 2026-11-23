@@ -75,7 +75,7 @@ type fileCfg struct {
 	} `yaml:"limits"`
 }
 
-var cfgFile = flag.String("config", "", "YAML configuration file (flags given on the command line override it)")
+var cfgFile = flag.String("config", "", "YAML configuration file, overridden by flags given on the command line")
 
 func parseSize(s string) (int, error) {
 	s = strings.TrimSpace(strings.ToUpper(s))
@@ -209,7 +209,7 @@ func loadConfig() ([]pathCfg, error) {
 			has[r] = true
 		}
 		if has["data"] && has["repair"] {
-			return nil, fmt.Errorf("path %s: data and repair exclude each other (a repair path is a separate path)", p.Name)
+			return nil, fmt.Errorf("path %s: data and repair exclude each other, because a repair path is a separate path", p.Name)
 		}
 	}
 	if len(c.Paths) > 250 {
@@ -239,7 +239,7 @@ func dialGroups(paths []pathCfg) ([]engine.DialGroup, error) {
 			}
 			f, err := mk(a, *socksCtrl, *ctrlMark)
 			if err != nil {
-				return nil, fmt.Errorf("-ctrlsocks: %w", err)
+				return nil, fmt.Errorf("-ctrlsocks / -ctrlmark: %w", err)
 			}
 			gs = append(gs, engine.DialGroup{Path: 1, Name: "control", Ctrl: true, Want: *ctrlN, Dial: f})
 		}

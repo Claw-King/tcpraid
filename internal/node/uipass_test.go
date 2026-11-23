@@ -59,7 +59,7 @@ func TestUIPasswordFile(t *testing.T) {
 	if err != nil || got != h {
 		t.Fatalf("read %q, %v", got, err)
 	}
-	if st, err := os.Stat(filepath.Join(dir, UIPasswordFile)); err != nil || st.Mode().Perm() != 0o600 {
+	if st, err := os.Stat(filepath.Join(dir, UIPasswordFile)); err != nil || (modesMeanAccess && st.Mode().Perm() != 0o600) {
 		t.Fatalf("file mode %v, %v", st.Mode(), err)
 	}
 	h2, _ := HashPassword("two")

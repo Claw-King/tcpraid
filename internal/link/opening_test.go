@@ -227,7 +227,7 @@ func TestCheckProvesThePairSecret(t *testing.T) {
 	stale.PairSecret = testSecret(5)
 	for _, path := range []node.Path{bOfA.Paths[0], off} {
 		err := check(b, stale, path)
-		if err == nil || !strings.Contains(err.Error(), "pair them again") {
+		if err == nil || !strings.Contains(err.Error(), "Pairing again") {
 			t.Fatalf("%s: a check with a pair secret alpha does not hold: %v", path.Security, err)
 		}
 	}

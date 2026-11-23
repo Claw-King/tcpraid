@@ -349,7 +349,7 @@ func (rt *Runtime) peerRestarted(name string, oldUntil time.Time) {
 	for _, o := range owners {
 		if o.Rule != "" && !told[o.Rule] {
 			told[o.Rule] = true
-			rt.problem(o.Rule, fmt.Sprintf("peer %q was restarted while it carried a connection of this rule: the connection was reset", name))
+			rt.problem(o.Rule, fmt.Sprintf("peer %q was restarted while it carried a connection of this rule, and the connection was reset", name))
 		}
 	}
 }
@@ -404,7 +404,7 @@ func (rt *Runtime) dropControlLocked(name string) {
 func (rt *Runtime) carryReverse(r node.Rule, peer node.Peer, c net.Conn, ip net.IP, port int) {
 	cc := rt.liveControl(peer.Name)
 	if cc == nil {
-		rt.problem(r.Name, fmt.Sprintf("this node has no path to peer %q, and the peer is not connected to this node (it would open the connections): start the peer, or give this node a path to it (tcpraid peers path set)", peer.Name))
+		rt.problem(r.Name, fmt.Sprintf("this node has no path to peer %q, and the peer, which would open the connections, is not connected to this node. Start the peer, or add a path with \"tcpraid peers path set\".", peer.Name))
 		reset(c)
 		return
 	}
