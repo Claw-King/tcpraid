@@ -26,6 +26,7 @@ taken  0.0.0.0:9700  nas-a  192.0.2.10:873  0         FAILED: listening on 0.0.0
 | the connection is accepted and reset at once | the far node could not reach the destination, or the peer's allow list does not include it. The far node's log says which: `dial ADDRESS: ... connection refused`, or `dial ADDRESS: not in the allow list of the peer`; this node's log says `server could not reach ADDRESS` |
 | reset after 15 seconds, rule on the node without a path | the peer was asked to connect and nothing arrived: the peer can no longer reach this node's listener |
 | reset after 30 seconds, and the rule's status shows no reason | none of the sub-connections came up. One cause: the pairing was ended on the other node. `tcpraid peers check NAME` then says "the other node does not accept this node: it is not paired with it, or no longer", and the other node's log has lines "refused a connection from ...: not a peer of this node". Pair again |
+| "peer ... was restarted while it carried a connection of this rule: the connection was reset" | the other node came back as a new process (it was restarted, killed, or ran out of memory) and this node reset the connection the old process had been carrying. Start the transfer again. If it keeps happening, look at the other node's log and at its memory limits (`-maxrss`, the limit of its container) |
 
 A destination is an address **as the far node sees it**. With the far node in
 a container, `127.0.0.1` is the container, not the NAS.

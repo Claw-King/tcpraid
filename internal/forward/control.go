@@ -12,6 +12,12 @@ package forward
 // reverse type that carry the request number; this node attaches each connection to the
 // session the request stands for. From then on the session runs like any other; the
 // peer, which dials, keeps the number of sub-connections up.
+//
+// The control connections also tell a node that a peer's process was replaced by a new
+// one (the node was restarted, or killed and started again): every hello carries a
+// number the process picked at its start. A new process knows nothing of the sessions
+// of the old one, so this node resets the sessions it still holds with the old one
+// instead of keeping them until the grace time is over.
 
 import (
 	"context"
@@ -89,11 +95,38 @@ type peerControl struct {
 	version string
 	last    time.Time
 	serving int // sessions this node serves because the peer asked (see MaxOpenRequests)
+	// instance is the number the peer's process said in the hello that counted last;
+	// empty before one did. previous is the one before it: a hello with it is a late
+	// one of the process that is gone. lastOf is when the last message arrived on a
+	// connection whose hello said instance: the process was alive then.
+	instance, previous string
+	lastOf             time.Time
 }
 
 type ctlConn struct {
 	*control.Conn
-	peer string // name of the peer at the other end
+	peer     string // name of the peer at the other end
+	instance string // what the hello on this connection said (rt.mu)
+}
+
+// hello notes the instance number of a hello that arrived on cc (rt.mu held). When it
+// shows that the peer runs as another process than before, hello returns the time up to
+// which the old process is known to have lived: the sessions with the peer that began
+// before it were the old one's. Otherwise it returns the zero time: the first number
+// from the peer, the same number again, no number (a version that has none), or the
+// number of the process before this one.
+func (pc *peerControl) hello(cc *ctlConn, instance string) (oldUntil time.Time) {
+	cc.instance = instance
+	switch {
+	case instance == "" || instance == pc.instance || instance == pc.previous:
+		return time.Time{}
+	case pc.instance == "":
+		pc.instance = instance
+		return time.Time{}
+	}
+	oldUntil = pc.lastOf
+	pc.previous, pc.instance = pc.instance, instance
+	return oldUntil
 }
 
 // reverseKey names a request this node made: the peer it asked and the number it gave.
@@ -250,7 +283,7 @@ func (rt *Runtime) runControl(peer node.Peer, conn net.Conn) {
 // serveControl says hello, pings, and handles the messages of cc until it fails; it
 // returns why. done is closed by the caller when it has returned.
 func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}) error {
-	if err := cc.Send(control.Message{Type: control.TypeHello, Name: rt.Node.Name(), Version: rt.Version, Protocols: []int{control.Protocol}}); err != nil {
+	if err := cc.Send(control.Message{Type: control.TypeHello, Name: rt.Node.Name(), Version: rt.Version, Protocols: []int{control.Protocol}, Instance: rt.instance}); err != nil {
 		return err
 	}
 	go func() {
@@ -274,11 +307,20 @@ func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}
 			return err
 		}
 		rt.mu.Lock()
-		pc.last = time.Now()
+		now := time.Now()
+		pc.last = now
+		var oldUntil time.Time
 		if m.Type == control.TypeHello {
 			pc.version = printable(m.Version, 64)
+			oldUntil = pc.hello(cc, printable(m.Instance, 64))
+		}
+		if cc.instance != "" && cc.instance == pc.instance {
+			pc.lastOf = now
 		}
 		rt.mu.Unlock()
+		if !oldUntil.IsZero() {
+			rt.peerRestarted(cc.peer, oldUntil)
+		}
 		switch m.Type {
 		case control.TypePing:
 			if err := cc.Send(control.Message{Type: control.TypePong, Seq: m.Seq}); err != nil {
@@ -290,6 +332,25 @@ func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}
 			rt.openFailed(cc.peer, m)
 		}
 		// hello and pong need nothing more; a type this version does not know is ignored
+	}
+}
+
+// peerRestarted resets the sessions that this node holds with the process the peer
+// called name ran as before: those that began before oldUntil. The new process does not
+// know them; left alone, each would wait out the grace time with its application
+// connection open.
+func (rt *Runtime) peerRestarted(name string, oldUntil time.Time) {
+	owners := rt.Engine.AbortPeerBefore(name, oldUntil, "the peer's node was restarted")
+	if len(owners) == 0 {
+		return
+	}
+	rt.logf("peer %q runs as a new process: %d sessions that its old process held were reset", name, len(owners))
+	told := map[string]bool{}
+	for _, o := range owners {
+		if o.Rule != "" && !told[o.Rule] {
+			told[o.Rule] = true
+			rt.problem(o.Rule, fmt.Sprintf("peer %q was restarted while it carried a connection of this rule: the connection was reset", name))
+		}
 	}
 }
 

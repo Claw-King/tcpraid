@@ -30,6 +30,41 @@ type testNode struct {
 	plain string // plain listener
 	logs  *logBuffer
 	stop  func() // stops the node before the test ends; may be called more than once
+	dir   string // its data directory
+	// crash ends the node the way a kill of its process would, as far as a test can:
+	// its listeners and control connections close, it dials nothing any more, and it
+	// tells nobody; its sessions are not shut down. The connections it accepted stay
+	// open (the other node's dropAccepted closes those between the two).
+	crash func()
+
+	amu      sync.Mutex
+	accepted []net.Conn // every connection its listeners for peers accepted
+}
+
+// trackListener notes the connections a node accepts from its peers.
+type trackListener struct {
+	net.Listener
+	tn *testNode
+}
+
+func (l trackListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err == nil {
+		l.tn.amu.Lock()
+		l.tn.accepted = append(l.tn.accepted, c)
+		l.tn.amu.Unlock()
+	}
+	return c, err
+}
+
+// dropAccepted closes every connection the node accepted from its peers so far.
+func (tn *testNode) dropAccepted() {
+	tn.amu.Lock()
+	defer tn.amu.Unlock()
+	for _, c := range tn.accepted {
+		c.Close()
+	}
+	tn.accepted = nil
 }
 
 type logBuffer struct {
@@ -53,12 +88,19 @@ var bg = context.Background()
 
 func startNode(t *testing.T, name string, configure ...func(*Runtime)) *testNode {
 	t.Helper()
-	n, err := node.Open(filepath.Join(t.TempDir(), "data"), name)
+	return startNodeIn(t, filepath.Join(t.TempDir(), "data"), name, configure...)
+}
+
+// startNodeIn is startNode with the data directory given: a second call with the
+// directory of a node that has ended starts that node again, as a new process would.
+func startNodeIn(t *testing.T, dir, name string, configure ...func(*Runtime)) *testNode {
+	t.Helper()
+	n, err := node.Open(dir, name)
 	if err != nil {
 		t.Fatal(err)
 	}
 	logs := &logBuffer{}
-	tn := &testNode{n: n, logs: logs, e: engine.New(engine.DefaultConfig())}
+	tn := &testNode{n: n, logs: logs, e: engine.New(engine.DefaultConfig()), dir: dir}
 	d := &link.Dialer{Identity: n.Identity}
 	tn.rt = &Runtime{Node: n, Engine: tn.e, Dialer: d, Version: "test-" + name, Logf: logs.logf}
 	tn.svc = &link.Service{Node: n, Dialer: d, Logf: logs.logf, PeerRemoved: tn.rt.PeerRemoved}
@@ -76,7 +118,7 @@ func startNode(t *testing.T, name string, configure ...func(*Runtime)) *testNode
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := serve(ctx, ln); err != nil {
+			if err := serve(ctx, trackListener{ln, tn}); err != nil {
 				t.Errorf("listener of %s: %v", name, err)
 			}
 		}()
@@ -89,8 +131,10 @@ func startNode(t *testing.T, name string, configure ...func(*Runtime)) *testNode
 		f(tn.rt)
 	}
 	tn.rt.Start(ctx)
-	var once sync.Once
-	tn.stop = func() { once.Do(func() { cancel(); wg.Wait(); tn.e.Shutdown(); n.Close() }) }
+	var once, closed sync.Once
+	end := func() { cancel(); wg.Wait(); closed.Do(func() { n.Close() }) }
+	tn.crash = end
+	tn.stop = func() { once.Do(func() { end(); tn.e.Shutdown() }) }
 	t.Cleanup(tn.stop)
 	return tn
 }

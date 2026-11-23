@@ -11,23 +11,23 @@ with their SHA-256 sums:
 
 | Machine (`uname -m`) | File |
 |---|---|
-| `x86_64` | `tcpraid-0.1.1-linux-amd64` |
-| `aarch64` | `tcpraid-0.1.1-linux-arm64` |
-| `armv7l` | `tcpraid-0.1.1-linux-armv7` |
-| | `tcpraid-0.1.1-SHA256SUMS` |
+| `x86_64` | `tcpraid-0.1.2-linux-amd64` |
+| `aarch64` | `tcpraid-0.1.2-linux-arm64` |
+| `armv7l` | `tcpraid-0.1.2-linux-armv7` |
+| | `tcpraid-0.1.2-SHA256SUMS` |
 
 Download the one for your machine and the sums file into the same directory,
 check the binary against the sums, and install it:
 
 ```
-$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.1.1/tcpraid-0.1.1-linux-arm64
-$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.1.1/tcpraid-0.1.1-SHA256SUMS
-$ grep linux-arm64 tcpraid-0.1.1-SHA256SUMS | sha256sum -c
-tcpraid-0.1.1-linux-arm64: OK
-# install -m 0755 tcpraid-0.1.1-linux-arm64 /usr/local/bin/tcpraid
+$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.1.2/tcpraid-0.1.2-linux-arm64
+$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.1.2/tcpraid-0.1.2-SHA256SUMS
+$ grep linux-arm64 tcpraid-0.1.2-SHA256SUMS | sha256sum -c
+tcpraid-0.1.2-linux-arm64: OK
+# install -m 0755 tcpraid-0.1.2-linux-arm64 /usr/local/bin/tcpraid
 
 $ tcpraid version
-tcpraid 0.1.1 (wire protocol 1)
+tcpraid 0.1.2 (wire protocol 1)
 ```
 
 Anything but `OK` on the line of your file means the download is not what was
@@ -39,10 +39,10 @@ released: do not run it.
 go build -trimpath -o tcpraid ./cmd/tcpraid
 ```
 
-or build the three release binaries with `deploy/build.sh 0.1.1`; its header
+or build the three release binaries with `deploy/build.sh 0.1.2`; its header
 shows how to do that without Go installed. Copy the one for your machine to
 `/usr/local/bin/tcpraid`. (A binary from the plain `go build` reports
-`0.1.1-dev`; the build script puts in the version it is given.)
+`0.1.2-dev`; the build script puts in the version it is given.)
 
 ## Start a node
 
@@ -52,7 +52,7 @@ By hand, to try it:
 nas-a# tcpraid run -listen 0.0.0.0:9851 -advertise nas-a.example.org:9851
 ... web interface: no password was set, so one was made. It is shown this once: okt7wgr47g3lt6f2
 ... web interface: to set your own, start the node with -ui-password-file FILE or the environment variable TCPRAID_UI_PASSWORD
-... node 0.1.1 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+... node 0.1.2 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
 ... transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
 ```
 
@@ -77,7 +77,7 @@ that address into the code, and without one it needs `-addr` each time), then
 nas-a$ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.1.1 (wire protocol 1)
+version      0.1.2 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0

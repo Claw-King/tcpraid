@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 // sinkListener accepts connections and reports what it read on each when it ends.
@@ -680,5 +681,255 @@ func TestDialContextCancelled(t *testing.T) {
 	}
 	if !bytes.Contains([]byte(err.Error()), []byte("deadline")) {
 		t.Fatalf("error %q does not say the context ended", err)
+	}
+}
+
+// lingerOf reads SO_LINGER of a TCP connection.
+func lingerOf(t *testing.T, c net.Conn) (on, sec int32) {
+	t.Helper()
+	rc, err := c.(*net.TCPConn).SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var l syscall.Linger
+	var gerr error
+	if err := rc.Control(func(fd uintptr) {
+		n := uint32(unsafe.Sizeof(l))
+		if _, _, e := syscall.Syscall6(syscall.SYS_GETSOCKOPT, fd, syscall.SOL_SOCKET, syscall.SO_LINGER,
+			uintptr(unsafe.Pointer(&l)), uintptr(unsafe.Pointer(&n)), 0); e != 0 {
+			gerr = e
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if gerr != nil {
+		t.Fatal(gerr)
+	}
+	return l.Onoff, l.Linger
+}
+
+// While a session runs, the application's connection at each end is set to be reset by
+// any close -- the one the kernel does for a process that was killed included. A session
+// that ends cleanly takes that back before it closes: the destination here has not yet
+// read the end of the stream when the exit end closes its connection, and still gets
+// every byte and then a clean end.
+func TestApplicationConnectionsAreArmedForReset(t *testing.T) {
+	const size, held = 24 << 20, 256 << 10
+	// the destination: it closes its own direction at once, reads all but the last
+	// part of the stream, waits, reads the rest, and reports how the stream ended
+	dln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dln.Close()
+	type result struct {
+		data []byte
+		err  error
+	}
+	arrived := make(chan result, 1)
+	proceed := make(chan struct{})
+	go func() {
+		c, err := dln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		// a small receive buffer: the last part cannot all sit in this socket, so a
+		// reset at the clean end of the session would lose some of it
+		c.(*net.TCPConn).SetReadBuffer(16 << 10)
+		c.(*net.TCPConn).CloseWrite()
+		b := make([]byte, size-held)
+		if _, err := io.ReadFull(c, b); err != nil {
+			arrived <- result{nil, err}
+			return
+		}
+		<-proceed
+		rest, err := io.ReadAll(c)
+		arrived <- result{append(b, rest...), err}
+	}()
+	dst := dln.Addr().(*net.TCPAddr)
+
+	k := NewKeys([]byte("key material of the pair, 32 b.."))
+	exit := New(DefaultConfig())
+	addr := subListener(t, exit, SubOptions{Keys: k, Peer: "alpha"})
+	entry := New(DefaultConfig())
+	route := entry.NewRoute([]DialGroup{{Name: "p", Want: 3, Dial: dialTo(addr)}}, k, "")
+
+	// the application at the entry end, over real TCP
+	aln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer aln.Close()
+	app, err := net.Dial("tcp", aln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	far, err := aln.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		route.Carry(far, dst.IP, dst.Port, Owner{Peer: "beta"}, nil)
+		close(done)
+	}()
+
+	// the exit end's connection to the destination, once it is up
+	var local net.Conn
+	deadline := time.Now().Add(10 * time.Second)
+	for local == nil {
+		exit.registry.Range(func(key, _ any) bool {
+			s := key.(*session)
+			s.mu.Lock()
+			local = s.local
+			s.mu.Unlock()
+			return false
+		})
+		if local == nil {
+			if time.Now().After(deadline) {
+				t.Fatal("the exit end did not connect to the destination")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	for name, c := range map[string]net.Conn{"entry": far, "exit": local} {
+		if on, sec := lingerOf(t, c); on == 0 || sec != 0 {
+			t.Errorf("%s end: SO_LINGER of the application connection is on=%d sec=%d, want on, 0 s", name, on, sec)
+		}
+	}
+
+	data := make([]byte, size)
+	rand.Read(data)
+	go func() {
+		app.Write(data)
+		app.(*net.TCPConn).CloseWrite()
+	}()
+	// both ends finish cleanly while the destination still has the last part to read:
+	// it sits in the sockets between the exit end and the destination
+	select {
+	case <-done:
+	case r := <-arrived:
+		t.Fatalf("the destination's stream ended early: %d bytes, %v", len(r.data), r.err)
+	case <-time.After(60 * time.Second):
+		t.Fatal("the session did not end")
+	}
+	for deadline := time.Now().Add(10 * time.Second); len(exit.SessionList()) > 0; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the session did not end at the exit end")
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+	close(proceed)
+	select {
+	case r := <-arrived:
+		if r.err != nil {
+			t.Fatalf("the destination's stream ended with %v after %d bytes, want a clean end", r.err, len(r.data))
+		}
+		if sha256.Sum256(r.data) != sha256.Sum256(data) {
+			t.Fatalf("%d bytes arrived, %d sent, or they differ", len(r.data), len(data))
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the rest of the data did not arrive")
+	}
+	// the application at the entry end saw a clean end as well
+	app.SetReadDeadline(time.Now().Add(15 * time.Second))
+	if n, err := app.Read(make([]byte, 1)); n != 0 || err != io.EOF {
+		t.Fatalf("the application at the entry end read %d bytes, %v; want a clean end", n, err)
+	}
+}
+
+// A connection that was armed for a reset and is then closed the clean way still
+// delivers what its socket held at the close, followed by a clean end. The socket is
+// filled until the kernel takes no more, so part of the data has certainly not left it
+// when it is closed.
+func TestCleanCloseSendsWhatTheSocketHolds(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := ln.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	ArmReset(c)
+	// nobody reads: write until a write stalls
+	block := make([]byte, 64<<10)
+	rand.Read(block)
+	h := sha256.New()
+	var sent int64
+	for {
+		c.SetWriteDeadline(time.Now().Add(300 * time.Millisecond))
+		n, err := c.Write(block)
+		h.Write(block[:n])
+		sent += int64(n)
+		if err != nil {
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+	if sent < int64(len(block)) {
+		t.Fatalf("only %d bytes went into the socket", sent)
+	}
+	cleanClose(c)
+	got := sha256.New()
+	n, err := io.Copy(got, peer)
+	if err != nil || n != sent {
+		t.Fatalf("after a clean close the other side read %d of %d bytes and then %v, want all of them and a clean end", n, sent, err)
+	}
+	if !bytes.Equal(got.Sum(nil), h.Sum(nil)) {
+		t.Fatal("the bytes differ")
+	}
+}
+
+// AbortPeerBefore resets the sessions of the peer that began before the time given and
+// leaves the later ones alone.
+func TestAbortPeerBefore(t *testing.T) {
+	dst, _ := sinkListener(t)
+	k := NewKeys([]byte("key material of the pair, 32 b.."))
+	exit := New(DefaultConfig())
+	addr := subListener(t, exit, SubOptions{Keys: k, Peer: "alpha"})
+	entry := New(DefaultConfig())
+	route := entry.NewRoute([]DialGroup{{Name: "p", Want: 2, Dial: dialTo(addr)}}, k, "")
+	carry := func(rule string) net.Conn {
+		app, far := net.Pipe()
+		t.Cleanup(func() { app.Close() })
+		go route.Carry(far, dst.IP, dst.Port, Owner{Peer: "beta", Rule: rule}, nil)
+		return app
+	}
+	sessions := func(n int) {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); len(entry.SessionList()) != n; time.Sleep(5 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("the entry end has %d sessions, want %d", len(entry.SessionList()), n)
+			}
+		}
+	}
+	carry("early")
+	sessions(1)
+	time.Sleep(20 * time.Millisecond)
+	between := time.Now()
+	time.Sleep(20 * time.Millisecond)
+	carry("late")
+	sessions(2)
+	if owners := entry.AbortPeerBefore("other", between, "test"); len(owners) != 0 {
+		t.Fatalf("sessions of another peer were reset: %+v", owners)
+	}
+	owners := entry.AbortPeerBefore("beta", between, "test")
+	if len(owners) != 1 || owners[0].Rule != "early" {
+		t.Fatalf("reset %+v, want the one session that began before the time", owners)
+	}
+	sessions(1)
+	if l := entry.SessionList(); l[0].Rule != "late" {
+		t.Fatalf("the session that is left is %+v, want the late one", l[0])
 	}
 }

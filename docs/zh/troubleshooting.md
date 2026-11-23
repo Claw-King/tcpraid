@@ -24,6 +24,7 @@ taken  0.0.0.0:9700  nas-a  192.0.2.10:873  0         FAILED: listening on 0.0.0
 | 连接被接受，随即被重置 | 远端节点连不到目的地，或者对端的允许列表里不包含它。远端节点的日志会说明是哪一种：`dial ADDRESS: ... connection refused`，或者 `dial ADDRESS: not in the allow list of the peer`；本节点的日志里是 `server could not reach ADDRESS` |
 | 15 秒后被重置，规则在没有路径的那个节点上 | 已经请对端连过来，但什么都没到：对端已经连不到本节点的监听了 |
 | 30 秒后被重置，而且规则的状态里没有原因 | 子连接一条都没建起来。原因之一：另一个节点上已经解除了配对。这时 `tcpraid peers check NAME` 会说 "the other node does not accept this node: it is not paired with it, or no longer"，另一个节点的日志里有 "refused a connection from ...: not a peer of this node" 这样的行。重新配对 |
+| "peer ... was restarted while it carried a connection of this rule: the connection was reset" | 另一个节点作为新的进程回来了(它被重启、被杀掉，或者内存耗尽)，本节点把旧进程承载着的那条连接重置了。重新开始传输即可。如果反复出现，去看另一个节点的日志和它的内存上限(`-maxrss`、它所在容器的上限) |
 
 目的地是**从远端节点看过去的**地址。远端节点跑在容器里时，`127.0.0.1` 是容器，不是 NAS。
 

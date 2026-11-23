@@ -37,9 +37,11 @@ It adds, on top of the speed:
   hold the application's connection for up to 15 minutes and carry on when the
   path is back.
 - **A cut-off stream is not mistaken for a complete one.** An abnormal end
-  resets the application's connection on both sides. (The one case that
-  remains, an empty connection at the stop of a node, is under "Known
-  limits".)
+  resets the application's connection on both sides. That holds when a node
+  is stopped, and also when its process is killed or runs out of memory: a
+  node sets up the application's connection so that the system resets it if
+  the process dies. (What remains is under "Known limits": an empty
+  connection at the stop of a node, and a machine that loses power.)
 - **Encryption between the two nodes** by default (TLS 1.3); each node checks
   the other's key against what it stored when the two were paired.
 
@@ -47,6 +49,10 @@ It does not help when:
 
 - One TCP connection already fills the line.
 - The path is short and clean (a LAN, a nearby data centre).
+- The path is good and the one connection has socket buffers that are large
+  enough: it can then be as fast as several, or faster. What tcpraid adds
+  shows on a path that loses packets -- it is steadier there -- and it does
+  not depend on anyone enlarging buffers.
 - The application can open parallel connections itself. Use that instead.
 
 It is not a VPN and not a general proxy: it carries the TCP connections you
@@ -160,8 +166,22 @@ This is a first version, made by one developer in spare time. What is known:
   is stopped at the very moment a session that has just begun is connecting to
   its destination at that node, the destination may see a connection that is
   opened and closed again without any data, like an empty stream.
-- **A session does not survive a restart** of either node; the application
-  sees a reset and has to try again.
+- **A session does not survive a restart** of either node; the applications
+  see a reset and have to try again. Next to the node that was stopped or
+  killed, they see it at once. Next to the other node, they see it at once
+  as well when the first node was stopped (it tells its peers). When it was
+  killed, they see it as soon as it is back and the two are connected again,
+  usually within seconds: a node that comes back says that it runs as a new
+  process, and the other resets what it still held for the old one. Two
+  cases wait longer, until the 15 minutes (`-grace`) are over: a node that
+  does not come back, and a session that had begun only seconds (up to about
+  ten) before its peer was killed. Nodes of version 0.1.1 or older neither
+  say that they are new nor act on hearing it; with one of them on either
+  side, a node that is killed may leave the other waiting the 15 minutes.
+- **A machine that loses power or freezes** sends nothing. The applications
+  next to it see no end of their connections until their own timeouts; the
+  node at the other site holds its sessions as described in the previous
+  point.
 - **One of the two nodes has to be reachable from the other**; nothing is
   relayed through a third machine. A node that holds a path to its peer does
   not fall back to asking the peer to connect when that path fails.

@@ -20,6 +20,8 @@ package forward
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -63,6 +65,11 @@ type Runtime struct {
 	reverse     map[reverseKey]*reverseEntry // sessions whose sub-connections a peer was asked to open
 	transparent bool                         // ServeTransparent runs
 	times       times                        // set before Start, read after
+	// instance is the number this process says in every hello: picked at Start, so it
+	// is another one after a restart of the node. Empty: none is said (tests set
+	// noInstance before Start to be a version that has none).
+	instance   string
+	noInstance bool
 }
 
 // runningRule is a fixed rule with its listeners.
@@ -107,6 +114,12 @@ func (rt *Runtime) Start(ctx context.Context) {
 	rt.times.fill()
 	rt.mu.Lock()
 	rt.ctx = ctx
+	if !rt.noInstance {
+		var b [8]byte
+		if _, err := rand.Read(b[:]); err == nil {
+			rt.instance = hex.EncodeToString(b[:])
+		}
+	}
 	rt.running = map[string]*runningRule{}
 	rt.problems = map[string]string{}
 	rt.peers = map[string]*peerState{}
@@ -214,6 +227,9 @@ func (rt *Runtime) accept(ln net.Listener, handle func(net.Conn)) {
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
+		// an application connection: whatever ends this process resets it, unless
+		// its session has ended cleanly by then
+		engine.ArmReset(c)
 		go handle(c)
 	}
 }

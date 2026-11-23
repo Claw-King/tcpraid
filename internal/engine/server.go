@@ -286,6 +286,8 @@ func (e *Engine) serveSub(c net.Conn, opt SubOptions, r *Route, join *session) b
 			s.dialFail(err.Error())
 			return
 		}
+		// from here on, a process that dies resets the destination
+		ArmReset(d)
 		if !s.setLocal(d) {
 			resetClose(d)
 			return

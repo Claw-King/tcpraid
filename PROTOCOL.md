@@ -252,7 +252,7 @@ field that the receiving end does not know is ignored.
 
 | `type` | Sent | Fields | Meaning |
 |---|---|---|---|
-| `hello` | by both ends, first | `name`, `version`, `protocols` (list of numbers; this document is 1) | who is there |
+| `hello` | by both ends, first | `name`, `version`, `protocols` (list of numbers; this document is 1), `instance` (text; optional) | who is there |
 | `ping` | by both ends, every 10 s | `seq` | the connection is alive |
 | `pong` | in answer to a `ping` | `seq` | |
 | `open` | by the end that carries a session | `request` (number, not zero), `session` (the id in hex) | open the sub-connections of this session from your end |
@@ -260,6 +260,18 @@ field that the receiving end does not know is ignored.
 
 An end that receives nothing for 30 seconds takes the connection for dead. The
 end that dialed dials again after 1, 2, 4, then every 8 seconds.
+
+**A peer that was restarted.** `instance` is a number that the sending process
+picked at random when it started (16 hexadecimal digits), so it is another one
+after the node was restarted or killed and started again. A new process holds
+none of the sessions of the old one. An end that receives a `hello` whose
+`instance` differs from the one it last received from that peer resets the
+sessions it still holds with the peer, if they began before the last message
+it received on a control connection of the old process; a session that began
+after that message is left to the ordinary rules. Nothing is reset on the
+first `instance` an end receives from a peer, on the same one again, on the
+one before the current one (a late message of the old process), or on a
+`hello` without `instance` (versions before 0.1.2 send none and ignore it).
 
 **A session whose sub-connections the exit end opens.** A node that has to
 carry a connection to a peer it holds no path to creates the session, picks a

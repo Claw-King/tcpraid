@@ -327,19 +327,38 @@ func (e *Engine) Shutdown() {
 // here: make the check fail first, then call AbortPeer, and no session of the peer is
 // left or can still appear.
 func (e *Engine) AbortPeer(peer string) int {
+	return len(e.abortPeer(peer, time.Time{}, "the peer was removed"))
+}
+
+// AbortPeerBefore is AbortPeer for those sessions of the peer that began before t, and
+// for no others: for a peer whose process has been replaced by a new one, which holds
+// none of the sessions the old one had. why is the reason the log gives. It returns the
+// owners of the sessions it reset. A zero t resets nothing.
+func (e *Engine) AbortPeerBefore(peer string, t time.Time, why string) []Owner {
+	if t.IsZero() {
+		return nil
+	}
+	return e.abortPeer(peer, t, why)
+}
+
+// abortPeer resets the sessions of the peer; with a t that is not zero, only those that
+// began before t.
+func (e *Engine) abortPeer(peer string, t time.Time, why string) []Owner {
 	var mine []*session
 	e.smu.Lock()
 	e.registry.Range(func(k, _ any) bool {
-		if s := k.(*session); s.owner.Peer == peer {
+		if s := k.(*session); s.owner.Peer == peer && (t.IsZero() || s.started.Before(t)) {
 			mine = append(mine, s)
 		}
 		return true
 	})
 	e.smu.Unlock()
-	for _, s := range mine {
-		go s.abort("the peer was removed")
+	owners := make([]Owner, len(mine))
+	for i, s := range mine {
+		owners[i] = s.owner
+		go s.abort(why)
 	}
-	return len(mine)
+	return owners
 }
 
 // Guard enforces Config.MaxRSS / Config.Life and logs Config.Stats. It does not return.

@@ -12,7 +12,7 @@
 // an object with a "type"; a type that the receiving end does not know is to be ignored,
 // and so are fields it does not know.
 //
-//	hello      both ways, once, first    name, version, protocols
+//	hello      both ways, once, first    name, version, protocols, instance
 //	ping       both ways                 seq
 //	pong       the answer to a ping      seq
 //	open       to the end with the path  request, session
@@ -68,6 +68,9 @@ type Message struct {
 	Name      string `json:"name,omitempty"`
 	Version   string `json:"version,omitempty"`
 	Protocols []int  `json:"protocols,omitempty"`
+	// hello: a number the sending process picked at its start, as text. It differs
+	// from one run of a node to the next; absent from versions before 0.1.2
+	Instance string `json:"instance,omitempty"`
 	// ping, pong
 	Seq uint64 `json:"seq,omitempty"`
 	// open, open_fail: the number the asking end gave its request

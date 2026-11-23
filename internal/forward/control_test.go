@@ -1,6 +1,9 @@
 package forward
 
 import (
+	"bytes"
+	"crypto/rand"
+	"crypto/sha256"
 	"io"
 	"net"
 	"path/filepath"
@@ -330,4 +333,175 @@ func TestReverseRequest(t *testing.T) {
 	}
 	// this end never answers the header: the session does not come up and is reset
 	reset("the session never comes up")
+}
+
+// The bookkeeping of the instance numbers in hellos: only a number that differs from
+// the one before, and is not the one before that, says that the peer's process changed.
+func TestHelloInstance(t *testing.T) {
+	pc := &peerControl{}
+	t1 := time.Unix(1000, 0)
+	c1 := &ctlConn{}
+	if got := pc.hello(c1, "aaaa"); !got.IsZero() || pc.instance != "aaaa" {
+		t.Fatalf("the first number: %v, %q", got, pc.instance)
+	}
+	pc.lastOf = t1
+	if got := pc.hello(&ctlConn{}, "aaaa"); !got.IsZero() {
+		t.Fatalf("the same number again: %v", got)
+	}
+	old := &ctlConn{}
+	if got := pc.hello(old, ""); !got.IsZero() || pc.instance != "aaaa" || old.instance != "" {
+		t.Fatalf("a hello without a number: %v, %q", got, pc.instance)
+	}
+	c2 := &ctlConn{}
+	if got := pc.hello(c2, "bbbb"); !got.Equal(t1) || pc.instance != "bbbb" || pc.previous != "aaaa" || c2.instance != "bbbb" {
+		t.Fatalf("another number: %v, %q after %q", got, pc.instance, pc.previous)
+	}
+	// a late hello of the process that is gone changes nothing
+	late := &ctlConn{}
+	if got := pc.hello(late, "aaaa"); !got.IsZero() || pc.instance != "bbbb" || late.instance != "aaaa" {
+		t.Fatalf("a late hello of the old process: %v, %q", got, pc.instance)
+	}
+}
+
+// restartScene is two paired nodes, alpha and beta (beta holds the path, so every
+// connection between the two was accepted by alpha), with one application connection
+// that is being carried, in the direction given, and stays open.
+type restartScene struct {
+	a, b *testNode
+	c    net.Conn     // the application's connection to the rule
+	got  chan arrival // what reaches the destination
+	rule string       // the rule's name, on the node that has it
+}
+
+// newRestartScene builds the scene. reverse: the rule is on alpha, which has no path,
+// so beta opens the sub-connections; otherwise the rule is on beta.
+func newRestartScene(t *testing.T, reverse bool) *restartScene {
+	t.Helper()
+	sc := &restartScene{a: startNode(t, "alpha", quick), b: startNode(t, "beta", quick), rule: "r"}
+	pairNodes(t, sc.a, sc.b, 2)
+	in, out := freePorts(t, 1), freePorts(t, 1)
+	sc.got = sinks(t, out, 1)
+	owner := sc.b
+	r := node.Rule{Name: sc.rule, Listen: loop(in), Destination: loop(out), Peer: "alpha", Enabled: true}
+	if reverse {
+		owner, r.Peer = sc.a, "beta"
+		eventually(t, "beta connects to alpha", func() bool { return sc.a.rt.PeerStatus("beta").Online })
+	}
+	if err := owner.rt.AddRule(r); err != nil {
+		t.Fatal(err)
+	}
+	c, err := net.Dial("tcp", loop(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	sc.c = c
+	c.Write([]byte("some bytes"))
+	eventually(t, "the session is up on both nodes", func() bool {
+		al, bl := sc.a.e.SessionList(), sc.b.e.SessionList()
+		return len(al) == 1 && len(bl) == 1 && al[0].Subs == 2 && bl[0].Subs == 2
+	})
+	// a few pings later: alpha has heard from beta's process since the session began
+	time.Sleep(200 * time.Millisecond)
+	return sc
+}
+
+// killBeta ends beta as a kill of its process would, as seen from alpha: beta tells
+// nobody, and every connection between the two is gone.
+func (sc *restartScene) killBeta() {
+	sc.b.crash()
+	sc.a.dropAccepted()
+}
+
+// A peer whose process was killed and started again knows nothing of the sessions the
+// old process held. The node that still holds them resets them when the new process
+// says hello, in both directions, instead of keeping them for the grace time.
+func TestPeerRestartedResetsItsSessions(t *testing.T) {
+	t.Run("the exit end that dials (a reverse session) is replaced", func(t *testing.T) {
+		sc := newRestartScene(t, true)
+		sc.killBeta()
+		// nothing ends the session while the peer is away
+		time.Sleep(300 * time.Millisecond)
+		if n := len(sc.a.e.SessionList()); n != 1 {
+			t.Fatalf("with the peer away, alpha holds %d sessions, want the 1 it had", n)
+		}
+		startNodeIn(t, sc.b.dir, "beta", quick)
+		eventually(t, "alpha resets the session of the old process", func() bool { return len(sc.a.e.SessionList()) == 0 })
+		sc.c.SetReadDeadline(time.Now().Add(10 * time.Second))
+		if _, err := sc.c.Read(make([]byte, 1)); err == nil || err == io.EOF {
+			t.Fatalf("the application connection ended with %v, want a reset", err)
+		}
+		if st := statusOf(t, sc.a, sc.rule); !strings.Contains(st.Error, "was restarted") {
+			t.Fatalf("the rule's status: %q", st.Error)
+		}
+		if !strings.Contains(sc.a.logs.String(), "runs as a new process: 1 sessions") {
+			t.Fatalf("alpha's log does not say why:\n%s", sc.a.logs)
+		}
+	})
+	t.Run("the entry end is replaced", func(t *testing.T) {
+		sc := newRestartScene(t, false)
+		sc.killBeta()
+		time.Sleep(300 * time.Millisecond)
+		if n := len(sc.a.e.SessionList()); n != 1 {
+			t.Fatalf("with the peer away, alpha holds %d sessions, want the 1 it had", n)
+		}
+		startNodeIn(t, sc.b.dir, "beta", quick)
+		eventually(t, "alpha resets the session of the old process", func() bool { return len(sc.a.e.SessionList()) == 0 })
+		// the destination saw a cut-off stream, not a complete one
+		if arr := wait(t, sc.got); arr.err == nil {
+			t.Fatalf("the destination's connection ended cleanly after %d bytes", arr.n)
+		}
+	})
+}
+
+// A control connection that is lost and opened again by the same process changes
+// nothing for the sessions: the stream goes on and arrives whole.
+func TestControlReconnectKeepsSessions(t *testing.T) {
+	sc := newRestartScene(t, true)
+	ups := func() int { return strings.Count(sc.a.logs.String(), " is up") }
+	downs := func() int { return strings.Count(sc.a.logs.String(), " is down: ") }
+	upBefore, downBefore := ups(), downs()
+	sc.b.rt.mu.Lock()
+	for _, cc := range sc.b.rt.ctl["alpha"].conns {
+		cc.Close()
+	}
+	sc.b.rt.mu.Unlock()
+	eventually(t, "alpha sees the control connection go and come back", func() bool {
+		return downs() > downBefore && ups() > upBefore && sc.a.rt.PeerStatus("beta").Online
+	})
+	time.Sleep(200 * time.Millisecond) // the hello of the new connection has long arrived
+	if n := len(sc.a.e.SessionList()); n != 1 {
+		t.Fatalf("after the control connection came back, alpha holds %d sessions, want 1", n)
+	}
+	rest := make([]byte, 1<<20)
+	rand.Read(rest)
+	if _, err := sc.c.Write(rest); err != nil {
+		t.Fatal(err)
+	}
+	sc.c.(*net.TCPConn).CloseWrite()
+	h := sha256.New()
+	h.Write([]byte("some bytes"))
+	h.Write(rest)
+	arr := wait(t, sc.got)
+	if arr.err != nil || arr.n != int64(len(rest)+10) || !bytes.Equal(arr.sum[:], h.Sum(nil)) {
+		t.Fatalf("%d bytes arrived (%v), or they differ", arr.n, arr.err)
+	}
+}
+
+// A peer that says hello without an instance number (a version before 0.1.2) is never
+// taken for restarted: its sessions are left as they are.
+func TestHelloWithoutInstanceResetsNothing(t *testing.T) {
+	sc := newRestartScene(t, true)
+	sc.killBeta()
+	b2 := startNodeIn(t, sc.b.dir, "beta", quick, func(rt *Runtime) { rt.noInstance = true })
+	eventually(t, "the new beta is connected to alpha", func() bool {
+		return sc.a.rt.PeerStatus("beta").Online && b2.rt.PeerStatus("alpha").Online
+	})
+	time.Sleep(300 * time.Millisecond)
+	if n := len(sc.a.e.SessionList()); n != 1 {
+		t.Fatalf("alpha holds %d sessions after a hello without a number, want the 1 it had", n)
+	}
+	if strings.Contains(sc.a.logs.String(), "runs as a new process") {
+		t.Fatalf("alpha took the peer for restarted:\n%s", sc.a.logs)
+	}
 }

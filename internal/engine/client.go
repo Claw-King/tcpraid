@@ -63,6 +63,7 @@ func (e *Engine) RunClient(groups []DialGroup) error {
 		if err != nil {
 			continue
 		}
+		ArmReset(c)
 		go func(c net.Conn) {
 			var ip net.IP
 			var port int

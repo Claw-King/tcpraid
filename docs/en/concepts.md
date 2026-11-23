@@ -117,8 +117,16 @@ application has finished, not when the sending one returns.
 
 A session lives in the memory of the two nodes. If every sub-connection fails,
 both nodes hold it for 15 minutes and continue when the path is back. If
-either node restarts, the session is gone; the application sees a reset and
-has to try again.
+either node restarts, the session is gone; the applications see a reset and
+have to try again. Next to the node that restarted they see it at once, also
+when its process was killed. Next to the other node they see it at once when
+the first node was stopped, and when it was killed, as soon as the two nodes
+are connected again: every node says, on the control connection, which run of
+its process it is, and a node that hears another run than before resets the
+sessions it still holds for the old one. If the node does not come back, the
+other holds its sessions for those 15 minutes. The same goes for a session
+that began in the last ten seconds or so before the kill, and for a pair in
+which one node is of version 0.1.1 or older (README, "Known limits").
 
 ## How the transport works
 
@@ -143,8 +151,9 @@ has to try again.
   others on its path, or makes no progress for 20 seconds, is closed and
   dialed again.
 - **Endings.** A stream that ended completely in both directions is closed
-  normally. Any other end -- a node stopping, a pairing ended, a destination
-  that cannot be reached, the 15 minutes running out -- resets the
+  normally. Any other end -- a node stopping, a node's process being killed,
+  a pairing ended, a destination that cannot be reached, the 15 minutes
+  running out -- resets the
   application's connection, so that a cut-off stream cannot be taken for a
   complete one.
 

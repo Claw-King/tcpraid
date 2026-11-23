@@ -196,6 +196,9 @@ func (e *Engine) newSession(id [16]byte, local net.Conn, isClient bool, dst stri
 // header key are set here for the same reason as dst.
 func (e *Engine) newSessionFor(id [16]byte, local net.Conn, isClient bool, dst string, ks keys, owner Owner) *session {
 	now := time.Now()
+	if local != nil {
+		ArmReset(local)
+	}
 	s := &session{e: e, id: id, local: local, isClient: isClient, dstAddr: dst, owner: owner, hdrKey: ks.hdr, chunks: map[uint64]*chunk{}, sackSize: map[uint64]int{},
 		pending: map[uint64][]byte{}, pendAt: map[uint64]time.Duration{}, sendWin: e.cfg.Window, peerBudget: e.cfg.Window,
 		recvBudget: e.cfg.Window, sendFin: -1, peerFin: -1, started: now, lastPeer: now, snapAt: now}
@@ -1662,10 +1665,13 @@ func (s *session) shutdown(why string, abort bool) {
 	}
 	s.udpClose()
 	if local != nil {
-		if tc, ok := local.(*net.TCPConn); ok && abort {
-			tc.SetLinger(0)
+		// the connection was armed for a reset when the session got it (ArmReset); only
+		// a clean end, with the whole stream already written to it, closes it with a FIN
+		if abort {
+			resetClose(local)
+		} else {
+			cleanClose(local)
 		}
-		local.Close()
 	}
 	s.e.nSessions.Add(-1)
 	s.e.registry.Delete(s)
