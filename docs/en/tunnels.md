@@ -3,7 +3,8 @@
 A path to a peer is just an address that TCP connections can be opened to.
 That address does not have to be the peer's own: it can be the near end of
 anything that carries TCP to the peer's listener. This document says how to
-configure that.
+configure that. Which way to choose, and which tools keep tcpraid's
+connections separate on the way (not all do), is in `connecting.md`.
 
 ## The rule
 
@@ -19,9 +20,9 @@ path > Edit) or with `tcpraid peers path set`.
 
 ## A port forward or a tunnel with a fixed far end
 
-Something listens near this node and delivers to the peer's port 9851 (an SSH
-port forward, a relay, a forwarded port on a router). Point the path at the
-near end:
+Something listens near this node and delivers to the peer's port 9851 (a
+forwarded port on a router, a relay that passes connections on). Point the
+path at the near end:
 
 ```
 nas-b$ tcpraid peers path set nas-a default -addr 127.0.0.1:19851
@@ -29,6 +30,12 @@ nas-b$ tcpraid peers path set nas-a default -addr 127.0.0.1:19851
 
 The tier stays `tls`: the two nodes still authenticate each other and encrypt
 end to end, inside whatever carries the connection.
+
+Do not use an SSH port forward (`ssh -L`, `ssh -R`) here. It would work, but
+every connection it forwards is a channel inside the one SSH connection, so
+all of tcpraid's connections would share a single TCP connection and gain
+nothing. The same holds for any forwarder that multiplexes; `connecting.md`
+lists the ones we could check.
 
 ## An overlay network or a VPN
 
@@ -92,7 +99,7 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.1.2, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.1.3, last heard 2026-01-15T10:00:05Z
 
 PATH     TYPE    ADDRESS                 PROXY                    SECURITY  VERIFY  PIN  ROLES           SUBS
 default  tcp     nas-a.example.org:9851  -                        tls       -       -    data            8

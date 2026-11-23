@@ -14,6 +14,7 @@
 | `-transparent ADDR` | off | listen address for connections that the host redirects to the node; transparent rules decide where they go |
 | `-udp-listen ADDR` | off | listen address (UDP) for feedback from peers that are told to send it here |
 | `-ui-password-file FILE` | none | file with the password of the web page |
+| `-stats DURATION` | off | log the node's totals this often, and one line for each session that runs then (`troubleshooting.md` explains the lines) |
 | `-window SIZE` | `128MB` | per session: how much data this node holds that the peer has not yet reported received, and the space it offers the peer for data that arrives out of order. Whole MB |
 | `-budget SIZE` | `256MB` | all sessions together: the most data held unacknowledged, and as much again held out of order |
 | `-grace DURATION` | `900s` | how long a session is kept while no sub-connection to the peer is up |
@@ -24,7 +25,7 @@
 The start-up lines of the log repeat what is in effect:
 
 ```
-node 0.1.2 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+node 0.1.3 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
 transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
 ```
 

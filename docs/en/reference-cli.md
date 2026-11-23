@@ -35,7 +35,7 @@ after telling its peers and resetting the application connections it carries.
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.1.2 (wire protocol 1)
+version      0.1.3 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -88,7 +88,7 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.1.2, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.1.3, last heard 2026-01-15T10:00:05Z
 
 PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS
 default  tcp   nas-a.example.org:9851  -      tls       -       -    data   8
@@ -243,5 +243,5 @@ application is going to send.
 
 ```
 $ tcpraid version
-tcpraid 0.1.2 (wire protocol 1)
+tcpraid 0.1.3 (wire protocol 1)
 ```

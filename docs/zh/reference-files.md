@@ -14,6 +14,7 @@
 | `-transparent ADDR` | 关闭 | 接收由主机重定向到节点的连接的监听地址；它们去哪里由透明规则决定 |
 | `-udp-listen ADDR` | 关闭 | 接收对端回执的监听地址(UDP)，对端要被告知把回执发到这里 |
 | `-ui-password-file FILE` | 无 | 存放网页界面密码的文件 |
+| `-stats DURATION` | 关闭 | 每隔这么久在日志里记一行节点的合计数字，并为当时在跑的每个会话各记一行(这些行的含义见 `troubleshooting.md`) |
 | `-window SIZE` | `128MB` | 每个会话：本节点最多持有多少“对端还没报告收到”的数据，以及它为乱序到达的数据向对端提供的空间。整数 MB |
 | `-budget SIZE` | `256MB` | 所有会话合计：最多持有多少未确认的数据，另外还能持有同样多的乱序数据 |
 | `-grace DURATION` | `900s` | 到对端的子连接全断之后，会话保持多久 |
@@ -24,7 +25,7 @@
 日志的启动行会把实际生效的设置重复一遍：
 
 ```
-node 0.1.2 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+node 0.1.3 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
 transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
 ```
 

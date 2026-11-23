@@ -1,6 +1,6 @@
 # 和隧道、组网工具或代理一起使用 tcpraid
 
-通往对端的路径，无非是一个可以向它发起 TCP 连接的地址。这个地址不一定是对端自己的：它可以是任何能把 TCP 送到对端监听的东西在近端的入口。这份文档讲怎么配置。
+通往对端的路径，无非是一个可以向它发起 TCP 连接的地址。这个地址不一定是对端自己的：它可以是任何能把 TCP 送到对端监听的东西在近端的入口。这份文档讲怎么配置。选哪种连法、哪些工具能让 tcpraid 的连接在路上保持各自独立(不是都能)，见 `connecting.md`。
 
 ## 规则
 
@@ -11,13 +11,15 @@
 
 ## 端口转发，或者远端固定的隧道
 
-有个东西在本节点附近监听，并把连接送到对端的 9851 端口(SSH 端口转发、中继、路由器上转发的端口)。让路径指向近端：
+有个东西在本节点附近监听，并把连接送到对端的 9851 端口(路由器上转发的端口、把连接转交过去的中继)。让路径指向近端：
 
 ```
 nas-b$ tcpraid peers path set nas-a default -addr 127.0.0.1:19851
 ```
 
 档位保持 `tls`：两个节点仍然互相认证并端到端加密，包在承载这条连接的东西里面。
+
+这里不要用 SSH 端口转发(`ssh -L`、`ssh -R`)。它能用，但它转发的每一条连接都是同一条 SSH 连接里的一个通道，于是 tcpraid 的所有连接共用一条 TCP 连接，得不到任何好处。任何会复用连接的转发工具都是这样；`connecting.md` 列出了我们查证过的几个。
 
 ## 组网工具或 VPN
 
@@ -66,7 +68,7 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.1.2, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.1.3, last heard 2026-01-15T10:00:05Z
 
 PATH     TYPE    ADDRESS                 PROXY                    SECURITY  VERIFY  PIN  ROLES           SUBS
 default  tcp     nas-a.example.org:9851  -                        tls       -       -    data            8

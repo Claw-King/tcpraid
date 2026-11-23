@@ -143,6 +143,18 @@ tutorial, an IPv4 address in that field, `0.0.0.0` included, makes the
 listening helper fail when it starts, although the documentation page names
 `0.0.0.0` as the default.
 
+This was later seen on a TrueNAS of version 25.10: with an IPv4 address in
+the field, the task fails and the web page shows only
+
+```
+Unknown SSH+NETCAT transport error: 'Traceback (most recent call last):\n'
+```
+
+which does not say why. If you see that message, look at this field first.
+On that version the help text of the field in the web page (seen in the
+Chinese interface) also says that the default is `0.0.0.0`; do not go by it.
+Leave the field empty, or enter `::`.
+
 ## Step 4: run it and look
 
 Run the task. While it runs, the web page of `node-a` shows a session under

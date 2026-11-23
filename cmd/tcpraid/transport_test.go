@@ -13,6 +13,9 @@ import (
 	"github.com/Claw-King/tcpraid/internal/engine"
 )
 
+// defaultTransportLine is what a node logs after "transport " when no setting is given.
+const defaultTransportLine = "window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off"
+
 // runFlagsOf parses a command line of "tcpraid run" and returns what it gives.
 func runFlagsOf(args ...string) (o runOptions, code int, done bool, stderr string) {
 	var errb bytes.Buffer
@@ -60,7 +63,7 @@ func TestRunTransportFlags(t *testing.T) {
 		t.Errorf("logged as %q, want %q", got, want)
 	}
 	d := defaultTransport()
-	if got, want := d.String(), "window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off"; got != want {
+	if got, want := d.String(), defaultTransportLine; got != want {
 		t.Errorf("defaults logged as %q, want %q", got, want)
 	}
 	// a size may be a plain number of bytes, as in the manual mode
@@ -112,6 +115,33 @@ func TestRunTransportRefused(t *testing.T) {
 	} {
 		if _, code, done, stderr := runFlagsOf(append([]string{"-data", "/x"}, args...)...); done {
 			t.Errorf("%q: refused with code %d: %s", args, code, stderr)
+		}
+	}
+}
+
+// -stats reaches the engine's settings and changes nothing else; a negative one is
+// refused before the node starts.
+func TestRunStatsFlag(t *testing.T) {
+	o, code, done, stderr := runFlagsOf("-data", "/x", "-stats", "5m")
+	if done {
+		t.Fatalf("ended with code %d: %s", code, stderr)
+	}
+	want := engine.DefaultConfig()
+	want.Version, want.Stats = version, 5*time.Minute
+	if got := o.engineConfig(); !reflect.DeepEqual(got, want) {
+		t.Errorf("got  %+v\nwant %+v", got, want)
+	}
+	// it is not one of the settings of the line "transport ..." that a node logs
+	if got, want := o.transport.String(), defaultTransportLine; got != want {
+		t.Errorf("the transport line is %q, want %q", got, want)
+	}
+	if o, _, done, stderr = runFlagsOf("-data", "/x", "-stats", "0"); done || o.engineConfig().Stats != 0 {
+		t.Errorf("-stats 0: done=%v stats=%v stderr=%q", done, o.engineConfig().Stats, stderr)
+	}
+	for _, v := range []string{"-1s", "often"} {
+		_, code, done, stderr := runFlagsOf("-data", "/x", "-stats", v)
+		if !done || code != 2 || !strings.Contains(stderr, "-stats") {
+			t.Errorf("-stats %s: done=%v code=%d stderr=%q, want exit 2 with a message that names -stats", v, done, code, stderr)
 		}
 	}
 }

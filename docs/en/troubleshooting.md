@@ -196,6 +196,51 @@ What limits a transfer shows at the sending node:
 
 The three times are in milliseconds: median, 95th percentile, maximum.
 
+### The lines of `-stats`
+
+A node started with `-stats 5m` logs its totals every five minutes, and after
+them one line for each session it carries at that moment:
+
+```
+stats sessions=1 goroutines=28 rss=20MB heap=6MB unacked=0MB resends=0 kicks=0/0/0 rxdrop=0 udp in/out/bad/toobig/old=0/0/0/0/0
+[8ac974] 127.0.0.1:7000 9s tx 242MB rx 0MB unacked 0MB sacked 128MB pending 0MB subs: [p0 2277/1812KB/s loop0ms infl0KB cap684KB] [p0 2624/776KB/s loop0ms infl0KB cap790KB]
+```
+
+The `stats` line. The counters count from the start of the node; the others
+are the state at that moment.
+
+| Field | Meaning |
+|---|---|
+| `sessions` | sessions the node carries now |
+| `goroutines` | goroutines of the process (it grows with sessions and sub-connections; a number that only ever grows is worth a report) |
+| `rss` | resident memory of the process, what `-maxrss` is compared with |
+| `heap` | memory the Go runtime has in use for the heap |
+| `unacked` | data of all sessions that was read from applications and that the peers have not reported received; `-budget` limits it |
+| `resends` | counter: chunks queued to be sent again |
+| `kicks=A/B/C` | counters: sub-connections this node replaced because they were much slower than the others of their path (`A`), made no progress for 20 seconds (`B`), or did not finish a write in time (`C`) |
+| `rxdrop` | counter: chunks dropped on arrival because the space for data out of order was full; the peer sends them again |
+| `udp in/out/bad/toobig/old` | counters for UDP feedback: datagrams accepted; sent; rejected (not for a session of this node, or failed authentication); reports that were too large for a datagram and went over the TCP connections only; authentic datagrams that were not newer than one already seen |
+
+The line of a session:
+
+| Field | Meaning |
+|---|---|
+| `[8ac974]` | the first six digits of the session's id |
+| `127.0.0.1:7000` | the destination of the connection |
+| `9s` | how long the session has run |
+| `tx`, `rx` | stream data sent (first time only) and received, as in the end line |
+| `unacked`, `sacked`, `pending` | the timeline's `unacked`, `sacked` and `pend` |
+| `subs:` | one group for each live sub-connection |
+| `p0` | the path it belongs to: the number of the path, from 0, in the list of paths that the node which opens the connections keeps for the other |
+| `2277/1812KB/s` | what the peer reported as delivered over this sub-connection: the highest rate over a second, and the average of the last two seconds |
+| `loop0ms` | the shortest time seen on this sub-connection from sending data to the report that it arrived |
+| `infl` | sent on this sub-connection and not yet reported received |
+| `cap` | how much this sub-connection may hold in flight |
+| `[ctrl p1]` | a sub-connection of a `control` path: it carries reports, no data |
+
+At the node that receives, the rates and `infl` are zero: it sends no stream
+data.
+
 ## The web page
 
 - Forgotten password, or the log line with the generated one is gone (a
@@ -238,6 +283,10 @@ tcpraid_sessions_aborted 0
 # TYPE tcpraid_sessions_active gauge
 tcpraid_sessions_active 1
 ```
+
+A node started with `-stats DURATION` writes its totals to the log at that
+interval, for a script that reads the log (see "The lines of `-stats`"
+above).
 
 `tcpraid status` exits with an error when no node answers; the container's
 health check uses it.

@@ -29,6 +29,7 @@ tcpraid 把**一条 TCP 连接**拆到**多条 TCP 连接**上传输，在对端
 - 一条 TCP 连接已经能跑满线路。
 - 线路又短又干净(局域网、邻近的数据中心)。
 - 线路本身很好，而那一条连接的套接字缓冲区又足够大：这时一条连接可能和多条一样快，甚至更快。tcpraid 的好处主要体现在有丢包的线路上——在那里它更稳——而且不需要任何人去调大缓冲区。
+- 两个节点之间有东西把它们的连接装进了它自己的一条连接里：SSH 端口转发，或者默认设置的 frp。这时 tcpraid 照样能用，但不会带来任何好处(哪些工具会这样、该怎么设，见 `docs/zh/connecting.md`)。
 - 应用自己就能开并行连接。那就用它自己的。
 
 它不是 VPN，也不是通用代理：它只承载你为之建了规则的那些 TCP 连接，而且只在你自己运行的两台机器之间。
@@ -73,7 +74,7 @@ rule rsync added: listening
 
 - **两端都是 Linux**(amd64、arm64 或 32 位 ARM v7)，用容器或者一个静态二进制文件。
 - **每一端都要有一个节点。** 远端只有一台普通的服务器是不够的。
-- **两个节点里有一个能向另一个发起 TCP 连接**，直接连，或者经过端口转发、隧道或 SOCKS5 代理。
+- **两个节点里有一个能向另一个发起 TCP 连接**，直接连，或者经过端口转发、隧道或 SOCKS5 代理。做到这一点，两个站点都不需要有公网 IPv4 地址；`docs/zh/connecting.md` 把几种办法逐一讲了。
 - **只承载应用的 TCP 流量。**
 - **内存。** 最坏情况下一个节点会缓存约 512 MB 的流数据(两倍 `-budget`，`tcpraid run` 可以把它调小)。
 - **两端的时钟相差不超过 10 分钟。**
@@ -85,6 +86,7 @@ rule rsync added: listening
 | `docs/zh/concepts.md` | 节点、配对、对端、路径和角色、加密档位、规则、传输是怎么工作的 |
 | `docs/zh/install-container.md` | 用容器运行节点：compose、TrueNAS、群晖、QNAP、Unraid |
 | `docs/zh/install-binary.md` | 用二进制文件运行节点，配合 systemd |
+| `docs/zh/connecting.md` | 两个节点怎么连到一起：IPv6、组网工具、中间放一台机器；哪些工具能让连接保持各自独立 |
 | `docs/zh/tutorial-truenas-zfs-replication.md` | **两台 TrueNAS 之间的 ZFS 复制** |
 | `docs/zh/tutorial-rsync.md` | 用 rsync 连到 rsync 守护进程 |
 | `docs/zh/tutorial-postgresql.md` | PostgreSQL 流复制 |

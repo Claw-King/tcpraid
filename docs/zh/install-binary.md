@@ -8,22 +8,22 @@
 
 | 机器(`uname -m`) | 文件 |
 |---|---|
-| `x86_64` | `tcpraid-0.1.2-linux-amd64` |
-| `aarch64` | `tcpraid-0.1.2-linux-arm64` |
-| `armv7l` | `tcpraid-0.1.2-linux-armv7` |
-| | `tcpraid-0.1.2-SHA256SUMS` |
+| `x86_64` | `tcpraid-0.1.3-linux-amd64` |
+| `aarch64` | `tcpraid-0.1.3-linux-arm64` |
+| `armv7l` | `tcpraid-0.1.3-linux-armv7` |
+| | `tcpraid-0.1.3-SHA256SUMS` |
 
 把适合你机器的那一个和校验文件下载到同一个目录，用校验文件核对二进制文件，然后安装：
 
 ```
-$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.1.2/tcpraid-0.1.2-linux-arm64
-$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.1.2/tcpraid-0.1.2-SHA256SUMS
-$ grep linux-arm64 tcpraid-0.1.2-SHA256SUMS | sha256sum -c
-tcpraid-0.1.2-linux-arm64: OK
-# install -m 0755 tcpraid-0.1.2-linux-arm64 /usr/local/bin/tcpraid
+$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.1.3/tcpraid-0.1.3-linux-arm64
+$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.1.3/tcpraid-0.1.3-SHA256SUMS
+$ grep linux-arm64 tcpraid-0.1.3-SHA256SUMS | sha256sum -c
+tcpraid-0.1.3-linux-arm64: OK
+# install -m 0755 tcpraid-0.1.3-linux-arm64 /usr/local/bin/tcpraid
 
 $ tcpraid version
-tcpraid 0.1.2 (wire protocol 1)
+tcpraid 0.1.3 (wire protocol 1)
 ```
 
 你那个文件的那一行如果不是 `OK`，说明下载到的不是发布的那个文件：不要运行它。
@@ -34,7 +34,7 @@ tcpraid 0.1.2 (wire protocol 1)
 go build -trimpath -o tcpraid ./cmd/tcpraid
 ```
 
-或者用 `deploy/build.sh 0.1.2` 构建三个发布用的二进制文件；脚本开头写了没装 Go 时怎么做。把适合你机器的那一个复制到 `/usr/local/bin/tcpraid`。(用那条普通的 `go build` 得到的二进制文件报告的是 `0.1.2-dev`；构建脚本会把给它的版本号写进去。)
+或者用 `deploy/build.sh 0.1.3` 构建三个发布用的二进制文件；脚本开头写了没装 Go 时怎么做。把适合你机器的那一个复制到 `/usr/local/bin/tcpraid`。(用那条普通的 `go build` 得到的二进制文件报告的是 `0.1.3-dev`；构建脚本会把给它的版本号写进去。)
 
 ## 启动节点
 
@@ -44,11 +44,11 @@ go build -trimpath -o tcpraid ./cmd/tcpraid
 nas-a# tcpraid run -listen 0.0.0.0:9851 -advertise nas-a.example.org:9851
 ... web interface: no password was set, so one was made. It is shown this once: okt7wgr47g3lt6f2
 ... web interface: to set your own, start the node with -ui-password-file FILE or the environment variable TCPRAID_UI_PASSWORD
-... node 0.1.2 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+... node 0.1.3 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
 ... transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
 ```
 
-- `-listen` 是其他节点连接的地方。在能被另一个节点连到的那个节点上给出；另一个节点不需要。
+- `-listen` 是其他节点连接的地方。在能被另一个节点连到的那个节点上给出；另一个节点不需要。两个站点都没有公网地址的话，`connecting.md` 把让一个节点能被连到的几种办法逐一讲了。
 - `-advertise` 是另一个节点连它时要用的地址。它会被写进这个节点生成的配对码里。
 - 数据目录是 `/var/lib/tcpraid`，除非用 `-data` 另外指定。里面有节点的私钥：保留好，像备份私钥那样备份它。
 - 网页界面和 API 在 `127.0.0.1:9850`，只有本机能访问。要从别的机器打开页面，加上 `-api ADDRESS:9850`——它是明文 HTTP，所以只能在你信任的网络上这样做。
@@ -59,7 +59,7 @@ nas-a# tcpraid run -listen 0.0.0.0:9851 -advertise nas-a.example.org:9851
 nas-a$ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.1.2 (wire protocol 1)
+version      0.1.3 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0

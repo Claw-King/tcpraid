@@ -144,6 +144,7 @@ func runFlags(args []string, stderr io.Writer) (o runOptions, code int, done boo
 	fs.StringVar(&o.uiPasswordFile, "ui-password-file", "", "file with the password of the web interface; without it the environment variable "+uiPasswordEnv+" is used, and without that a password is made at the first start and logged once")
 	transport := defaultTransport()
 	transport.flags(fs)
+	fs.DurationVar(&o.stats, "stats", 0, "log one line of the node's totals, and one for each session, this often (0: off)")
 	if code, done := parseFlags(fs, args); done {
 		return o, code, true
 	}
@@ -174,6 +175,7 @@ type runOptions struct {
 	transparent, udpListen string
 	uiPasswordFile         string
 	transport              *transportOptions // nil: the defaults
+	stats                  time.Duration     // how often the totals are logged; 0: never
 }
 
 // check reports what in the options cannot work, before anything is opened.
@@ -189,6 +191,9 @@ func (o *runOptions) check() error {
 			return fmt.Errorf("-advertise: %w", err)
 		}
 	}
+	if o.stats < 0 {
+		return errors.New("-stats must not be negative (0: off)")
+	}
 	if o.transport != nil {
 		return o.transport.check()
 	}
@@ -201,6 +206,7 @@ func (o *runOptions) engineConfig() engine.Config {
 	cfg := engine.DefaultConfig()
 	cfg.Version = version
 	cfg.UDPListen = o.udpListen
+	cfg.Stats = o.stats
 	if o.transport != nil {
 		o.transport.apply(&cfg)
 	}
@@ -321,9 +327,10 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 	// The rules open their own listeners. One that cannot is reported in the rule's
 	// status and does not stop the node.
 	rules.Start(ctx)
-	// Past -maxrss the node stops the way it stops on a signal, and reports why.
+	// Past -maxrss the node stops the way it stops on a signal, and reports why. The
+	// same loop logs the totals of -stats; without -maxrss it never ends the node.
 	var overLimit atomic.Pointer[error]
-	if cfg.MaxRSS > 0 {
+	if cfg.MaxRSS > 0 || cfg.Stats > 0 {
 		go e.GuardWith(func(format string, a ...interface{}) {
 			err := fmt.Errorf(format, a...)
 			log.Printf("stopping: %v", err)

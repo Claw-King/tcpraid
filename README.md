@@ -53,6 +53,10 @@ It does not help when:
   enough: it can then be as fast as several, or faster. What tcpraid adds
   shows on a path that loses packets -- it is steadier there -- and it does
   not depend on anyone enlarging buffers.
+- Something between the two nodes puts their connections into one
+  connection of its own: an SSH port forward, or frp with its default
+  settings. tcpraid still works there and gains nothing
+  (`docs/en/connecting.md` says which tools do this and what to set).
 - The application can open parallel connections itself. Use that instead.
 
 It is not a VPN and not a general proxy: it carries the TCP connections you
@@ -120,7 +124,8 @@ this slowly.
   one static binary.
 - **A node at each end.** A stock server on the far side is not enough.
 - **One of the two nodes can open TCP connections to the other**, directly or
-  through a port forward, a tunnel or a SOCKS5 proxy.
+  through a port forward, a tunnel or a SOCKS5 proxy. Neither site needs a
+  public IPv4 address for that; `docs/en/connecting.md` goes through the ways.
 - **TCP application traffic only.**
 - **Memory.** In the worst case a node holds about 512 MB of stream data
   (twice `-budget`, which `tcpraid run` can lower).
@@ -133,6 +138,7 @@ this slowly.
 | `docs/en/concepts.md` | nodes, pairing, peers, paths and roles, security tiers, rules, how the transport works |
 | `docs/en/install-container.md` | a node in a container: compose, TrueNAS, Synology, QNAP, Unraid |
 | `docs/en/install-binary.md` | a node from the binary, with systemd |
+| `docs/en/connecting.md` | how the two nodes reach each other: IPv6, overlay networks, a machine in between; which tools keep the connections separate |
 | `docs/en/tutorial-truenas-zfs-replication.md` | **ZFS replication between two TrueNAS systems** |
 | `docs/en/tutorial-rsync.md` | rsync to an rsync daemon |
 | `docs/en/tutorial-postgresql.md` | PostgreSQL streaming replication |

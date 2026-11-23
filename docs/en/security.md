@@ -24,7 +24,7 @@ local API are plain HTTP and are guarded by a password and a token.
 | far node to destination | none from tcpraid |
 
 Use `off` only on a path that something else encrypts from node to node: an
-SSH tunnel, a VPN, an encrypted proxy chain. In that tier the opening is the
+VPN, an encrypted proxy chain. In that tier the opening is the
 only proof of who dials, and an opening that someone recorded on the path
 could be sent again within ten minutes.
 
