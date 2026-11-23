@@ -8,7 +8,7 @@
 # the password of the web interface, and the ports for forwarding rules.
 services:
   tcpraid:
-    image: ghcr.io/claw-king/tcpraid:0.1.0
+    image: ghcr.io/claw-king/tcpraid:0.1.1
     container_name: tcpraid
     # A new node takes its name from the host name at its first start. Give each node
     # a name of its own here (for example nas-a and nas-b) before you start it, or
@@ -39,5 +39,9 @@ services:
     # The other way to give the node its ports: share the host's network. Remove the
     # whole "ports:" section above and uncomment the next line. Rules can then listen
     # on any free port of the host, and nothing has to be mapped; in exchange the
-    # container is no longer separated from the host's network.
+    # container is no longer separated from the host's network. The image opens the
+    # web interface on every address of the host then; on a host that also faces
+    # another network (a router, a gateway), uncomment the command line as well and
+    # name the address the web interface should listen on.
     # network_mode: host
+    # command: ["run", "-data", "/data", "-api", "127.0.0.1:9850", "-listen", "0.0.0.0:9851"]

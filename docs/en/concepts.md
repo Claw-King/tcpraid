@@ -102,9 +102,18 @@ and a connection that is being carried runs to its end.
 ## Session
 
 Each application connection that a node carries is a **session**. The Sessions
-page and `GET /api/v1/sessions` list them with their rule, peer, byte counts
-and number of sub-connections. A node takes no new connection for its rules
-while it has 64 sessions, and is the exit for at most 64 at a time.
+page, `tcpraid sessions` and `GET /api/v1/sessions` list them with their rule,
+peer, byte counts and number of sub-connections. A node takes no new
+connection for its rules while it has 64 sessions, and is the exit for at
+most 64 at a time.
+
+**The sender can be finished before the data has arrived.** A node reads ahead
+from the application, up to its window (128 MB by default). So when the
+sending application has written everything and closed, part of the stream may
+still be in the node or on the path, and the far end goes on receiving for a
+while. The session stays at the sending node until the far node has reported
+all of it received. Compare files, or act on the result, when the receiving
+application has finished, not when the sending one returns.
 
 A session lives in the memory of the two nodes. If every sub-connection fails,
 both nodes hold it for 15 minutes and continue when the path is back. If
@@ -146,7 +155,8 @@ one, and optionally as UDP datagrams (encrypted and authenticated, one per
 snapshot, never sent again). The first copy to arrive is used. UDP is off
 unless you set it up: start the node that has a reachable UDP port with
 `-udp-listen ADDR`, and set the peer's UDP feedback address on the other node
-(Peers > Details > Advanced, or `udp_dial` in the API). It helps on lines
+(`tcpraid peers set NAME -udp-dial HOST:PORT`, or Peers > Details > Advanced
+in the web page). It helps on lines
 whose reverse direction loses many packets while the forward direction is
 busy.
 

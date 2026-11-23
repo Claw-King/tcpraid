@@ -49,7 +49,7 @@ Now connect the application to `127.0.0.1:9801` instead of `192.0.2.5:873`.
 
 ```
 $ tcpraid -check -mode client -listen 127.0.0.1:9801 -remote server.example.org:9901 -dst 192.0.2.5:873 -psk psk
-ok: 0.1.0 client paths [data/data x8], window 128 MB, budget 256 MB, maxrss 0 MB, grace 15m0s, psk true, udp listen "" dial ""
+ok: 0.1.1 client paths [data/data x8], window 128 MB, budget 256 MB, maxrss 0 MB, grace 15m0s, psk true, udp listen "" dial ""
 ```
 
 ## Transparent use
@@ -144,7 +144,7 @@ limits: { maxrss_mb: 700, maxsess: 64 }
 
 ```
 $ tcpraid -config client.yaml -check
-ok: 0.1.0 client paths [main/data x8, second/repair x4, second/control x1, proxy/data x4], window 128 MB, budget 256 MB, maxrss 700 MB, grace 15m0s, psk true, udp listen "0.0.0.0:8445" dial ""
+ok: 0.1.1 client paths [main/data x8, second/repair x4, second/control x1, proxy/data x4], window 128 MB, budget 256 MB, maxrss 700 MB, grace 15m0s, psk true, udp listen "0.0.0.0:8445" dial ""
 ```
 
 `addr` is the address the client dials over that path: the tcpraid server's
@@ -223,7 +223,8 @@ unacknowledged and reorder backlog, feedback age and the channels it arrived on
 chunk waiting for a missing one (`holage`), the share of time the reader waited
 for window (`pumpwait`), and the feedback loop p50 / p95 in ms (`loop`). The
 two numbers that reveal a feedback problem first are `pumpwait` and the loop
-p95.
+p95. `troubleshooting.md` explains every field of this line and of the two
+lines a session logs at its end.
 
 ## Security
 

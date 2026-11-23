@@ -4,20 +4,37 @@
 
 ## 获取二进制文件
 
-自己构建(Go 1.27 或更新)：
+**下载。** `https://github.com/Claw-King/tcpraid/releases` 上的每个版本都有三个二进制文件，和一个记着它们 SHA-256 校验值的文件：
+
+| 机器(`uname -m`) | 文件 |
+|---|---|
+| `x86_64` | `tcpraid-0.1.1-linux-amd64` |
+| `aarch64` | `tcpraid-0.1.1-linux-arm64` |
+| `armv7l` | `tcpraid-0.1.1-linux-armv7` |
+| | `tcpraid-0.1.1-SHA256SUMS` |
+
+把适合你机器的那一个和校验文件下载到同一个目录，用校验文件核对二进制文件，然后安装：
+
+```
+$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.1.1/tcpraid-0.1.1-linux-arm64
+$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.1.1/tcpraid-0.1.1-SHA256SUMS
+$ grep linux-arm64 tcpraid-0.1.1-SHA256SUMS | sha256sum -c
+tcpraid-0.1.1-linux-arm64: OK
+# install -m 0755 tcpraid-0.1.1-linux-arm64 /usr/local/bin/tcpraid
+
+$ tcpraid version
+tcpraid 0.1.1 (wire protocol 1)
+```
+
+你那个文件的那一行如果不是 `OK`，说明下载到的不是发布的那个文件：不要运行它。
+
+**或者自己构建**(Go 1.27 或更新)：
 
 ```
 go build -trimpath -o tcpraid ./cmd/tcpraid
 ```
 
-或者用 `deploy/build.sh 0.1.0` 构建三个发布用的二进制文件(amd64、arm64、ARM v7)；脚本开头写了没装 Go 时怎么做。把适合你机器的那一个复制到 `/usr/local/bin/tcpraid`。
-
-```
-$ tcpraid version
-tcpraid 0.1.0 (wire protocol 1)
-```
-
-(用上面那条普通的 `go build` 得到的二进制文件报告的是 `0.1.0-dev`；构建脚本会把给它的版本号写进去。)
+或者用 `deploy/build.sh 0.1.1` 构建三个发布用的二进制文件；脚本开头写了没装 Go 时怎么做。把适合你机器的那一个复制到 `/usr/local/bin/tcpraid`。(用那条普通的 `go build` 得到的二进制文件报告的是 `0.1.1-dev`；构建脚本会把给它的版本号写进去。)
 
 ## 启动节点
 
@@ -27,7 +44,8 @@ tcpraid 0.1.0 (wire protocol 1)
 nas-a# tcpraid run -listen 0.0.0.0:9851 -advertise nas-a.example.org:9851
 ... web interface: no password was set, so one was made. It is shown this once: okt7wgr47g3lt6f2
 ... web interface: to set your own, start the node with -ui-password-file FILE or the environment variable TCPRAID_UI_PASSWORD
-... node 0.1.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+... node 0.1.1 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+... transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
 ```
 
 - `-listen` 是其他节点连接的地方。在能被另一个节点连到的那个节点上给出；另一个节点不需要。
@@ -41,7 +59,7 @@ nas-a# tcpraid run -listen 0.0.0.0:9851 -advertise nas-a.example.org:9851
 nas-a$ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.1.0 (wire protocol 1)
+version      0.1.1 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -127,4 +145,4 @@ rsync  0.0.0.0:9801  nas-a  192.0.2.10:873  0         listening
 
 第一条匹配的透明规则接走连接；被重定向过来、却没有任何规则匹配的连接会被重置。连接在对端那一头会去往同一个地址，所以那个地址在那边必须指的是同一台机器。
 
-写这份文档时实际跑过的：把本机发起的连接(`output` 钩子)重定向到一个带透明规则的节点，经它传了 20 MiB，两端校验值相同。上面那种 `prerouting` 写法，用于经路由器转发的连接，就是 `examples/redirect.nft` 里的那种，这个版本没有实际跑过。
+写这份文档时实际跑过的：把本机发起的连接(`output` 钩子)重定向到一个带透明规则的节点，经它传了 20 MiB，两端校验值相同。上面那种 `prerouting` 写法，用于经路由器转发的连接，就是 `examples/redirect.nft` 里的那种；0.1.0 版的第一位用户在路由器上跑过它，负载是一个存储复制任务。

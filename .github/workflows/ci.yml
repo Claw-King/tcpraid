@@ -1,6 +1,3 @@
-# NOTE: this workflow has never been run. It was written before the repository was
-# public, where it could not be tried; expect to adjust it at its first run.
-#
 # Every push and pull request: gofmt, go vet, go test -race.
 # A tag "vX.Y.Z": also the three release binaries with their SHA-256 file, attached to a
 # release of that tag, and the container image for linux/amd64 and linux/arm64, pushed

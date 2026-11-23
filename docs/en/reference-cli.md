@@ -5,8 +5,10 @@ tcpraid run     [flags]                       start a node
 tcpraid status  [-json]                       the node on this host
 tcpraid pair    create | list | revoke ID | join [CODE]
 tcpraid peers   [list] | show NAME | check NAME | remove NAME
+tcpraid peers   set NAME [-allow LIST] [-udp-dial HOST:PORT]
 tcpraid peers   path set NAME PATH [flags] | path remove NAME PATH
 tcpraid rules   [list] | add NAME [flags] | remove NAME | enable NAME | disable NAME
+tcpraid sessions [-json]                      what the node carries right now
 tcpraid version
 ```
 
@@ -22,9 +24,10 @@ must run as a user who can read that directory. In a container:
 
 ## run
 
-Starts a node. Its flags are in `reference-files.md`. It stops on SIGINT or
-SIGTERM with exit status 0, after telling its peers and resetting the
-application connections it carries.
+Starts a node. Its flags are in `reference-files.md`: where it listens, and
+six settings of the transport (`-window`, `-budget`, `-grace`, `-hol`,
+`-timeline`, `-maxrss`). It stops on SIGINT or SIGTERM with exit status 0,
+after telling its peers and resetting the application connections it carries.
 
 ## status
 
@@ -32,7 +35,7 @@ application connections it carries.
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.1.0 (wire protocol 1)
+version      0.1.1 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -85,7 +88,7 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.1.0, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.1.1, last heard 2026-01-15T10:00:05Z
 
 PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS
 default  tcp   nas-a.example.org:9851  -      tls       -       -    data   8
@@ -137,8 +140,30 @@ A peer has at most 16 paths. A path's name is up to 32 bytes without spaces. A
 path that does not fit is refused and nothing changes. A proxy is shown
 without its user and password.
 
-A peer's allow list and UDP feedback address have no command; they are set in
-the web page (Peers > Details > Advanced) or through the API.
+### peers set
+
+`peers set NAME [-allow LIST] [-udp-dial HOST:PORT]` changes two settings of
+the peer `NAME`. Only what is given changes; an empty value clears a setting.
+With neither flag the command changes nothing and fails (exit status 1).
+
+| Flag | Meaning |
+|---|---|
+| `-allow LIST` | the destinations the peer may reach through this node: networks with an optional port or range, separated by commas. `""`: any destination. Give it on the node the peer's connections come out of (`security.md`) |
+| `-udp-dial HOST:PORT` | where this node sends UDP feedback for sessions with the peer: the address of the peer's `-udp-listen`. `""`: none (`concepts.md`) |
+
+```
+$ tcpraid peers set nas-a -allow 192.0.2.10/32:873,192.0.2.10/32:50000-50010
+nas-a may reach through this node: 192.0.2.10/32:873,192.0.2.10/32:50000-50010
+
+$ tcpraid peers set nas-a -allow ""
+nas-a may reach any destination through this node
+
+$ tcpraid peers set nas-b -udp-dial 192.0.2.20:8446
+UDP feedback for sessions with nas-b goes to 192.0.2.20:8446
+```
+
+`peers show NAME` lists both settings when they are set. The web page has
+them under Peers > Details > Advanced.
 
 ## rules
 
@@ -184,9 +209,39 @@ could not listen (`rules add` then exits with status 1; the rule is stored and
 tried again whenever the rules change). After "last connection:" comes what
 went wrong with the last connection the rule could not carry.
 
+## sessions
+
+```
+$ tcpraid sessions
+ID      ROLE    RULE   PEER   DESTINATION     AGE  SENT      RECEIVED  AVERAGE    NOW        SENT AGAIN  SUBS
+4a5411  client  rsync  nas-a  192.0.2.10:873  6s   320.0 MB  0 B       53.3 MB/s  30.0 MB/s  0.0%        8
+```
+
+One line for each application connection the node carries right now, or
+`no sessions`. The command looks twice, a second apart, to work out the speed.
+
+| Column | Meaning |
+|---|---|
+| `ID` | the first six digits of the session's id, as in the node's log |
+| `ROLE` | `client`: one of this node's rules took the connection. `server`: this node is the exit, and the peer's rule took it |
+| `RULE`, `PEER`, `DESTINATION` | the rule (at the `client` end), the peer at the other end, and where the connection goes |
+| `AGE` | how long the session has run |
+| `SENT`, `RECEIVED` | stream data sent to the peer and received from it |
+| `AVERAGE`, `NOW` | speed of both directions together: since the session began, and over the last second |
+| `SENT AGAIN` | data queued to be sent again, as a share of the data sent |
+| `SUBS` | live sub-connections |
+
+`SENT` counts what has gone out to the peer; some of it may still be on its
+way, so it runs ahead of what the far end shows as `RECEIVED`. The command
+cannot say how long a transfer still takes: tcpraid does not know how much the
+application is going to send.
+
+`-json` prints the answer of `GET /api/v1/sessions` instead, taken once
+(`reference-api.md`).
+
 ## version
 
 ```
 $ tcpraid version
-tcpraid 0.1.0 (wire protocol 1)
+tcpraid 0.1.1 (wire protocol 1)
 ```

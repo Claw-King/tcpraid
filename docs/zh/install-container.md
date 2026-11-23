@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| 镜像 | `ghcr.io/claw-king/tcpraid:0.1.0`(也可以用 `deploy/Dockerfile` 自己构建) |
+| 镜像 | `ghcr.io/claw-king/tcpraid:0.1.1`(也可以用 `deploy/Dockerfile` 自己构建) |
 | 数据 | 挂载到 `/data` 的一个目录。里面有节点的私钥、它的对端和它的规则。保留好，像备份私钥那样备份它，绝不要让两个节点共用 |
 | 端口 9850 | 网页界面和本机 API。明文 HTTP：只在你信任的网络上开放 |
 | 端口 9851 | 其他节点连到这里。能被另一个节点连到的那个节点需要它；另一个节点开着也无妨 |
@@ -15,6 +15,15 @@
 
 `deploy/docker-compose.yml` 里这些都有，并带注释。给规则用的端口段只是默认值：把映射两边改成相同的端口即可。文件里还给出了另一种做法：不映射端口，而是共用主机的网络；这样规则可以监听主机上任何空闲的端口。
 
+**共用主机网络时，要写明网页界面在哪里监听。** 镜像启动节点时用的是 `-api 0.0.0.0:9850`，在端口映射后面这是对的。共用主机网络时，它会把网页界面和 API(明文 HTTP)开在主机的每一个地址上，包括朝向别的网络的那个地址，比如在路由器或网关上。这种情况下给容器写上它自己的命令，指明页面该开在哪个地址——只在主机本机，或者局域网的某一个地址：
+
+```
+    network_mode: host
+    command: ["run", "-data", "/data", "-api", "127.0.0.1:9850", "-listen", "0.0.0.0:9851"]
+```
+
+用 `127.0.0.1` 时，页面只能从主机本机打开；从别的机器要经过一条隧道，例如 `ssh -L 9850:127.0.0.1:9850 HOST`。
+
 ## 启动
 
 ```
@@ -22,7 +31,8 @@ $ docker compose up -d
 $ docker logs tcpraid
 ... web interface: no password was set, so one was made. It is shown this once: y7ygtkha76gshsnt
 ... web interface: to set your own, start the node with -ui-password-file FILE or the environment variable TCPRAID_UI_PASSWORD
-... node 0.1.0 name="nas-a" fingerprint=056f8829...e2e077d8 data=/data api=[::]:9850 listen=[::]:9851 listen-plain=off transparent=off udp-listen=off
+... node 0.1.1 name="nas-a" fingerprint=056f8829...e2e077d8 data=/data api=[::]:9850 listen=[::]:9851 listen-plain=off transparent=off udp-listen=off
+... transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
 ... the web interface and the API at [::]:9850 are plain HTTP and reachable from other hosts: use them on a network you trust, or put a reverse proxy with TLS in front
 ```
 

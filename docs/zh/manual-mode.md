@@ -40,7 +40,7 @@ tcpraid -mode client -listen 127.0.0.1:9801 -remote server.example.org:9901 \
 
 ```
 $ tcpraid -check -mode client -listen 127.0.0.1:9801 -remote server.example.org:9901 -dst 192.0.2.5:873 -psk psk
-ok: 0.1.0 client paths [data/data x8], window 128 MB, budget 256 MB, maxrss 0 MB, grace 15m0s, psk true, udp listen "" dial ""
+ok: 0.1.1 client paths [data/data x8], window 128 MB, budget 256 MB, maxrss 0 MB, grace 15m0s, psk true, udp listen "" dial ""
 ```
 
 ## 透明使用
@@ -115,7 +115,7 @@ limits: { maxrss_mb: 700, maxsess: 64 }
 
 ```
 $ tcpraid -config client.yaml -check
-ok: 0.1.0 client paths [main/data x8, second/repair x4, second/control x1, proxy/data x4], window 128 MB, budget 256 MB, maxrss 700 MB, grace 15m0s, psk true, udp listen "0.0.0.0:8445" dial ""
+ok: 0.1.1 client paths [main/data x8, second/repair x4, second/control x1, proxy/data x4], window 128 MB, budget 256 MB, maxrss 700 MB, grace 15m0s, psk true, udp listen "0.0.0.0:8445" dial ""
 ```
 
 `addr` 是 client 经这条路径要去连的地址：tcpraid server 的监听，或者通往它的入口；对于目的地固定的端口转发或代理入口，它就是那个转发的地址。server 不需要 `paths`：
@@ -176,7 +176,7 @@ control:
 
 **重启。** 会话状态在内存里。重启之后的进程没法恢复它的会话；应用会看到连接被重置，必须重试。
 
-**可观测性。** `-timeline 1s` 为每个会话记录：已发送(`tx`)、重发(`re`)、已确认(`ack`)、已接收(`rx`)和已交付(`dlv`)的 MB/s，未确认和乱序的积压，回执的新旧程度以及它是从哪些通道到达的(`fbc` 控制连接，`fbu` UDP)，达到上限的子连接数，等待缺失块的最老的块等了多久(`holage`)，读取方等待窗口的时间占比(`pumpwait`)，以及回执周期的 p50 / p95(毫秒，`loop`)。最先暴露回执问题的两个数字是 `pumpwait` 和回执周期的 p95。
+**可观测性。** `-timeline 1s` 为每个会话记录：已发送(`tx`)、重发(`re`)、已确认(`ack`)、已接收(`rx`)和已交付(`dlv`)的 MB/s，未确认和乱序的积压，回执的新旧程度以及它是从哪些通道到达的(`fbc` 控制连接，`fbu` UDP)，达到上限的子连接数，等待缺失块的最老的块等了多久(`holage`)，读取方等待窗口的时间占比(`pumpwait`)，以及回执周期的 p50 / p95(毫秒，`loop`)。最先暴露回执问题的两个数字是 `pumpwait` 和回执周期的 p95。`troubleshooting.md` 逐个解释了这一行的每个字段，以及会话结束时记的那两行。
 
 ## 安全
 

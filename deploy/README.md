@@ -24,9 +24,9 @@ of mapped ports (see the compose file), a rule can listen on any free port.
 
 - `build.sh` -- builds the three static release binaries (linux/amd64, linux/arm64,
   linux/arm v7) with the version built in, and a file with their SHA-256 sums:
-  `deploy/build.sh 0.1.0`. Its header shows how to run it without Go installed.
+  `deploy/build.sh 0.1.1`. Its header shows how to run it without Go installed.
 - `Dockerfile` -- the image: the binary and the system's certificate authorities on an
-  empty base. `docker build -f deploy/Dockerfile --build-arg VERSION=0.1.0 -t tcpraid:0.1.0 .`
+  empty base. `docker build -f deploy/Dockerfile --build-arg VERSION=0.1.1 -t tcpraid:0.1.1 .`
   The default command starts a node with its data in the volume `/data`; the health
   check is `tcpraid status`. Any other tcpraid command line can be given instead.
 - `docker-compose.yml` -- one node. Used as it is by `docker compose up -d`, and where

@@ -5,8 +5,10 @@ tcpraid run     [flags]                       start a node
 tcpraid status  [-json]                       the node on this host
 tcpraid pair    create | list | revoke ID | join [CODE]
 tcpraid peers   [list] | show NAME | check NAME | remove NAME
+tcpraid peers   set NAME [-allow LIST] [-udp-dial HOST:PORT]
 tcpraid peers   path set NAME PATH [flags] | path remove NAME PATH
 tcpraid rules   [list] | add NAME [flags] | remove NAME | enable NAME | disable NAME
+tcpraid sessions [-json]                      what the node carries right now
 tcpraid version
 ```
 
@@ -16,7 +18,7 @@ tcpraid version
 
 ## run
 
-启动一个节点。它的参数见 `reference-files.md`。收到 SIGINT 或 SIGTERM 时，它先通知各个对端、重置自己承载的应用连接，然后以退出状态 0 停止。
+启动一个节点。它的参数见 `reference-files.md`：在哪里监听，以及传输层的六项设置(`-window`、`-budget`、`-grace`、`-hol`、`-timeline`、`-maxrss`)。收到 SIGINT 或 SIGTERM 时，它先通知各个对端、重置自己承载的应用连接，然后以退出状态 0 停止。
 
 ## status
 
@@ -24,7 +26,7 @@ tcpraid version
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.1.0 (wire protocol 1)
+version      0.1.1 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -73,7 +75,7 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.1.0, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.1.1, last heard 2026-01-15T10:00:05Z
 
 PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS
 default  tcp   nas-a.example.org:9851  -      tls       -       -    data   8
@@ -116,7 +118,27 @@ path side of nas-a removed
 
 一个对端最多有 16 条路径。路径的名字最长 32 字节，不能有空格。不合规定的路径会被拒绝，什么都不会改变。显示代理时不带它的用户名和密码。
 
-对端的允许列表和 UDP 回执地址没有对应的命令；它们在网页界面里设置(对端 > 详情 > 高级)，或者通过 API 设置。
+### peers set
+
+`peers set NAME [-allow LIST] [-udp-dial HOST:PORT]` 修改对端 `NAME` 的两项设置。只有给出的项会改变；给空值就是清除这项设置。两个参数都不给时，命令什么也不改并报错(退出状态 1)。
+
+| 参数 | 含义 |
+|---|---|
+| `-allow LIST` | 这个对端经过本节点可以访问的目的地：若干网段，可带端口或端口段，用逗号分隔。`""`：任何目的地。要在对端的连接出来的那个节点上设(见 `security.md`) |
+| `-udp-dial HOST:PORT` | 本节点把和这个对端之间会话的 UDP 回执发到哪里：对端 `-udp-listen` 的地址。`""`：不发(见 `concepts.md`) |
+
+```
+$ tcpraid peers set nas-a -allow 192.0.2.10/32:873,192.0.2.10/32:50000-50010
+nas-a may reach through this node: 192.0.2.10/32:873,192.0.2.10/32:50000-50010
+
+$ tcpraid peers set nas-a -allow ""
+nas-a may reach any destination through this node
+
+$ tcpraid peers set nas-b -udp-dial 192.0.2.20:8446
+UDP feedback for sessions with nas-b goes to 192.0.2.20:8446
+```
+
+这两项设置了的时候，`peers show NAME` 会把它们列出来。在网页界面里，它们在 对端 > 详情 > 高级 下面。
 
 ## rules
 
@@ -151,9 +173,34 @@ rule rsync removed; connections it carries now run to their end
 
 `STATE` 是 `listening`、`disabled`，或者 `FAILED:` 加上规则没能监听的原因(这时 `rules add` 以状态 1 退出；规则已经保存，规则有变动时会再试)。"last connection:" 后面是这条规则最近一条没能承载的连接出了什么问题。
 
+## sessions
+
+```
+$ tcpraid sessions
+ID      ROLE    RULE   PEER   DESTINATION     AGE  SENT      RECEIVED  AVERAGE    NOW        SENT AGAIN  SUBS
+4a5411  client  rsync  nas-a  192.0.2.10:873  6s   320.0 MB  0 B       53.3 MB/s  30.0 MB/s  0.0%        8
+```
+
+节点此刻承载的每一条应用连接一行；没有时显示 `no sessions`。这条命令会隔一秒看两次，以便算出速度。
+
+| 列 | 含义 |
+|---|---|
+| `ID` | 会话号的前六位，和节点日志里的一样 |
+| `ROLE` | `client`：这条连接是本节点的某条规则接下的。`server`：本节点是出口，连接是对端的规则接下的 |
+| `RULE`、`PEER`、`DESTINATION` | 规则(在 `client` 这一端)、另一端的对端、连接去往哪里 |
+| `AGE` | 会话已经运行了多久 |
+| `SENT`、`RECEIVED` | 发给对端和从对端收到的流数据 |
+| `AVERAGE`、`NOW` | 两个方向合计的速度：从会话开始算起的，和最近一秒的 |
+| `SENT AGAIN` | 被排进重发队列的数据，占已发数据的比例 |
+| `SUBS` | 存活的子连接数 |
+
+`SENT` 算的是已经发往对端的数据；其中一部分可能还在路上，所以它会比另一端显示的 `RECEIVED` 多。这条命令说不出一次传输还要多久：tcpraid 不知道应用总共要发多少。
+
+`-json` 改为打印 `GET /api/v1/sessions` 的回答，只取一次(见 `reference-api.md`)。
+
 ## version
 
 ```
 $ tcpraid version
-tcpraid 0.1.0 (wire protocol 1)
+tcpraid 0.1.1 (wire protocol 1)
 ```

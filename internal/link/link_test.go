@@ -276,11 +276,30 @@ func TestPairingRefused(t *testing.T) {
 	// The code is right, but the address leads to another node: the joining node stops
 	// before it sends anything about the code, and the code stays good.
 	c := startNode(t, "gamma", nil)
-	if _, err := b.svc.Join(bg, text, c.addr); err == nil || !strings.Contains(err.Error(), "not the one that made the pairing code") {
+	_, err = b.svc.Join(bg, text, c.addr)
+	if err == nil || !strings.Contains(err.Error(), "not the one that made the pairing code") {
 		t.Fatalf("joining at another node's address: %v", err)
+	}
+	if strings.Contains(err.Error(), "no connection was made") {
+		t.Fatalf("a join that connected and was then given up says that it could not connect: %v", err)
 	}
 	if b.n.PeerCount() != 0 || c.n.PeerCount() != 0 || a.n.PeerCount() != 0 {
 		t.Fatal("a pairing that stopped at the fingerprint left a peer behind")
+	}
+	// Nothing listens at the address: the answer says so in words, after the error itself,
+	// and the node's log has the error alone.
+	ln, lerr := net.Listen("tcp", "127.0.0.1:0")
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	closed := ln.Addr().String()
+	ln.Close()
+	_, err = b.svc.Join(bg, text, closed)
+	if err == nil || !strings.Contains(err.Error(), "dial tcp "+closed) || !strings.HasSuffix(err.Error(), "can this node reach that port?") {
+		t.Fatalf("joining where nothing listens: %v", err)
+	}
+	if got := b.logs.String(); !strings.Contains(got, "dial tcp "+closed) || strings.Contains(got, "no connection was made") {
+		t.Fatalf("the log of the failed join:\n%s", got)
 	}
 	if _, err := b.svc.Join(bg, text, ""); err != nil {
 		t.Fatalf("the code after the attempt at the wrong address: %v", err)

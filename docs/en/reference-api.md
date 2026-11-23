@@ -44,7 +44,7 @@ and `504` for one that ran out of time.
 ### GET /api/v1/status
 
 ```
-{"version":"0.1.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.1.1","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
  "sessions":2,"peers":1,"rules":2}
 ```
@@ -72,9 +72,10 @@ node at the other end.
 ```
 
 `tx_bytes` and `rx_bytes` are stream bytes sent and received; `unacked_bytes`
-is what the other end has not yet reported received; `resent_bytes` counts
-the bytes queued for sending again; `subs` is the number of live
-sub-connections.
+is what was read from the application and the other end has not yet reported
+received, whether it has been sent already or still waits to be sent;
+`resent_bytes` counts the bytes queued for sending again; `subs` is the
+number of live sub-connections.
 
 ### GET /metrics
 
@@ -123,7 +124,7 @@ code. The answer is the new peer, as below.
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.1.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.1.1","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
 `online`: a control connection with the peer is up. `version` and
@@ -142,7 +143,7 @@ stored, nothing changes. The answer is the peer.
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.1.0",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.1.1",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 

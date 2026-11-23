@@ -1,13 +1,13 @@
 package main
 
-// Subcommands: tcpraid run, status, version, pair, peers and rules. A first argument
+// Subcommands: tcpraid run, status, version, pair, peers, rules and sessions. A first argument
 // that does not start with "-" names one; any other command line is the manual mode in
 // main.go.
 //
 // "run" starts a node: a long-running process with a data directory (identity, state),
 // a local HTTP API, its forwarding rules and, if asked for, listeners for other nodes.
 // The other commands ask the node on this host through that API; "pair" and "peers" are
-// in peers.go, "rules" in rules.go.
+// in peers.go, "rules" in rules.go, "sessions" in sessions.go.
 
 import (
 	"context"
@@ -24,6 +24,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -69,9 +70,11 @@ func subcommand(args []string, stdout, stderr io.Writer) (code int, ok bool) {
 		return cmdPeers(args[1:], stdout, stderr), true
 	case "rules":
 		return cmdRules(args[1:], stdout, stderr), true
+	case "sessions":
+		return cmdSessions(args[1:], stdout, stderr), true
 	}
 	fmt.Fprintf(stderr, "tcpraid: unknown command %q\n"+
-		"commands: run, status, version, pair, peers, rules (tcpraid COMMAND -h lists a command's flags)\n"+
+		"commands: run, status, version, pair, peers, rules, sessions (tcpraid COMMAND -h lists a command's flags)\n"+
 		"without a command, tcpraid takes the manual-mode flags (tcpraid -h)\n", args[0])
 	return 2, true
 }
@@ -109,31 +112,9 @@ func cmdVersion(args []string, stdout, stderr io.Writer) int {
 }
 
 func cmdRun(args []string, stderr io.Writer) int {
-	fs := flag.NewFlagSet("tcpraid run", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	dataDir := fs.String("data", defaultDataDir, "data directory (created if missing)")
-	apiAddr := fs.String("api", defaultAPIAddr, "listen address of the local API")
-	name := fs.String("name", "", "name of this node (default: the name it already has; at the first start, the host name)")
-	var o runOptions
-	fs.StringVar(&o.listen, "listen", "", "listen address for other nodes, TLS (empty: this node can join others, but not be joined)")
-	fs.StringVar(&o.listenPlain, "listen-plain", "", "listen address for peers without TLS, for paths that are already encrypted (empty: off)")
-	fs.StringVar(&o.certFile, "cert", "", "certificate (PEM) shown to peers that use the owncert tier; needs -key and -listen")
-	fs.StringVar(&o.keyFile, "key", "", "private key (PEM) of -cert")
-	fs.Var(&o.advertise, "advertise", "HOST:PORT at which other nodes reach -listen, put into pairing codes; may be given more than once")
-	fs.StringVar(&o.transparent, "transparent", "", "listen address for connections that the host redirects to this node (an nftables or iptables redirect rule); transparent rules decide where they go (empty: off)")
-	fs.StringVar(&o.udpListen, "udp-listen", "", "listen address (UDP) for feedback from peers that are told to send it here (empty: off)")
-	fs.StringVar(&o.uiPasswordFile, "ui-password-file", "", "file with the password of the web interface; without it the environment variable "+uiPasswordEnv+" is used, and without that a password is made at the first start and logged once")
-	if code, done := parseFlags(fs, args); done {
+	o, code, done := runFlags(args, stderr)
+	if done {
 		return code
-	}
-	if *dataDir == "" {
-		fmt.Fprintln(stderr, "tcpraid run: -data is empty: name the data directory")
-		return 2
-	}
-	o.dataDir, o.apiAddr, o.name = *dataDir, *apiAddr, *name
-	if err := o.check(); err != nil {
-		fmt.Fprintf(stderr, "tcpraid run: %v\n", err)
-		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -142,6 +123,40 @@ func cmdRun(args []string, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// runFlags reads and checks the command line of "tcpraid run". done is true when the
+// command ends here with the given exit code: help was asked for, or the command line
+// cannot work (the message is already written).
+func runFlags(args []string, stderr io.Writer) (o runOptions, code int, done bool) {
+	fs := flag.NewFlagSet("tcpraid run", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dataDir := fs.String("data", defaultDataDir, "data directory (created if missing)")
+	apiAddr := fs.String("api", defaultAPIAddr, "listen address of the local API")
+	name := fs.String("name", "", "name of this node (default: the name it already has; at the first start, the host name)")
+	fs.StringVar(&o.listen, "listen", "", "listen address for other nodes, TLS (empty: this node can join others, but not be joined)")
+	fs.StringVar(&o.listenPlain, "listen-plain", "", "listen address for peers without TLS, for paths that are already encrypted (empty: off)")
+	fs.StringVar(&o.certFile, "cert", "", "certificate (PEM) shown to peers that use the owncert tier; needs -key and -listen")
+	fs.StringVar(&o.keyFile, "key", "", "private key (PEM) of -cert")
+	fs.Var(&o.advertise, "advertise", "HOST:PORT at which other nodes reach -listen, put into pairing codes; may be given more than once")
+	fs.StringVar(&o.transparent, "transparent", "", "listen address for connections that the host redirects to this node (an nftables or iptables redirect rule); transparent rules decide where they go (empty: off)")
+	fs.StringVar(&o.udpListen, "udp-listen", "", "listen address (UDP) for feedback from peers that are told to send it here (empty: off)")
+	fs.StringVar(&o.uiPasswordFile, "ui-password-file", "", "file with the password of the web interface; without it the environment variable "+uiPasswordEnv+" is used, and without that a password is made at the first start and logged once")
+	transport := defaultTransport()
+	transport.flags(fs)
+	if code, done := parseFlags(fs, args); done {
+		return o, code, true
+	}
+	if *dataDir == "" {
+		fmt.Fprintln(stderr, "tcpraid run: -data is empty: name the data directory")
+		return o, 2, true
+	}
+	o.dataDir, o.apiAddr, o.name, o.transport = *dataDir, *apiAddr, *name, &transport
+	if err := o.check(); err != nil {
+		fmt.Fprintf(stderr, "tcpraid run: %v\n", err)
+		return o, 2, true
+	}
+	return o, 0, false
 }
 
 // stringList is a flag that may be given more than once.
@@ -158,6 +173,7 @@ type runOptions struct {
 	advertise              stringList
 	transparent, udpListen string
 	uiPasswordFile         string
+	transport              *transportOptions // nil: the defaults
 }
 
 // check reports what in the options cannot work, before anything is opened.
@@ -173,7 +189,22 @@ func (o *runOptions) check() error {
 			return fmt.Errorf("-advertise: %w", err)
 		}
 	}
+	if o.transport != nil {
+		return o.transport.check()
+	}
 	return nil
+}
+
+// engineConfig returns the settings of the node's transport: the defaults, with what
+// the options change.
+func (o *runOptions) engineConfig() engine.Config {
+	cfg := engine.DefaultConfig()
+	cfg.Version = version
+	cfg.UDPListen = o.udpListen
+	if o.transport != nil {
+		o.transport.apply(&cfg)
+	}
+	return cfg
 }
 
 // runNode runs a node with the local API only; see runNodeWith.
@@ -205,10 +236,7 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 		// what a peer puts into a path of the owncert tier that verifies by pin
 		log.Printf("certificate of -cert: key fingerprint %s", node.Fingerprint(c.Leaf))
 	}
-	// The transport runs with its default settings in a node.
-	cfg := engine.DefaultConfig()
-	cfg.Version = version
-	cfg.UDPListen = o.udpListen
+	cfg := o.engineConfig()
 	e := engine.New(cfg)
 
 	dialer := &link.Dialer{Identity: n.Identity}
@@ -281,6 +309,8 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 	}
 	log.Printf("node %s name=%q fingerprint=%s data=%s api=%s listen=%s listen-plain=%s transparent=%s udp-listen=%s", version, n.Name(), n.Identity.Fingerprint(),
 		n.Dir, bound["-api"], bound["-listen"], bound["-listen-plain"], bound["-transparent"], bound["-udp-listen"])
+	transport := transportOptions{window: cfg.Window, budget: cfg.Budget, grace: cfg.Grace, hol: cfg.Hol, timeline: cfg.Timeline, maxRSS: cfg.MaxRSS}
+	log.Printf("transport %s", &transport)
 
 	if a, ok := listeners[0].ln.Addr().(*net.TCPAddr); ok && !a.IP.IsLoopback() {
 		log.Printf("the web interface and the API at %s are plain HTTP and reachable from other hosts: use them on a network you trust, or put a reverse proxy with TLS in front", a)
@@ -291,6 +321,16 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 	// The rules open their own listeners. One that cannot is reported in the rule's
 	// status and does not stop the node.
 	rules.Start(ctx)
+	// Past -maxrss the node stops the way it stops on a signal, and reports why.
+	var overLimit atomic.Pointer[error]
+	if cfg.MaxRSS > 0 {
+		go e.GuardWith(func(format string, a ...interface{}) {
+			err := fmt.Errorf(format, a...)
+			log.Printf("stopping: %v", err)
+			overLimit.Store(&err)
+			cancel()
+		})
+	}
 	errs := make(chan error, len(listeners))
 	for _, l := range listeners {
 		go func() {
@@ -319,6 +359,9 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 	}
 	if first != nil {
 		return first
+	}
+	if err := overLimit.Load(); err != nil {
+		return *err
 	}
 	log.Print("node stopped")
 	return nil

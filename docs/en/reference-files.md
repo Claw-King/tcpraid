@@ -14,15 +14,44 @@
 | `-transparent ADDR` | off | listen address for connections that the host redirects to the node; transparent rules decide where they go |
 | `-udp-listen ADDR` | off | listen address (UDP) for feedback from peers that are told to send it here |
 | `-ui-password-file FILE` | none | file with the password of the web page |
+| `-window SIZE` | `128MB` | per session: how much data this node holds that the peer has not yet reported received, and the space it offers the peer for data that arrives out of order. Whole MB |
+| `-budget SIZE` | `256MB` | all sessions together: the most data held unacknowledged, and as much again held out of order |
+| `-grace DURATION` | `900s` | how long a session is kept while no sub-connection to the peer is up |
+| `-hol DURATION` | `1s` | a missing chunk is sent again once later data has waited for it longer than this plus the allowed queue (300 ms; 1 s for a while after reports stalled). Each further attempt for the same chunk waits as long again |
+| `-timeline DURATION` | off | log one line of figures per session this often (`troubleshooting.md` explains the line) |
+| `-maxrss MB` | off | stop the node when its resident memory exceeds this many MB |
 
-The transport runs with its default settings in a node; the tuning options of
-the manual mode do not apply.
-
-The start-up line of the log repeats what is in effect:
+The start-up lines of the log repeat what is in effect:
 
 ```
-node 0.1.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+node 0.1.1 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
 ```
+
+### The transport settings
+
+The last six options change how the transport of the node works. The defaults
+suit most paths; change one when a measurement says so. Each takes effect at
+the next start of the node, and each end has its own: a node's `-window` is
+what it sends with and what it offers when it receives, and the other node
+learns it when a session begins.
+
+- A size is written `256MB` or `1GB`, or as a plain number of bytes. A
+  duration is written `3600s`, `500ms`, `15m`.
+- `-window` is a whole number of MB, at least 1 MB. `-budget` is at least
+  1 MB. `-grace` and `-hol` are above zero.
+- `-maxrss` is at least 2 x `-budget` + 100 MB, because a node holds up to
+  twice `-budget` of stream data in normal operation. Past the limit the node
+  stops as it does on a signal: it tells its peers, resets the application
+  connections it carries, and exits with status 1 and the reason in its log.
+  A container with a restart policy then starts it again; the sessions are
+  not resumed. The option also sets the soft memory limit of the Go runtime to 70% of the
+  value.
+- A value that cannot work ends `tcpraid run` at once, before it listens
+  anywhere, with a message that names the option.
+- The other settings of the transport (chunk size, the queue allowed on each
+  sub-connection, when a sub-connection is replaced) are fixed in a node; the
+  manual mode has options for them.
 
 ### The password of the web page
 
@@ -109,4 +138,4 @@ what the container image and the templates in `deploy/` use.
 | paths to one peer | 16, each with 1 to 64 sub-connections |
 | handshakes in progress with one peer | 32 |
 | unused pairing codes' validity | 1 second to 30 days, default 1 hour |
-| worst-case memory for stream data | about 512 MB |
+| worst-case memory for stream data | twice `-budget`: about 512 MB with the default |

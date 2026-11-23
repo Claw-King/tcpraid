@@ -343,18 +343,24 @@ func (e *Engine) AbortPeer(peer string) int {
 }
 
 // Guard enforces Config.MaxRSS / Config.Life and logs Config.Stats. It does not return.
-func (e *Engine) Guard() {
+func (e *Engine) Guard() { e.GuardWith(e.Fatal) }
+
+// GuardWith is Guard for a caller that ends the process in its own way: once a limit is
+// passed it calls exit with the reason and returns.
+func (e *Engine) GuardWith(exit func(format string, a ...interface{})) {
 	if e.cfg.MaxRSS > 0 {
 		debug.SetMemoryLimit(int64(e.cfg.MaxRSS) << 20 * 7 / 10)
 	}
 	last := time.Now()
 	for range time.Tick(time.Second) {
 		if e.cfg.Life > 0 && time.Since(t0) > e.cfg.Life {
-			e.Fatal("-life %v reached, exiting", e.cfg.Life)
+			exit("-life %v reached, exiting", e.cfg.Life)
+			return
 		}
 		rss := rssMB()
 		if e.cfg.MaxRSS > 0 && rss > e.cfg.MaxRSS {
-			e.Fatal("rss %d MB > -maxrss %d MB, exiting", rss, e.cfg.MaxRSS)
+			exit("rss %d MB > -maxrss %d MB, exiting", rss, e.cfg.MaxRSS)
+			return
 		}
 		if e.cfg.Stats > 0 && time.Since(last) >= e.cfg.Stats {
 			last = time.Now()

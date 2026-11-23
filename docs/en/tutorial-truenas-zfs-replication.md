@@ -9,7 +9,8 @@ rule over a range of ports, data sent through each port, checksums compared at
 both ends -- was run in containers, with a plain TCP sender and receiver in the
 place of the two NAS. The TrueNAS steps were written from the TrueNAS
 documentation and the source of its replication engine (links at the end).
-**Nothing here was tried on a real TrueNAS with this version.** If a screen
+**None of these steps was tried on a real TrueNAS with this version** (the
+last section, for nodes on routers, describes another way in that was). If a screen
 looks different on your system, trust the screen.
 
 ## Before you start
@@ -177,6 +178,48 @@ side that should connect. Reasoning from the same documentation (not run):
 set **Netcat Active Side** to Local, so that `truenas-b` listens, and
 **Netcat Active Side Connect Address** to the address of `node-a` as
 `truenas-a` reaches it; the rule on `node-a` stays as in step 1.
+
+## With the nodes on the routers: an existing task, unchanged
+
+If the two nodes run on the routers or gateways of the two sites, and
+`truenas-a` already reaches `truenas-b` at its own address through them, a
+replication task with the `SSH+NETCAT` transport can be carried as it is:
+nothing changes in TrueNAS, no connect address, no forwarding rule. The
+router redirects the task's connections to its node, and a transparent rule
+names the peer (`install-binary.md`, "On a router: transparent rules").
+
+On the router of the site whose TrueNAS opens the connections -- here
+`gw-a`, because `truenas-b` is the Netcat Active Side and listens:
+
+1. Start the node with `-transparent 0.0.0.0:9800`.
+2. Redirect to it what `truenas-a` sends to `truenas-b` on the SSH port and
+   on the task's range of netcat ports. With nftables:
+
+   ```
+   table ip tcpraid {
+     chain pre {
+       type nat hook prerouting priority dstnat; policy accept;
+       iifname "lan0" ip daddr 198.51.100.20 tcp dport { 22, 50000-50010 } redirect to :9800
+     }
+   }
+   ```
+
+3. Make the transparent rule:
+
+   ```
+   gw-a$ tcpraid rules add zfs -peer gw-b -match 198.51.100.20/32:22,198.51.100.20/32:50000-50010
+   rule zfs added: listening
+   ```
+
+Both connections of the task, SSH and data, now travel through tcpraid, and
+`gw-b` connects to `truenas-b` at the same address and port. On `gw-b` the
+allow list of the peer can be narrowed to the same destinations
+(`tcpraid peers set gw-a -allow ...`). To go back, remove the redirect.
+
+The first user of version 0.1.0 carried an existing replication task this
+way, between two routers. Steps 1 to 4 above, with a forwarding rule and a
+connect address, are still as described at the top: not tried on a real
+TrueNAS.
 
 ## Sources
 

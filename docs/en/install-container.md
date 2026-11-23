@@ -8,7 +8,7 @@ on a real NAS (see "Where each platform takes it").
 
 | | |
 |---|---|
-| Image | `ghcr.io/claw-king/tcpraid:0.1.0` (you can also build it yourself with `deploy/Dockerfile`) |
+| Image | `ghcr.io/claw-king/tcpraid:0.1.1` (you can also build it yourself with `deploy/Dockerfile`) |
 | Data | a directory mounted at `/data`. It holds the node's private key, its peers and its rules. Keep it, back it up like a private key, never share it between two nodes |
 | Port 9850 | the web page and the local API. Plain HTTP: publish it only on a network you trust |
 | Port 9851 | where other nodes connect. Needed on the node that the other one can reach; harmless on the other |
@@ -20,6 +20,21 @@ rules is only a default: change both sides of the mapping to the same ports.
 The file also shows the alternative of sharing the host's network instead of
 mapping ports; then a rule can listen on any free port of the host.
 
+**With the host's network, say where the web page listens.** The image starts
+the node with `-api 0.0.0.0:9850`, which is right behind a port mapping. On
+the host's network it opens the web page and the API, plain HTTP, on every
+address of the host, including one that faces another network, as on a router
+or a gateway. Give the container its own command there, with the address the
+page should be at -- the host itself only, or one address of the LAN:
+
+```
+    network_mode: host
+    command: ["run", "-data", "/data", "-api", "127.0.0.1:9850", "-listen", "0.0.0.0:9851"]
+```
+
+With `127.0.0.1` the page opens from the host only; from another machine,
+through a tunnel such as `ssh -L 9850:127.0.0.1:9850 HOST`.
+
 ## Start
 
 ```
@@ -27,7 +42,8 @@ $ docker compose up -d
 $ docker logs tcpraid
 ... web interface: no password was set, so one was made. It is shown this once: y7ygtkha76gshsnt
 ... web interface: to set your own, start the node with -ui-password-file FILE or the environment variable TCPRAID_UI_PASSWORD
-... node 0.1.0 name="nas-a" fingerprint=056f8829...e2e077d8 data=/data api=[::]:9850 listen=[::]:9851 listen-plain=off transparent=off udp-listen=off
+... node 0.1.1 name="nas-a" fingerprint=056f8829...e2e077d8 data=/data api=[::]:9850 listen=[::]:9851 listen-plain=off transparent=off udp-listen=off
+... transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
 ... the web interface and the API at [::]:9850 are plain HTTP and reachable from other hosts: use them on a network you trust, or put a reverse proxy with TLS in front
 ```
 

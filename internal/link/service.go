@@ -175,6 +175,10 @@ func (s *Service) Join(ctx context.Context, codeText, address string) (node.Peer
 			err = fmt.Errorf("the pairing did not finish within %v (%w): %w", limit, ErrTimeout, err)
 		}
 		s.logf("joining with %s failed: %v", code, err)
+		if noneConnected(failures) {
+			// for the person who reads the answer: the usual reasons
+			err = fmt.Errorf("%w\nno connection was made: is the other node listening there, and can this node reach that port?", err)
+		}
 		return node.Peer{}, err
 	}
 	peer, err := s.Node.PutPeer(node.Peer{
@@ -192,6 +196,18 @@ func (s *Service) Join(ctx context.Context, codeText, address string) (node.Peer
 	}
 	s.logf("paired with %q (fingerprint %s) at %s, using %s", peer.Name, peer.Fingerprint, used, code)
 	return withoutSecret(peer), nil
+}
+
+// noneConnected says whether every one of the failures (at least one) is a connection
+// that could not be opened, as opposed to an exchange that went wrong.
+func noneConnected(failures []error) bool {
+	for _, err := range failures {
+		var op *net.OpError
+		if !errors.As(err, &op) || op.Op != "dial" {
+			return false
+		}
+	}
+	return len(failures) > 0
 }
 
 func (s *Service) joinAt(ctx context.Context, addr string, code *pair.Code) (*pair.Result, error) {

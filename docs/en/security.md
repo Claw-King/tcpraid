@@ -78,13 +78,14 @@ or beyond.
 To narrow that, give the peer an allow list on the node where its connections
 come out: networks with an optional port or range, separated by commas. In the
 web page: Peers > Details > Advanced > "Destinations the peer may reach". With
-the API:
+the command:
 
 ```
-curl -X PUT -H "Authorization: Bearer $(cat /var/lib/tcpraid/api.token)" \
-     -d '{"allow": "192.0.2.10/32:873,192.0.2.10/32:50000-50010"}' \
-     http://127.0.0.1:9850/api/v1/peers/nas-b
+tcpraid peers set nas-b -allow 192.0.2.10/32:873,192.0.2.10/32:50000-50010
 ```
+
+(`-allow ""` takes the list away again. The API has the same setting:
+`PUT /api/v1/peers/NAME`, `reference-api.md`.)
 
 A connection to anything else is refused, and the application at the other
 end sees a reset.

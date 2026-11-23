@@ -23,8 +23,8 @@ import (
 	"github.com/Claw-King/tcpraid/internal/engine"
 )
 
-// version is set at build time: go build -ldflags "-X main.version=0.1.0"
-var version = "0.1.0-dev"
+// version is set at build time: go build -ldflags "-X main.version=0.1.1"
+var version = "0.1.1-dev"
 
 var (
 	showVer   = flag.Bool("version", false, "print the version and exit")
@@ -132,20 +132,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("-config: %v", err)
 	}
-	if *chunkSz < 4096 || *chunkSz > engine.MaxChunk {
-		log.Fatalf("-chunk must be 4096..%d", engine.MaxChunk)
-	}
-	if *window < 4**chunkSz || *window%(1<<20) != 0 || *window>>20 > 65535 {
-		log.Fatal("-window must be whole MB, at least 4 chunks, below 64 GB")
+	if err := checkTransport(*chunkSz, *window, *budget, *maxRSS); err != nil {
+		log.Fatal(err)
 	}
 	if (*udpListen != "" || *udpDial != "") && *pskFile == "" {
 		log.Fatal("-udplisten / -udpdial need -psk")
-	}
-	// stream data is bounded by -budget twice (unacked sent data, out-of-order received
-	// data): a lower -maxrss is reached in normal operation (-budget 512 MB under -maxrss
-	// 600 was, in a test)
-	if need := 2*(*budget>>20) + 100; *maxRSS > 0 && *maxRSS < need {
-		log.Fatalf("-maxrss %d MB is below 2 x -budget + 100 MB = %d MB: lower -budget or raise -maxrss", *maxRSS, need)
 	}
 	if *checkOnly {
 		psk := loadPSK()

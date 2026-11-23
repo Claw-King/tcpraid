@@ -2,7 +2,7 @@
 
 TrueNAS 的复制任务用单独一条 TCP 连接发送数据。这篇教程让这条连接经过 tcpraid，于是它在两个站点之间走的是多条连接。
 
-**试过什么，没试过什么。** 这篇教程里 tcpraid 这一侧——一条覆盖一段端口的规则、经每个端口发送数据、两端比较校验值——是在容器里跑的，用普通的 TCP 发送和接收程序代替两台 NAS。TrueNAS 的步骤是照着 TrueNAS 的文档和它的复制引擎的源码写的(链接在文末)。**这里没有任何一步用这个版本在真实的 TrueNAS 上试过。** 如果你系统上的界面看起来不一样，以界面为准。
+**试过什么，没试过什么。** 这篇教程里 tcpraid 这一侧——一条覆盖一段端口的规则、经每个端口发送数据、两端比较校验值——是在容器里跑的，用普通的 TCP 发送和接收程序代替两台 NAS。TrueNAS 的步骤是照着 TrueNAS 的文档和它的复制引擎的源码写的(链接在文末)。**这些步骤没有任何一步用这个版本在真实的 TrueNAS 上试过**(最后一节"节点装在路由器上"讲的是另一种接法，那一种实际跑过)。 如果你系统上的界面看起来不一样，以界面为准。
 
 ## 开始之前
 
@@ -107,6 +107,35 @@ TrueNAS 的文档说明 `SSH+NETCAT` 的数据流是不加密的，适用于可�
 ## 另一个方向：拉取任务
 
 拉取(pull)任务在目的端 `truenas-b` 上创建，从 `truenas-a` 取数据。数据仍然从 A 流向 B，应该发起连接的仍然是 `truenas-a`。根据同一份文档推断(没有跑过)：把 **Netcat Active Side** 设成 Local，这样由 `truenas-b` 监听；把 **Netcat Active Side Connect Address** 设成 `truenas-a` 连 `node-a` 时用的那个地址；`node-a` 上的规则和第 1 步里一样。
+
+## 节点装在路由器上：原样接管现有的任务
+
+如果两个节点装在两个站点的路由器或网关上，而且 `truenas-a` 经过它们已经能用 `truenas-b` 自己的地址连到它，那么一个用 `SSH+NETCAT` 传输的复制任务可以原样承载：TrueNAS 里什么都不用改，不需要连接地址，也不需要转发规则。路由器把这个任务的连接重定向给它的节点，一条透明规则指明对端(见 `install-binary.md` 的“在路由器上：透明规则”)。
+
+在“它的 TrueNAS 发起连接”的那个站点的路由器上做——这里是 `gw-a`，因为 `truenas-b` 是 Netcat Active Side，由它监听：
+
+1. 用 `-transparent 0.0.0.0:9800` 启动节点。
+2. 把 `truenas-a` 发往 `truenas-b` 的 SSH 端口和这个任务的 netcat 端口段的连接重定向给它。用 nftables：
+
+   ```
+   table ip tcpraid {
+     chain pre {
+       type nat hook prerouting priority dstnat; policy accept;
+       iifname "lan0" ip daddr 198.51.100.20 tcp dport { 22, 50000-50010 } redirect to :9800
+     }
+   }
+   ```
+
+3. 建透明规则：
+
+   ```
+   gw-a$ tcpraid rules add zfs -peer gw-b -match 198.51.100.20/32:22,198.51.100.20/32:50000-50010
+   rule zfs added: listening
+   ```
+
+这个任务的两条连接，SSH 和数据，现在都经过 tcpraid；`gw-b` 会用同样的地址和端口去连 `truenas-b`。在 `gw-b` 上，可以把这个对端的允许列表收窄到同样的目的地(`tcpraid peers set gw-a -allow ...`)。要恢复原状，去掉重定向即可。
+
+0.1.0 版的第一位用户就是这样在两台路由器之间承载了一个现有的复制任务。上面第 1 到第 4 步(转发规则加连接地址)仍然如本文开头所说：没有在真实的 TrueNAS 上试过。
 
 ## 出处
 

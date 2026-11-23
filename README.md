@@ -116,7 +116,8 @@ this slowly.
 - **One of the two nodes can open TCP connections to the other**, directly or
   through a port forward, a tunnel or a SOCKS5 proxy.
 - **TCP application traffic only.**
-- **Memory.** In the worst case a node holds about 512 MB of stream data.
+- **Memory.** In the worst case a node holds about 512 MB of stream data
+  (twice `-budget`, which `tcpraid run` can lower).
 - **Clocks within 10 minutes of each other.**
 
 ## Documentation
@@ -145,11 +146,13 @@ this slowly.
 This is a first version, made by one developer in spare time. What is known:
 
 - **Linux only.** Other systems are not supported.
-- **Tested on few machines.** The tutorials were run in containers with ordinary
-  programs standing in for a NAS; no step was tried on a real NAS of any
-  brand. The amd64 binary was built but never run by the author; the
-  container templates for Unraid and QNAP were only checked against the
-  published formats.
+- **Tested on few machines.** The tutorials were run in containers with
+  ordinary programs standing in for a NAS. After version 0.1.0 was released,
+  its first user ran it on real machines: on amd64 and arm64 hosts, and in
+  containers on the routers of two sites (see "Field results"). What is still
+  untried: the steps of the tutorials that are done in the web pages of a
+  NAS, on a real NAS of any brand; the container templates for Unraid and
+  QNAP, which were only checked against the published formats.
 - **The web page has been used very little.** It was rendered and clicked
   through by a script, not used by people.
 - **The destination of a rule is an IP address**, not a host name.
@@ -168,9 +171,9 @@ This is a first version, made by one developer in spare time. What is known:
   many connections open against it (`docs/en/security.md`).
 - **Both nodes must run the same wire protocol version**; there is no
   negotiation yet.
-- **Feedback over UDP between nodes, paths through SOCKS5 and the `owncert`
-  tier** work in the tests of the program but were not part of the tutorial
-  runs.
+- **Paths through SOCKS5 and the `owncert` tier** work in the tests of the
+  program but were not part of the tutorial runs or of the first use on real
+  machines.
 
 ## Field results
 
@@ -184,6 +187,21 @@ load:
 
 These are single measurements on one path, not a benchmark, and they were not
 made with this version.
+
+Version 0.1.0 was then run by its first user, as nodes:
+
+- Between an amd64 and an arm64 host: 8 GiB of random data, the same checksum
+  at both ends.
+- Between containers on the routers of two sites, over a long-distance path,
+  in the `tls` tier, with one path for data and one for repairs and feedback,
+  feedback over UDP as well, and the connections opened by the node the rule
+  was not on: 20 GiB of random data, the same checksum at both ends, under 1%
+  of it sent again.
+- On those routers, an existing storage replication task, redirected to the
+  node (`prerouting`) and carried by a transparent rule, ran to its end with
+  nothing changed on the storage systems.
+
+These, too, are single runs.
 
 ## Building and testing
 

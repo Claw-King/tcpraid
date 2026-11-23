@@ -11,6 +11,7 @@ package main
 //	tcpraid peers show NAME
 //	tcpraid peers remove NAME
 //	tcpraid peers check NAME
+//	tcpraid peers set NAME [-allow LIST] [-udp-dial HOST:PORT]
 //	tcpraid peers path set NAME PATH [-addr A] [-type T] [-proxy P] [-security S] [-verify V] [-pin F] [-roles R,...] [-subs N]
 //	tcpraid peers path remove NAME PATH
 //
@@ -461,7 +462,50 @@ func cmdPeers(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "path" {
 		return cmdPeersPath(args[1:], stdout, stderr)
 	}
-	return dispatch("peers", "list", []string{"list", "show", "remove", "check", "path"}, map[string]command{
+	var set *flag.FlagSet
+	var allow, udpDial string
+	return dispatch("peers", "list", []string{"list", "show", "remove", "check", "set", "path"}, map[string]command{
+		"set": {
+			name: "peers set", usage: "NAME", nargs: 1,
+			flags: func(fs *flag.FlagSet) {
+				set = fs
+				fs.StringVar(&allow, "allow", "", "destinations the peer may reach through this node: networks with an optional port or range, separated by commas, such as 192.0.2.0/24:873,[2001:db8::/32]:5000-5010 (\"\": any destination)")
+				fs.StringVar(&udpDial, "udp-dial", "", "HOST:PORT of the peer's -udp-listen, to which this node sends feedback for sessions with it (\"\": none)")
+			},
+			run: func(dataDir string, args []string, stdout, _ io.Writer) error {
+				var req api.PeerUpdate
+				set.Visit(func(fl *flag.Flag) {
+					switch fl.Name {
+					case "allow":
+						req.Allow = &allow
+					case "udp-dial":
+						req.UDPDial = &udpDial
+					}
+				})
+				if req.Allow == nil && req.UDPDial == nil {
+					return errors.New("nothing to set: give -allow, -udp-dial or both (an empty value clears the setting)")
+				}
+				var stored api.Peer
+				if err := apiCall(dataDir, http.MethodPut, peerPath(args[0]), req, &stored, shortCall); err != nil {
+					return err
+				}
+				if req.Allow != nil {
+					if stored.Allow == "" {
+						fmt.Fprintf(stdout, "%s may reach any destination through this node\n", stored.Name)
+					} else {
+						fmt.Fprintf(stdout, "%s may reach through this node: %s\n", stored.Name, stored.Allow)
+					}
+				}
+				if req.UDPDial != nil {
+					if stored.UDPDial == "" {
+						fmt.Fprintf(stdout, "no UDP feedback is sent to %s\n", stored.Name)
+					} else {
+						fmt.Fprintf(stdout, "UDP feedback for sessions with %s goes to %s\n", stored.Name, stored.UDPDial)
+					}
+				}
+				return nil
+			},
+		},
 		"show": {
 			name: "peers show", usage: "NAME", nargs: 1,
 			run: func(dataDir string, args []string, stdout, _ io.Writer) error {
