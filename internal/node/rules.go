@@ -1,0 +1,287 @@
+package node
+
+import (
+	"errors"
+	"fmt"
+	"net"
+	"strconv"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/Claw-King/tcpraid/internal/engine"
+)
+
+// Rule is a forwarding rule: which connections this node carries to which peer.
+//
+// A fixed rule has Listen and Destination: the node listens there, and a connection
+// that arrives goes to Destination, as seen from the peer. Both may name a range of
+// ports ("0.0.0.0:50000-50050"): the ranges have the same length and correspond port
+// by port.
+//
+// A transparent rule has Match instead: it applies to the connections that the host
+// redirected to the node's transparent listener, by their original destination. The first transparent rule that matches, in the order of the list, takes
+// the connection, which goes to that same destination as seen from the peer.
+type Rule struct {
+	Name        string `json:"name"`                  // unique among the node's rules
+	Listen      string `json:"listen,omitempty"`      // fixed: IP:port or IP:first-last; the IP may be left out (":5000")
+	Destination string `json:"destination,omitempty"` // fixed: IP:port or IP:first-last at the peer's end
+	Match       string `json:"match,omitempty"`       // transparent: networks in the form of engine.ParseAllow
+	Peer        string `json:"peer"`                  // name of the peer the connections go to
+	Enabled     bool   `json:"enabled"`
+}
+
+// Limits of rules.
+const (
+	MaxRuleNameLen = 64   // bytes
+	MaxRulePorts   = 1024 // ports in the range of one rule
+	MaxRules       = 256
+)
+
+// Transparent reports whether the rule is a transparent rule.
+func (r Rule) Transparent() bool { return r.Match != "" }
+
+// PortRange is an address with a range of ports: Host:First to Host:Last.
+type PortRange struct {
+	Host        string // an IP address; empty in a listen address means every address
+	First, Last int
+}
+
+// Ports returns the number of ports in the range.
+func (p PortRange) Ports() int { return p.Last - p.First + 1 }
+
+// Addr returns the address of the i-th port of the range, counting from 0.
+func (p PortRange) Addr(i int) string { return net.JoinHostPort(p.Host, strconv.Itoa(p.First+i)) }
+
+// ParsePortRange reads "IP:port" or "IP:first-last" (an IPv6 address in brackets). With
+// anyHost, the IP may be left out. A host name is refused: rules take IP addresses only.
+func ParsePortRange(s string, anyHost bool) (PortRange, error) {
+	host, ports, err := net.SplitHostPort(s)
+	if err != nil {
+		return PortRange{}, fmt.Errorf("%q: want IP:port or IP:first-last", s)
+	}
+	switch {
+	case host == "" && anyHost:
+	case host == "":
+		return PortRange{}, fmt.Errorf("%q: no IP address", s)
+	case net.ParseIP(host) == nil:
+		return PortRange{}, fmt.Errorf("%q: %q is not an IP address (host names are not supported yet)", s, host)
+	}
+	first, last, ranged := strings.Cut(ports, "-")
+	if !ranged {
+		last = first
+	}
+	p := PortRange{Host: host}
+	if p.First, err = strconv.Atoi(first); err != nil || p.First < 1 || p.First > 65535 {
+		return PortRange{}, fmt.Errorf("%q: the port is not a number from 1 to 65535", s)
+	}
+	if p.Last, err = strconv.Atoi(last); err != nil || p.Last < 1 || p.Last > 65535 {
+		return PortRange{}, fmt.Errorf("%q: the last port is not a number from 1 to 65535", s)
+	}
+	if p.Last < p.First {
+		return PortRange{}, fmt.Errorf("%q: the last port is below the first", s)
+	}
+	if p.Ports() > MaxRulePorts {
+		return PortRange{}, fmt.Errorf("%q: %d ports (at most %d in one rule)", s, p.Ports(), MaxRulePorts)
+	}
+	return p, nil
+}
+
+// overlaps reports whether two listen ranges would need the same port of the same
+// address. A range without an IP, or with 0.0.0.0 or ::, takes its ports on every
+// address.
+func (p PortRange) overlaps(q PortRange) bool {
+	if p.Last < q.First || q.Last < p.First {
+		return false
+	}
+	every := func(h string) bool {
+		ip := net.ParseIP(h)
+		return h == "" || ip.IsUnspecified()
+	}
+	return every(p.Host) || every(q.Host) || net.ParseIP(p.Host).Equal(net.ParseIP(q.Host))
+}
+
+// CheckRuleName reports whether name can be a rule's name: 1 to MaxRuleNameLen bytes
+// of printable characters without white space.
+func CheckRuleName(name string) error {
+	switch {
+	case name == "":
+		return errors.New("the rule has no name")
+	case len(name) > MaxRuleNameLen:
+		return fmt.Errorf("the rule's name is longer than %d bytes", MaxRuleNameLen)
+	case !utf8.ValidString(name):
+		return errors.New("the rule's name is not valid UTF-8")
+	}
+	for _, r := range name {
+		if !unicode.IsPrint(r) || unicode.IsSpace(r) {
+			return errors.New("the rule's name holds a space or a character that is not printable")
+		}
+	}
+	return nil
+}
+
+// Check reports whether the rule is well-formed on its own: a name, a peer, and either
+// a listen address with a destination or a match. It does not look at other rules or at
+// whether the peer exists.
+func (r Rule) Check() error {
+	if err := CheckRuleName(r.Name); err != nil {
+		return err
+	}
+	if r.Peer == "" {
+		return errors.New("the rule names no peer")
+	}
+	if r.Transparent() {
+		if r.Listen != "" || r.Destination != "" {
+			return errors.New("a rule has either match (transparent) or listen and destination (fixed), not both")
+		}
+		l, err := engine.ParseAllow(r.Match)
+		if err != nil {
+			return fmt.Errorf("match: %w", err)
+		}
+		if l.Empty() {
+			return errors.New("match names no network")
+		}
+		return nil
+	}
+	if r.Listen == "" || r.Destination == "" {
+		return errors.New("a fixed rule needs listen and destination; a transparent rule needs match")
+	}
+	_, _, err := r.Ranges()
+	return err
+}
+
+// Ranges returns the listen and destination ranges of a fixed rule.
+func (r Rule) Ranges() (listen, destination PortRange, err error) {
+	if listen, err = ParsePortRange(r.Listen, true); err != nil {
+		return listen, destination, fmt.Errorf("listen %w", err)
+	}
+	if destination, err = ParsePortRange(r.Destination, false); err != nil {
+		return listen, destination, fmt.Errorf("destination %w", err)
+	}
+	if listen.Ports() != destination.Ports() {
+		return listen, destination, fmt.Errorf("listen has %d ports and destination %d: the two ranges must have the same length", listen.Ports(), destination.Ports())
+	}
+	return listen, destination, nil
+}
+
+// CheckRules reports whether rules can be the rules of one node: each passes Check, no
+// two have the same name, and no two fixed rules listen on the same port of the same
+// address (whether enabled or not: a rule that is switched on later must not collide).
+func CheckRules(rules []Rule) error {
+	if len(rules) > MaxRules {
+		return fmt.Errorf("%d rules (at most %d)", len(rules), MaxRules)
+	}
+	names := map[string]bool{}
+	type taken struct {
+		name string
+		r    PortRange
+	}
+	var listens []taken
+	for _, r := range rules {
+		if err := r.Check(); err != nil {
+			return fmt.Errorf("rule %q: %w", r.Name, err)
+		}
+		if names[r.Name] {
+			return fmt.Errorf("two rules are called %q", r.Name)
+		}
+		names[r.Name] = true
+		if r.Transparent() {
+			continue
+		}
+		l, _, _ := r.Ranges()
+		for _, t := range listens {
+			if l.overlaps(t.r) {
+				return fmt.Errorf("rule %q listens on %s, which rule %q (%s) already takes", r.Name, r.Listen, t.name, formatRange(t.r))
+			}
+		}
+		listens = append(listens, taken{r.Name, l})
+	}
+	return nil
+}
+
+func formatRange(p PortRange) string {
+	if p.First == p.Last {
+		return p.Addr(0)
+	}
+	return fmt.Sprintf("%s-%d", p.Addr(0), p.Last)
+}
+
+// checkPeerOptions reports whether allow and udpDial can be stored with a peer.
+func checkPeerOptions(allow, udpDial string) error {
+	if _, err := engine.ParseAllow(allow); err != nil {
+		return fmt.Errorf("allow: %w", err)
+	}
+	if udpDial != "" {
+		if err := CheckAddr(udpDial); err != nil {
+			return fmt.Errorf("udp_dial: %w", err)
+		}
+	}
+	return nil
+}
+
+// Rules returns a copy of the rules, in their order.
+func (n *Node) Rules() []Rule {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]Rule{}, n.state.Rules...)
+}
+
+// AddRule stores a new rule at the end of the list. A rule that is not well-formed,
+// collides with another, has a name that is taken or names a peer that is not there is
+// the caller's doing (ErrInvalid) and changes nothing.
+func (n *Node) AddRule(r Rule) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.update(func(st *State) error {
+		st.Rules = append(st.Rules, r)
+		return checkRulesFor(st, r)
+	})
+}
+
+// ReplaceRule puts r in the place of the rule called name; r may have another name.
+// What AddRule refuses is refused here too.
+func (n *Node) ReplaceRule(name string, r Rule) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.update(func(st *State) error {
+		for i := range st.Rules {
+			if st.Rules[i].Name == name {
+				st.Rules[i] = r
+				return checkRulesFor(st, r)
+			}
+		}
+		return fmt.Errorf("rule %q: %w", name, ErrNotFound)
+	})
+}
+
+// checkRulesFor checks the rules of st after r was put into them.
+func checkRulesFor(st *State, r Rule) error {
+	if err := CheckRules(st.Rules); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if !nameTaken(st, r.Peer) {
+		return fmt.Errorf("%w: rule %q: no peer is called %q", ErrInvalid, r.Name, r.Peer)
+	}
+	return nil
+}
+
+// RemoveRule forgets the rule called name.
+func (n *Node) RemoveRule(name string) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.update(func(st *State) error {
+		for i := range st.Rules {
+			if st.Rules[i].Name == name {
+				st.Rules = append(st.Rules[:i], st.Rules[i+1:]...)
+				return nil
+			}
+		}
+		return fmt.Errorf("rule %q: %w", name, ErrNotFound)
+	})
+}
+
+// SetPeerOptions sets the allow list and the UDP feedback address of the peer called
+// name and returns the peer as stored; see UpdatePeer.
+func (n *Node) SetPeerOptions(name string, allow, udpDial *string) (Peer, error) {
+	return n.UpdatePeer(name, nil, allow, udpDial)
+}

@@ -1,0 +1,25 @@
+# systemd unit for a tcpraid node. Put the binary at /usr/local/bin/tcpraid; the node
+# keeps its identity key, peers and rules in /var/lib/tcpraid, which systemd creates.
+#
+# The web interface and the local API are at 127.0.0.1:9850; the password of the web
+# interface is printed once in the log at the first start (journalctl -u tcpraid-node).
+# To reach the web interface from other hosts, add "-api ADDRESS:9850" below. Leave
+# out "-listen" on a node that other nodes cannot reach anyway.
+[Unit]
+Description=tcpraid node (one TCP connection carried over several)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/tcpraid run -data /var/lib/tcpraid -listen 0.0.0.0:9851
+StateDirectory=tcpraid
+StateDirectoryMode=0700
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

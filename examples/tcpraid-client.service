@@ -1,0 +1,21 @@
+# systemd unit for the client end. Put the configuration in /etc/tcpraid/client.yaml and the
+# pre-shared key in /etc/tcpraid/psk (mode 600, same key on both ends).
+[Unit]
+Description=tcpraid client (one TCP connection striped over several)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/tcpraid -config /etc/tcpraid/client.yaml
+Restart=always
+RestartSec=2
+# tcpraid resets every application connection itself before exiting on -maxrss / -life
+MemoryMax=700M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadOnlyPaths=/etc/tcpraid
+
+[Install]
+WantedBy=multi-user.target

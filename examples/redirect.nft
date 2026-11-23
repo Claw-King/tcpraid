@@ -1,0 +1,15 @@
+# Transparent use on a Linux router: connections from the LAN to the far-side service are
+# redirected to the local tcpraid client, which reads their original destination.
+# Load with: nft -f redirect.nft
+table ip tcpraid {
+	chain pre {
+		type nat hook prerouting priority dstnat; policy accept;
+		# replication / backup traffic to the far side (adjust addresses and ports)
+		iifname "br-lan" ip daddr 198.51.100.5 tcp dport { 22, 873, 9000-9009 } redirect to :9801
+	}
+	chain out {
+		type nat hook output priority dstnat; policy accept;
+		# the same for connections made on the router itself
+		ip daddr 198.51.100.5 tcp dport { 873 } redirect to :9801
+	}
+}

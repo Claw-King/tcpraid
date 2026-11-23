@@ -1,0 +1,6 @@
+# Not needed to build the image, and never to be sent to a builder: release binaries,
+# and the data directory (with its private key) of a node that was run from a checkout.
+dist/
+bin/
+deploy/data/
+.git/

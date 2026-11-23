@@ -1,0 +1,43 @@
+# One tcpraid node in a container.
+#
+# The same file works where a platform takes Docker Compose YAML: TrueNAS (Apps >
+# Discover Apps > Install via YAML), Synology Container Manager (Project), QNAP
+# Container Station (Applications > Create), or plain "docker compose up -d".
+#
+# Before the first start, look at four things below: the image, the data directory,
+# the password of the web interface, and the ports for forwarding rules.
+services:
+  tcpraid:
+    image: ghcr.io/claw-king/tcpraid:0.1.0
+    container_name: tcpraid
+    # A new node takes its name from the host name at its first start. Give each node
+    # a name of its own here (for example nas-a and nas-b) before you start it, or
+    # rename it in the web interface (Settings) before you pair it: the other node
+    # keeps the name this one had when the two were paired.
+    hostname: tcpraid
+    restart: unless-stopped
+    environment:
+      # Password of the web interface. Left empty, the node makes one at its first
+      # start and prints it once in its log ("docker logs tcpraid").
+      TCPRAID_UI_PASSWORD: ""
+    volumes:
+      # The node's identity key, its peers and its rules live here: keep it, back it up
+      # like a private key, and do not share it between two nodes. On a NAS, put an
+      # absolute path of a dataset or shared folder on the left, for example
+      # /mnt/tank/apps/tcpraid:/data
+      - ./data:/data
+    ports:
+      # Web interface and local API (plain HTTP: publish it on a network you trust).
+      - "9850:9850"
+      # Other nodes connect here. The node that is reachable from the other one needs
+      # this port open to it.
+      - "9851:9851"
+      # Forwarding rules listen on these ports. A rule made in the web interface must
+      # use a port from this range, with the listen address 0.0.0.0. To change the
+      # range, change both sides of the mapping to the same ports.
+      - "50000-50010:50000-50010"
+    # The other way to give the node its ports: share the host's network. Remove the
+    # whole "ports:" section above and uncomment the next line. Rules can then listen
+    # on any free port of the host, and nothing has to be mapped; in exchange the
+    # container is no longer separated from the host's network.
+    # network_mode: host

@@ -1,0 +1,506 @@
+package forward
+
+// The control connections of a node, and what they are for in this version: carrying a
+// connection to a peer that this node cannot dial.
+//
+// A node keeps one control connection to every peer it holds a path to, and takes the
+// ones its peers open. A peer is "online" while at least one is up, whoever opened it.
+//
+// A rule whose peer has no path cannot open sub-connections. Its node creates the
+// session anyway and asks the peer, over a control connection, to open them ("open",
+// with a request number). The peer dials back over its own paths with openings of the
+// reverse type that carry the request number; this node attaches each connection to the
+// session the request stands for. From then on the session runs like any other; the
+// peer, which dials, keeps the number of sub-connections up.
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/binary"
+	"encoding/hex"
+	"fmt"
+	"net"
+	"strings"
+	"time"
+
+	"github.com/Claw-King/tcpraid/internal/control"
+	"github.com/Claw-King/tcpraid/internal/engine"
+	"github.com/Claw-King/tcpraid/internal/link"
+	"github.com/Claw-King/tcpraid/internal/node"
+)
+
+// maxControlConns is how many control connections with one peer a node keeps at the
+// same time; two is the most that two well-behaved nodes have (one opened by each).
+const maxControlConns = 4
+
+// MaxOpenRequests is how many sessions a node serves at the same time because one peer
+// asked it to open their sub-connections; a further request is answered with a failure.
+const MaxOpenRequests = 64
+
+// ReverseWait is how long a session waits for the first sub-connection that a peer was
+// asked to open; then its application connection is reset.
+const ReverseWait = 15 * time.Second
+
+var (
+	// how long to wait before dialing a control connection again, after one, two, ...
+	// attempts in a row that gave no lasting connection
+	controlBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
+	// how often the node looks for peers that have a path and no control connection
+	// (a variable so that tests need not wait for it; set before any node starts)
+	superviseInterval = 2 * time.Second
+)
+
+// times are the times of the control connections and of a request of one Runtime: the
+// constants, unless a test set others before Start.
+type times struct {
+	ping    time.Duration // control.PingInterval
+	timeout time.Duration // control.Timeout
+	wait    time.Duration // ReverseWait
+}
+
+func (t *times) fill() {
+	if t.ping == 0 {
+		t.ping = control.PingInterval
+	}
+	if t.timeout == 0 {
+		t.timeout = control.Timeout
+	}
+	if t.wait == 0 {
+		t.wait = ReverseWait
+	}
+}
+
+// PeerStatus is what the control connections say about a peer.
+type PeerStatus struct {
+	// Online: a control connection with the peer is up, in either direction.
+	Online bool
+	// Version is the program version the peer reported; empty before it has.
+	Version string
+	// LastMessage is when the last message from the peer arrived; zero if none has.
+	LastMessage time.Time
+}
+
+// peerControl is what the runtime keeps about the control connections with one peer.
+type peerControl struct {
+	ctx     context.Context // ends when the pairing ends or the runtime stops
+	cancel  context.CancelFunc
+	conns   []*ctlConn // the control connections that are up
+	dialing bool       // dialControl runs
+	version string
+	last    time.Time
+	serving int // sessions this node serves because the peer asked (see MaxOpenRequests)
+}
+
+type ctlConn struct {
+	*control.Conn
+	peer string // name of the peer at the other end
+}
+
+// reverseKey names a request this node made: the peer it asked and the number it gave.
+type reverseKey struct {
+	peer    string
+	request uint64
+}
+
+// reverseEntry is a session this node carries whose sub-connections a peer opens.
+type reverseEntry struct {
+	rv   *engine.Reverse
+	rule string
+}
+
+// controlLocked returns the control state of the peer called name, made if need be
+// (rt.mu held).
+func (rt *Runtime) controlLocked(name string) *peerControl {
+	pc := rt.ctl[name]
+	if pc == nil {
+		pc = &peerControl{}
+		pc.ctx, pc.cancel = context.WithCancel(rt.ctx)
+		rt.ctl[name] = pc
+	}
+	return pc
+}
+
+// superviseControl starts, now and whenever one is missing, the dialing of a control
+// connection to every peer this node has a path to, until ctx is done.
+func (rt *Runtime) superviseControl(ctx context.Context) {
+	tick := time.NewTicker(superviseInterval)
+	defer tick.Stop()
+	for {
+		for _, p := range rt.Node.Peers() {
+			if len(p.Paths) == 0 {
+				continue
+			}
+			rt.mu.Lock()
+			if ctx.Err() == nil {
+				if pc := rt.controlLocked(p.Name); !pc.dialing {
+					pc.dialing = true
+					go rt.dialControl(p.Name, pc)
+				}
+			}
+			rt.mu.Unlock()
+		}
+		select {
+		case <-tick.C:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// controlPath returns the path a control connection to the peer takes: the first with
+// the control role, or else the first.
+func controlPath(peer node.Peer) node.Path {
+	for _, p := range peer.Paths {
+		for _, role := range p.Roles {
+			if role == node.RoleControl {
+				return p
+			}
+		}
+	}
+	return peer.Paths[0]
+}
+
+// dialControl keeps a control connection to the peer called name: it dials, serves the
+// connection until it is gone, and dials again after a pause that grows while no
+// attempt gives a lasting connection. It ends when the pairing ends, the runtime stops,
+// or the peer has no path any more.
+func (rt *Runtime) dialControl(name string, pc *peerControl) {
+	defer func() {
+		rt.mu.Lock()
+		pc.dialing = false
+		rt.mu.Unlock()
+	}()
+	fails := 0
+	for pc.ctx.Err() == nil {
+		ps, err := rt.peerFor(name)
+		if err != nil {
+			return // no path any more, or the pairing has ended
+		}
+		peer := ps.peer
+		// the handshake takes one of the peer's MaxHandshakes places, like any other
+		conn, err := ps.dial(func(ctx context.Context) (net.Conn, error) {
+			return rt.Dialer.OpenControl(ctx, peer, controlPath(peer))
+		})
+		if err == nil {
+			began := time.Now()
+			rt.runControl(peer, conn)
+			if time.Since(began) > rt.times.timeout {
+				fails = 0 // it was a connection that worked
+			}
+		}
+		wait := controlBackoff[min(fails, len(controlBackoff)-1)]
+		fails++
+		select {
+		case <-time.After(wait):
+		case <-pc.ctx.Done():
+			return
+		}
+	}
+}
+
+// HandleControl takes a control connection that a peer opened (link.Acceptor.HandleControl).
+// It returns at once.
+func (rt *Runtime) HandleControl(peer node.Peer, conn net.Conn) {
+	go rt.runControl(peer, conn)
+}
+
+// runControl serves one control connection with the peer of the record, whichever end
+// opened it, and returns when it is gone; it closes conn.
+func (rt *Runtime) runControl(peer node.Peer, conn net.Conn) {
+	key, err := control.Key(peer.PairSecret)
+	if err != nil {
+		conn.Close()
+		return
+	}
+	cc := &ctlConn{Conn: control.NewConn(conn, key), peer: peer.Name}
+	rt.mu.Lock()
+	// the pairing that the record stands for may have ended since the opening was made
+	// or checked: the same test as for a new session, under the lock PeerRemoved takes
+	if rt.ctx == nil || rt.ctx.Err() != nil || !rt.validFor(peer)() {
+		rt.mu.Unlock()
+		conn.Close()
+		return
+	}
+	pc := rt.controlLocked(peer.Name)
+	if len(pc.conns) >= maxControlConns {
+		rt.mu.Unlock()
+		conn.Close()
+		return
+	}
+	pc.conns = append(pc.conns, cc)
+	rt.mu.Unlock()
+	rt.logf("peer %q: control connection with %s is up", peer.Name, conn.RemoteAddr())
+	stop := context.AfterFunc(pc.ctx, func() { cc.Close() })
+	done := make(chan struct{})
+	why := rt.serveControl(pc, cc, done)
+	close(done)
+	stop()
+	cc.Close()
+	rt.mu.Lock()
+	for i, x := range pc.conns {
+		if x == cc {
+			pc.conns = append(pc.conns[:i], pc.conns[i+1:]...)
+			break
+		}
+	}
+	rt.mu.Unlock()
+	rt.logf("peer %q: control connection with %s is down: %v", peer.Name, conn.RemoteAddr(), why)
+}
+
+// serveControl says hello, pings, and handles the messages of cc until it fails; it
+// returns why. done is closed by the caller when it has returned.
+func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}) error {
+	if err := cc.Send(control.Message{Type: control.TypeHello, Name: rt.Node.Name(), Version: rt.Version, Protocols: []int{control.Protocol}}); err != nil {
+		return err
+	}
+	go func() {
+		tick := time.NewTicker(rt.times.ping)
+		defer tick.Stop()
+		for seq := uint64(1); ; seq++ {
+			select {
+			case <-tick.C:
+				if cc.Send(control.Message{Type: control.TypePing, Seq: seq}) != nil {
+					cc.Close() // the reading side sees it and ends the connection
+					return
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+	for {
+		m, err := cc.Receive(rt.times.timeout)
+		if err != nil {
+			return err
+		}
+		rt.mu.Lock()
+		pc.last = time.Now()
+		if m.Type == control.TypeHello {
+			pc.version = printable(m.Version, 64)
+		}
+		rt.mu.Unlock()
+		switch m.Type {
+		case control.TypePing:
+			if err := cc.Send(control.Message{Type: control.TypePong, Seq: m.Seq}); err != nil {
+				return err
+			}
+		case control.TypeOpen:
+			rt.serveOpen(pc, cc, m)
+		case control.TypeOpenFail:
+			rt.openFailed(cc.peer, m)
+		}
+		// hello and pong need nothing more; a type this version does not know is ignored
+	}
+}
+
+// printable returns s cut to max bytes, with everything that is not printable ASCII
+// replaced: the other node chose the text, and it is shown to people.
+func printable(s string, max int) string {
+	if len(s) > max {
+		s = s[:max]
+	}
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r > 0x7e {
+			return '?'
+		}
+		return r
+	}, s)
+}
+
+// liveControl returns a control connection with the peer called name that is up, or nil.
+func (rt *Runtime) liveControl(name string) *ctlConn {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if pc := rt.ctl[name]; pc != nil && len(pc.conns) > 0 {
+		return pc.conns[0]
+	}
+	return nil
+}
+
+// PeerStatus returns what the control connections say about the peer called name.
+func (rt *Runtime) PeerStatus(name string) PeerStatus {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	pc := rt.ctl[name]
+	if pc == nil {
+		return PeerStatus{}
+	}
+	return PeerStatus{Online: len(pc.conns) > 0, Version: pc.version, LastMessage: pc.last}
+}
+
+// dropControlLocked ends everything about the control connections with the peer called name
+// (rt.mu held): its connections close, its dialing stops.
+func (rt *Runtime) dropControlLocked(name string) {
+	if pc := rt.ctl[name]; pc != nil {
+		pc.cancel()
+		delete(rt.ctl, name)
+	}
+}
+
+// carryReverse takes one application connection of a rule to ip:port at a peer that
+// this node has no path to: it asks the peer to open the sub-connections. It returns
+// when the session has ended.
+func (rt *Runtime) carryReverse(r node.Rule, peer node.Peer, c net.Conn, ip net.IP, port int) {
+	cc := rt.liveControl(peer.Name)
+	if cc == nil {
+		rt.problem(r.Name, fmt.Sprintf("this node has no path to peer %q, and the peer is not connected to this node (it would open the connections): start the peer, or give this node a path to it (tcpraid peers path set)", peer.Name))
+		reset(c)
+		return
+	}
+	keys, err := pairKeys(peer)
+	if err != nil {
+		rt.problem(r.Name, err.Error())
+		reset(c)
+		return
+	}
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		reset(c)
+		return
+	}
+	key := reverseKey{peer.Name, binary.BigEndian.Uint64(b[:])}
+	rv := rt.Engine.NewReverse(c, ip, port, keys, peer.UDPDial, engine.Owner{Peer: peer.Name, Rule: r.Name}, rt.validFor(peer))
+	if rv == nil {
+		return // refused and reset: the session limit, or the node is stopping
+	}
+	rt.mu.Lock()
+	rt.reverse[key] = &reverseEntry{rv: rv, rule: r.Name}
+	rt.mu.Unlock()
+	defer func() {
+		rt.mu.Lock()
+		delete(rt.reverse, key)
+		rt.mu.Unlock()
+	}()
+	// cleared before the request goes out: the answer may be a refusal, and its reason
+	// must not be wiped by a clear that comes after it
+	rt.problem(r.Name, "")
+	id := rv.ID()
+	if err := cc.Send(control.Message{Type: control.TypeOpen, Request: key.request, Session: hex.EncodeToString(id[:])}); err != nil {
+		rt.problem(r.Name, fmt.Sprintf("peer %q could not be asked to open the connections: %v", peer.Name, err))
+		rv.Abort("the request for sub-connections could not be sent")
+		return
+	}
+	late := time.AfterFunc(rt.times.wait, func() {
+		if !rv.Up() {
+			rt.problem(r.Name, fmt.Sprintf("peer %q was asked to open the connections and none arrived within %v", peer.Name, rt.times.wait))
+			rv.Abort("no sub-connection arrived")
+		}
+	})
+	defer late.Stop()
+	rv.Run()
+}
+
+// HandleReverse takes a connection that a peer opened because this node asked it to
+// (link.Acceptor.HandleReverse): it becomes a sub-connection of the session that the
+// request stands for. A request this node did not make to that peer, or whose session
+// has ended, closes the connection.
+func (rt *Runtime) HandleReverse(peer node.Peer, request uint64, path, role byte, conn net.Conn) {
+	rt.mu.Lock()
+	ent := rt.reverse[reverseKey{peer.Name, request}]
+	rt.mu.Unlock()
+	if ent == nil {
+		conn.Close()
+		return
+	}
+	ent.rv.Attach(conn, path, role == link.RoleControl, role == link.RoleRepair)
+}
+
+// openFailed handles the answer of a peer that could not open the sub-connections this
+// node asked for.
+func (rt *Runtime) openFailed(peerName string, m control.Message) {
+	rt.mu.Lock()
+	ent := rt.reverse[reverseKey{peerName, m.Request}]
+	rt.mu.Unlock()
+	if ent == nil {
+		return
+	}
+	rt.problem(ent.rule, fmt.Sprintf("peer %q could not open the connections: %s", peerName, printable(m.Reason, 200)))
+	go ent.rv.Abort("the other end could not open sub-connections")
+}
+
+// serveOpen handles a peer's request to open the sub-connections of a session it
+// carries: this node dials the peer over its own paths, and the transport takes it from
+// there. Where it dials is this node's business alone; the request names no address.
+func (rt *Runtime) serveOpen(pc *peerControl, cc *ctlConn, m control.Message) {
+	fail := func(reason string) {
+		cc.Send(control.Message{Type: control.TypeOpenFail, Request: m.Request, Reason: reason})
+	}
+	ps, err := rt.peerFor(cc.peer)
+	if err != nil {
+		// no path to the peer, or the pairing has just ended
+		fail("the node that was asked has no path to the node that asked")
+		return
+	}
+	rt.mu.Lock()
+	if pc.serving >= MaxOpenRequests {
+		rt.mu.Unlock()
+		fail("the node that was asked serves too many requests already")
+		return
+	}
+	pc.serving++
+	rt.mu.Unlock()
+	go func() {
+		defer func() {
+			rt.mu.Lock()
+			pc.serving--
+			rt.mu.Unlock()
+		}()
+		peer := ps.peer
+		keys, err := pairKeys(peer)
+		if err != nil {
+			return
+		}
+		// a stored allow list has passed this parse
+		allow, err := engine.ParseAllow(peer.Allow)
+		if err != nil {
+			return
+		}
+		groups := rt.reverseGroups(ps, peer, m.Request)
+		first := 0
+		for i, g := range groups {
+			if !g.Ctrl && !g.Repair {
+				first = i
+				break
+			}
+		}
+		conn, err := groups[first].Dial()
+		if err != nil {
+			rt.logf("peer %q asked for sub-connections (session %s) and could not be reached: %v", peer.Name, printable(m.Session, 32), err)
+			fail("the node that was asked could not connect to the node that asked")
+			return
+		}
+		rt.Engine.NewRoute(groups, keys, peer.UDPDial).ServeReverse(conn, engine.SubOptions{
+			Peer:      peer.Name,
+			Allow:     allow,
+			AllowName: "the allow list of the peer",
+			Valid:     ps.valid,
+		})
+	}()
+}
+
+// reverseGroups returns the dial groups for a session that the peer carries and asked
+// this node, with the request, to open the sub-connections of: like groups, but each
+// connection starts with an opening of the reverse type that says the request, the
+// index of the path and the role.
+func (rt *Runtime) reverseGroups(ps *peerState, peer node.Peer, request uint64) []engine.DialGroup {
+	var gs []engine.DialGroup
+	for i, path := range peer.Paths {
+		for _, role := range path.Roles {
+			g := engine.DialGroup{Path: uint8(i), Name: path.Name, Want: path.Subs}
+			code := byte(link.RoleData)
+			switch role {
+			case node.RoleControl:
+				g.Ctrl, g.Want, code = true, 1, link.RoleControl
+			case node.RoleRepair:
+				g.Repair, code = true, link.RoleRepair
+			}
+			g.Dial = func() (net.Conn, error) {
+				return ps.dial(func(ctx context.Context) (net.Conn, error) {
+					return rt.Dialer.OpenReverse(ctx, peer, path, request, uint8(i), code)
+				})
+			}
+			gs = append(gs, g)
+		}
+	}
+	return gs
+}

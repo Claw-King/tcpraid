@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>tcpraid</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<main id="login" class="login" hidden>
+  <form id="login-form" class="card">
+    <h1>tcpraid</h1>
+    <p data-i18n="login.intro"></p>
+    <label><span data-i18n="login.password"></span>
+      <input id="login-password" type="password" autocomplete="current-password" required>
+    </label>
+    <p id="login-error" class="error" role="alert"></p>
+    <button type="submit" class="primary" data-i18n="login.submit"></button>
+    <p class="hint" data-i18n="login.hint"></p>
+  </form>
+</main>
+
+<div id="app" hidden>
+  <header>
+    <div class="brand">tcpraid <span id="node-name" class="muted"></span></div>
+    <nav id="nav">
+      <a href="#overview" data-page="overview" data-i18n="nav.overview"></a>
+      <a href="#peers" data-page="peers" data-i18n="nav.peers"></a>
+      <a href="#rules" data-page="rules" data-i18n="nav.rules"></a>
+      <a href="#sessions" data-page="sessions" data-i18n="nav.sessions"></a>
+      <a href="#settings" data-page="settings" data-i18n="nav.settings"></a>
+    </nav>
+  </header>
+
+  <main>
+    <section id="page-overview" class="page" hidden>
+      <div class="card">
+        <h2 id="ov-name"></h2>
+        <dl class="facts">
+          <dt data-i18n="ov.fingerprint"></dt>
+          <dd><code id="ov-fingerprint" class="wrap"></code> <button type="button" id="ov-copy" class="small" data-i18n="act.copy"></button></dd>
+          <dt data-i18n="ov.version"></dt><dd id="ov-version"></dd>
+          <dt data-i18n="ov.uptime"></dt><dd id="ov-uptime"></dd>
+        </dl>
+      </div>
+      <div class="tiles">
+        <div class="card tile"><div class="num" id="ov-peers">-</div><div data-i18n="ov.peers"></div></div>
+        <div class="card tile"><div class="num" id="ov-rules">-</div><div data-i18n="ov.rules"></div></div>
+        <div class="card tile"><div class="num" id="ov-sessions">-</div><div data-i18n="ov.sessions"></div></div>
+        <div class="card tile"><div class="num" id="ov-tx">-</div><div data-i18n="ov.sending"></div></div>
+        <div class="card tile"><div class="num" id="ov-rx">-</div><div data-i18n="ov.receiving"></div></div>
+      </div>
+      <div class="card">
+        <h3 data-i18n="ov.running"></h3>
+        <div class="table-wrap"><table id="ov-table"></table></div>
+        <p id="ov-more" class="hint" hidden><a href="#sessions" data-i18n="ov.more"></a></p>
+      </div>
+    </section>
+
+    <section id="page-peers" class="page" hidden>
+      <div class="card">
+        <div class="bar">
+          <h2 data-i18n="peers.title"></h2>
+          <button type="button" id="code-create" class="primary" data-i18n="peers.create_code"></button>
+          <button type="button" id="code-enter" data-i18n="peers.enter_code"></button>
+        </div>
+        <p class="hint" data-i18n="peers.intro"></p>
+        <div class="table-wrap"><table id="peers-table"></table></div>
+      </div>
+      <div class="card" id="codes-card" hidden>
+        <h3 data-i18n="codes.title"></h3>
+        <div class="table-wrap"><table id="codes-table"></table></div>
+      </div>
+      <div class="card" id="peer-detail" hidden></div>
+    </section>
+
+    <section id="page-rules" class="page" hidden>
+      <div class="card">
+        <div class="bar">
+          <h2 data-i18n="rules.title"></h2>
+          <button type="button" id="rule-new" class="primary" data-i18n="rules.new"></button>
+        </div>
+        <p class="hint" data-i18n="rules.intro"></p>
+        <div class="table-wrap"><table id="rules-table"></table></div>
+      </div>
+      <details class="card" id="transparent">
+        <summary data-i18n="rules.advanced"></summary>
+        <p class="hint" data-i18n="rules.transparent_intro"></p>
+        <div class="bar"><button type="button" id="trule-new" data-i18n="rules.new_transparent"></button></div>
+        <div class="table-wrap"><table id="trules-table"></table></div>
+      </details>
+    </section>
+
+    <section id="page-sessions" class="page" hidden>
+      <div class="card">
+        <h2 data-i18n="sessions.title"></h2>
+        <div class="table-wrap"><table id="sessions-table"></table></div>
+      </div>
+    </section>
+
+    <section id="page-settings" class="page" hidden>
+      <div class="card">
+        <h2 data-i18n="settings.title"></h2>
+        <label><span data-i18n="settings.language"></span>
+          <select id="set-lang">
+            <option value="en">English</option>
+            <option value="zh">&#20013;&#25991;</option>
+          </select>
+        </label>
+        <form id="set-name-form">
+          <label><span data-i18n="settings.node_name"></span>
+            <input id="set-name" maxlength="64" required>
+          </label>
+          <p class="hint" data-i18n="settings.node_name_hint"></p>
+          <button type="submit" data-i18n="act.save"></button>
+        </form>
+      </div>
+      <div class="card">
+        <dl class="facts">
+          <dt data-i18n="ov.version"></dt><dd id="set-version"></dd>
+          <dt data-i18n="settings.docs"></dt><dd data-i18n="settings.docs_text"></dd>
+        </dl>
+        <button type="button" id="logout" data-i18n="settings.logout"></button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<dialog id="dlg">
+  <form id="dlg-form" method="dialog">
+    <h3 id="dlg-title"></h3>
+    <div id="dlg-body"></div>
+    <p id="dlg-error" class="error" role="alert"></p>
+    <div class="buttons">
+      <button type="button" id="dlg-cancel" data-i18n="act.cancel"></button>
+      <button type="submit" id="dlg-ok" class="primary"></button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" role="status" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>

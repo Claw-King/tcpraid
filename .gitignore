@@ -1,0 +1,7 @@
+bin/
+/tcpraid
+/cmd/tcpraid/tcpraid
+/dist/
+# the data directory of a node started from deploy/docker-compose.yml in a checkout:
+# it holds a private key
+/deploy/data/

@@ -1,0 +1,15 @@
+# Client with data over a relay and feedback over a second, unloaded path plus UDP.
+mode: client
+listen: 0.0.0.0:9801
+psk_file: /etc/tcpraid/psk
+paths:
+  # bulk data: through a relay that only passes TCP (here a local proxy inbound whose
+  # destination is fixed to the tcpraid server)
+  - { name: relay, type: tcp, addr: 127.0.0.1:9821, roles: [data], subs: 8 }
+  # feedback only: a different route to the same server
+  - { name: direct, type: tcp, addr: server.example.org:9901, roles: [control] }
+control:
+  udp: { listen: 0.0.0.0:8445 }   # the server sends its feedback here (works behind NAT on its side)
+send: { window: 128MB, target: 300ms }
+grace: 900s
+limits: { maxrss_mb: 700, maxsess: 64 }   # at least 2 x send.budget (default 256 MB) + 100

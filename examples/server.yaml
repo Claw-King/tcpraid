@@ -1,0 +1,9 @@
+mode: server
+listen: 0.0.0.0:9901
+psk_file: /etc/tcpraid/psk
+allow: [ "198.51.100.5/32:22", "198.51.100.5/32:873", "198.51.100.5/32:9000-9009" ]
+control:
+  udp: { dial: client.example.org:8445 }
+send: { window: 256MB }
+grace: 900s
+limits: { maxrss_mb: 700, maxsess: 64 }

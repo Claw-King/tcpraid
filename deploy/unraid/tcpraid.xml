@@ -1,0 +1,29 @@
+<Container version="2">
+  <Name>tcpraid</Name>
+  <Repository>ghcr.io/claw-king/tcpraid:0.1.0</Repository>
+  <Registry>https://ghcr.io/claw-king/tcpraid</Registry>
+  <Network>bridge</Network>
+  <Privileged>false</Privileged>
+  <!-- NOTE: the port in this entry is the container port. -->
+  <WebUI>http://[IP]:[PORT:9850]/</WebUI>
+  <Overview>tcpraid carries one TCP connection over several TCP connections at once and puts it back together in order at the other end, for software that opens a single stream: ZFS replication, rsync, database replication. Two nodes are paired once; forwarding rules are then made in the web interface.</Overview>
+  <Project>https://github.com/Claw-King/tcpraid</Project>
+  <TemplateURL>https://raw.githubusercontent.com/Claw-King/tcpraid/main/deploy/unraid/tcpraid.xml</TemplateURL>
+  <Category>Tools:Utilities</Category>
+  <License>Apache-2.0</License>
+  <Config Name="Web interface and API" Target="9850" Default="9850" Mode="tcp" Description="Web interface and local API of the node. Plain HTTP: use it on a network you trust." Type="Port" Display="always" Required="true" Mask="false"/>
+  <Config Name="Other nodes" Target="9851" Default="9851" Mode="tcp" Description="Other nodes connect here. The node that is reachable from the other one needs this port open to it." Type="Port" Display="always" Required="true" Mask="false"/>
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/tcpraid" Mode="rw" Description="Identity key, peers and rules of the node. Keep it, back it up like a private key, do not share it between two nodes." Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="Web interface password" Target="TCPRAID_UI_PASSWORD" Default="" Description="Password of the web interface. Left empty, the node makes one at its first start and prints it once in its log." Type="Variable" Display="always" Required="false" Mask="true"/>
+  <Config Name="Rule port 50000" Target="50000" Default="50000" Mode="tcp" Description="A forwarding rule can listen on this port (listen address 0.0.0.0)." Type="Port" Display="always" Required="false" Mask="false"/>
+  <Config Name="Rule port 50001" Target="50001" Default="50001" Mode="tcp" Description="A forwarding rule can listen on this port (listen address 0.0.0.0)." Type="Port" Display="always" Required="false" Mask="false"/>
+  <Config Name="Rule port 50002" Target="50002" Default="50002" Mode="tcp" Description="A forwarding rule can listen on this port (listen address 0.0.0.0)." Type="Port" Display="always" Required="false" Mask="false"/>
+  <Config Name="Rule port 50003" Target="50003" Default="50003" Mode="tcp" Description="A forwarding rule can listen on this port (listen address 0.0.0.0)." Type="Port" Display="always" Required="false" Mask="false"/>
+  <Config Name="Rule port 50004" Target="50004" Default="50004" Mode="tcp" Description="A forwarding rule can listen on this port (listen address 0.0.0.0)." Type="Port" Display="always" Required="false" Mask="false"/>
+  <Config Name="Rule port 50005" Target="50005" Default="50005" Mode="tcp" Description="A forwarding rule can listen on this port (listen address 0.0.0.0)." Type="Port" Display="always" Required="false" Mask="false"/>
+  <Config Name="Rule port 50006" Target="50006" Default="50006" Mode="tcp" Description="A forwarding rule can listen on this port (listen address 0.0.0.0)." Type="Port" Display="always" Required="false" Mask="false"/>
+  <Config Name="Rule port 50007" Target="50007" Default="50007" Mode="tcp" Description="A forwarding rule can listen on this port (listen address 0.0.0.0)." Type="Port" Display="always" Required="false" Mask="false"/>
+  <Config Name="Rule port 50008" Target="50008" Default="50008" Mode="tcp" Description="A forwarding rule can listen on this port (listen address 0.0.0.0)." Type="Port" Display="always" Required="false" Mask="false"/>
+  <Config Name="Rule port 50009" Target="50009" Default="50009" Mode="tcp" Description="A forwarding rule can listen on this port (listen address 0.0.0.0)." Type="Port" Display="always" Required="false" Mask="false"/>
+  <Config Name="Rule port 50010" Target="50010" Default="50010" Mode="tcp" Description="A forwarding rule can listen on this port (listen address 0.0.0.0)." Type="Port" Display="always" Required="false" Mask="false"/>
+</Container>
