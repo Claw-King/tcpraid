@@ -140,7 +140,9 @@ func freeAddr(t *testing.T) string {
 	return ln.Addr().String()
 }
 
-// waitAddr returns the API address a node that is starting on dir writes there.
+// waitAddr returns the API address a node that is starting on dir writes there. It
+// tries again after any error until the time is up, because on Windows the file cannot
+// be opened during the moment the node renames it into place.
 func waitAddr(t *testing.T, dir string) string {
 	t.Helper()
 	for end := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
@@ -148,7 +150,7 @@ func waitAddr(t *testing.T, dir string) string {
 		if err == nil {
 			return addr
 		}
-		if !errors.Is(err, fs.ErrNotExist) || time.Now().After(end) {
+		if time.Now().After(end) {
 			t.Fatalf("the node did not write its API address: %v", err)
 		}
 	}
