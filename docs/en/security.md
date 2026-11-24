@@ -128,6 +128,7 @@ together with the peer.
 | `identity.key` | the node's private key. With it, someone can be this node to its peers |
 | `state.json` | holds the pair secrets and, while a code is valid, the hash of its secret. With a pair secret, someone can pass the opening of that pairing; in the `off` tier that is all it takes |
 | `api.token` | full control of the node through the local API |
+| `api.key` | the key the API and the web page are served with over TLS (`-api-tls`). With it, someone could stand in for the page and the API |
 | `ui.password` | a salted hash (PBKDF2-HMAC-SHA256) of the web page's password, never the password |
 
 The directory is created with mode 0700 and the files that hold a secret with
@@ -139,11 +140,25 @@ directory up like a private key, and do not share it between two nodes.**
 
 ## The web page and the local API
 
-- **Plain HTTP.** The password, the token and everything else cross the
-  network unencrypted between the browser or program and the node. By default
-  the API listens on `127.0.0.1`. When you open it to other hosts
-  (`-api 0.0.0.0:9850`, as in the container), do so on a network you trust, or
-  put a reverse proxy with TLS in front. The node says so in its log.
+- **Plain HTTP unless you switch TLS on.** Without `-api-tls`, the password,
+  the token and everything else cross the network unencrypted between the
+  browser or program and the node. By default the API listens on `127.0.0.1`.
+  When you open it to other hosts (`-api 0.0.0.0:9850`, as in the container),
+  do so on a network you trust, put a reverse proxy with TLS in front, or
+  start the node with `-api-tls`. The node says so in its log.
+- **With `-api-tls` the page and the API are served over TLS**, on the same
+  port, and a request without TLS is not served. At the first such start the
+  node makes a key and a certificate for this and keeps them in the data
+  directory (`api.key`, `api.crt`). No browser knows that certificate, so a
+  browser asks before it shows the page. The log of the node has the SHA-256
+  fingerprint of the certificate. Compare it with the fingerprint the browser
+  shows for the certificate before you accept it. To use a certificate of
+  your own instead, give it with `-api-cert` and `-api-key`.
+- The commands on the host, `tcpraid status` and the others, follow by
+  themselves. They read the certificate that the node recorded in the data
+  directory (`api.tls`) and talk only to an API that holds its key. To an API
+  that presents another certificate they send nothing, and the token does not
+  leave the host.
 - Anyone who is logged in, or has the token, can do everything. That includes
   pairing the node and, through a rule, reaching whatever a peer can reach.
   Treat the password like the token.
@@ -152,11 +167,21 @@ directory up like a private key, and do not share it between two nodes.**
   that changes something must also carry the header `X-Tcpraid-Request: 1`,
   which a page from another site cannot make a browser send.
 - A browser keeps cookies per host name, not per port. So other web services
-  at the same host name receive this cookie too, and two nodes on one host log
-  each other out.
+  at the same host name receive this cookie too. Since version 0.8.0 the
+  cookie is named after the port the browser used to reach the node, so two
+  nodes at two ports of one host keep their logins apart. A login made before
+  an upgrade to 0.8.0 ends with the upgrade, and you log in once more. Over
+  TLS the cookie is marked for TLS only.
 - After 5 wrong passwords in a row from one address, the login is closed to
   that address for a minute. Behind a reverse proxy all visitors share that
-  count.
+  count. The login itself needs the header `X-Tcpraid-Request: 1`, and a
+  login without it is refused before the password is looked at, so a page of
+  another site cannot use up the five tries of its visitor's address.
+- The node checks one password at a time for one address and four at a time
+  in all, and a login beyond that is told to try again. A wrong password from
+  one address does not hold up the login of another. These are limits and no
+  more: someone who sends logins from many addresses can still keep the four
+  places busy while they do.
 - The password is never stored. A generated one is printed once, in the log
   of the first start.
 - A node that needs no web page can be started with `-no-ui`. Its pages and

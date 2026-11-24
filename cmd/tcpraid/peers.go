@@ -53,14 +53,12 @@ var errTimeout = errors.New("timed out")
 // the JSON body. An error that matches errNoNode means the node could not be asked; any
 // other error is what the node answered.
 func apiCall(dataDir, method, path string, in, out any, timeout time.Duration) error {
-	token, err := node.ReadToken(dataDir)
+	a, err := openAPI(dataDir, timeout)
 	if err != nil {
 		return fmt.Errorf("%w (%v)", errNoNode, err)
 	}
-	addr, err := node.ReadAPIAddr(dataDir)
-	if err != nil {
-		return fmt.Errorf("%w (%v)", errNoNode, err)
-	}
+	defer a.close()
+	addr, token := a.addr, a.token
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -69,7 +67,7 @@ func apiCall(dataDir, method, path string, in, out any, timeout time.Duration) e
 		}
 		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, "http://"+addr+path, body)
+	req, err := http.NewRequest(method, a.base+path, body)
 	if err != nil {
 		return err
 	}
@@ -77,10 +75,7 @@ func apiCall(dataDir, method, path string, in, out any, timeout time.Duration) e
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	// no proxy from the environment: the token goes to the node and nowhere else
-	tr := &http.Transport{Proxy: nil}
-	defer tr.CloseIdleConnections()
-	resp, err := (&http.Client{Transport: tr, Timeout: timeout}).Do(req)
+	resp, err := a.client.Do(req)
 	if err != nil {
 		var ne net.Error
 		if errors.As(err, &ne) && ne.Timeout() {

@@ -142,7 +142,7 @@ func TestStatus(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := keys(raw), "node peers rules sessions started uptime_seconds version wire_version"; got != want {
+	if got, want := keys(raw), "advertise listen node peers rules sessions started uptime_seconds version wire_version"; got != want {
 		t.Errorf("fields %q, want %q", got, want)
 	}
 	nodeFields, _ := raw["node"].(map[string]any)
@@ -170,6 +170,22 @@ func TestStatus(t *testing.T) {
 	if st.Sessions != 0 || st.Peers != 0 || st.Rules != 0 {
 		t.Errorf("sessions %d peers %d rules %d, want 0 0 0", st.Sessions, st.Peers, st.Rules)
 	}
+	// a node that takes no connections of other nodes: two empty lists, not null
+	if l, ok := raw["listen"].([]any); !ok || len(l) != 0 {
+		t.Errorf("listen %v, want an empty list", raw["listen"])
+	}
+	if l, ok := raw["advertise"].([]any); !ok || len(l) != 0 {
+		t.Errorf("advertise %v, want an empty list", raw["advertise"])
+	}
+	s.cfg.Listen, s.cfg.Advertise = []string{"0.0.0.0:9851"}, []string{"nas.example:9851", "[2001:db8::5]:9851"}
+	var with Status
+	if err := json.Unmarshal(do(s, "GET", PathStatus, s.cfg.Token).Body.Bytes(), &with); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(with.Listen, " ") != "0.0.0.0:9851" || strings.Join(with.Advertise, " ") != "nas.example:9851 [2001:db8::5]:9851" {
+		t.Errorf("listen %v advertise %v", with.Listen, with.Advertise)
+	}
+	s.cfg.Listen, s.cfg.Advertise = nil, nil
 
 	// the counts follow the state
 	for i, name := range []string{"one", "two"} {

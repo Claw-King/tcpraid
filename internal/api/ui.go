@@ -5,14 +5,23 @@ package api
 // routes of its own for what it shows.
 //
 //	GET  /                 the page; /app.js, /style.css, ... its files. No login needed.
-//	POST /api/v1/login     log in (LoginRequest); the answer sets the session cookie
+//	POST /api/v1/login     log in (LoginRequest); the answer sets the session cookie.
+//	                       It needs the header "X-Tcpraid-Request: 1" (since 0.8.0)
 //	POST /api/v1/logout    log out: the session ends
 //	PUT  /api/v1/node      rename the node (NodeUpdate -> StatusNode)
 //
 // A request is authorized by the access token, as before, or by the cookie of a login.
 // A request authorized by the cookie that can change something (any method but GET and
 // HEAD) must also carry the header "X-Tcpraid-Request: 1", which a page of another
-// site cannot make a browser send; without it the answer is 403.
+// site cannot make a browser send; without it the answer is 403. The login needs the
+// header as well, and a login without it is refused before the password is looked at,
+// so a page of another site cannot use up the wrong passwords of the address it is
+// opened at.
+//
+// The cookie of a login is named after the port the browser used to reach the node
+// (SessionCookieName), because a browser keeps one set of cookies for a host name
+// whatever the port: two nodes at two ports of one host would otherwise overwrite each
+// other's login.
 
 import (
 	"crypto/rand"
@@ -36,7 +45,8 @@ const (
 	PathLogout = "/api/v1/logout"
 	PathNode   = "/api/v1/node"
 
-	// SessionCookie is the name of the cookie of a login.
+	// SessionCookie is the name of the cookie of a login where the request names no
+	// port, and what the name begins with where it names one (SessionCookieName).
 	SessionCookie = "tcpraid_session"
 	// RequestHeader must be "1" on a changing request that the cookie authorizes.
 	RequestHeader = "X-Tcpraid-Request"
@@ -47,9 +57,29 @@ const (
 	MaxLoginFailures = 5
 	LoginLockout     = time.Minute
 
+	// MaxLoginChecks is how many logins may have their password checked at one time.
+	// One more is told to try again. A source address has one check at a time.
+	MaxLoginChecks = 4
+
 	maxUISessions  = 64   // logins at the same time; the one that ends soonest gives way
-	maxLoginFailed = 1024 // source addresses with failures on record; the record is dropped when full
+	maxLoginFailed = 1024 // source addresses with failures on record; when full, the one whose last failure is oldest gives way
 )
+
+// SessionCookieName returns the name of the cookie of a login made with a request for
+// host, the Host header of the request: SessionCookie, with the port after it where
+// the host names one ("tcpraid_session_9850").
+func SessionCookieName(host string) string {
+	_, port, err := net.SplitHostPort(host)
+	if err != nil || port == "" || len(port) > 5 {
+		return SessionCookie
+	}
+	for _, c := range port {
+		if c < '0' || c > '9' {
+			return SessionCookie
+		}
+	}
+	return SessionCookie + "_" + port
+}
 
 // LoginRequest is the body of POST /api/v1/login.
 type LoginRequest struct {
@@ -73,18 +103,24 @@ type UI struct {
 	// 404, and no cookie authorizes anything. Files is still needed, to know which
 	// paths those are. The token and everything it gives access to stay as they are.
 	Off bool
+	// Secure marks the cookie of a login for connections with TLS only. Set it when
+	// the API is served over TLS.
+	Secure bool
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 
 	mu       sync.Mutex
 	sessions map[[sha256.Size]byte]time.Time // digest of a cookie's value -> when the login ends
 	failed   map[string]*loginFailures       // by source address
-	hashing  sync.Mutex                      // held for a whole login
+	checking map[string]bool                 // source addresses whose password is being checked now
+	// check is node.CheckPassword; a test puts its own in.
+	check func(hash, password string) bool
 }
 
 type loginFailures struct {
 	n     int       // wrong passwords in a row
 	until time.Time // the login is closed to the address until then
+	last  time.Time // when the last wrong password came
 }
 
 func (u *UI) now() time.Time {
@@ -180,29 +216,56 @@ func source(r *http.Request) string {
 }
 
 func (u *UI) login(w http.ResponseWriter, r *http.Request) {
+	// Before anything is counted: a page of another site can make a browser send a
+	// login, but not with this header, so it cannot close the login to the address
+	// its visitor comes from.
+	if r.Header.Get(RequestHeader) != "1" {
+		writeError(w, http.StatusForbidden, "a login needs the header "+RequestHeader+": 1")
+		return
+	}
 	var req LoginRequest
 	if !readBody(w, r, &req) {
 		return
 	}
-	// One login at a time: a password check costs a lot of CPU, and an address that is
-	// being closed out must not have a second check running beside the first.
-	u.hashing.Lock()
-	defer u.hashing.Unlock()
+	// A password check costs a lot of CPU. One address has one check at a time, so an
+	// address that is being closed out has no second check running beside the first,
+	// and its failures hold up nobody else. All addresses together have
+	// MaxLoginChecks, and one more is sent away at once.
 	from, now := source(r), u.now()
 	u.mu.Lock()
-	if f := u.failed[from]; f != nil && now.Before(f.until) {
+	switch f := u.failed[from]; {
+	case f != nil && now.Before(f.until):
 		wait := int(f.until.Sub(now)/time.Second) + 1
 		u.mu.Unlock()
 		w.Header().Set("Retry-After", strconv.Itoa(wait))
 		writeError(w, http.StatusTooManyRequests, "too many wrong passwords from this address. Try again in a minute.")
 		return
+	case u.checking[from]:
+		u.mu.Unlock()
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusTooManyRequests, "another login from this address is being checked. Try again in a moment.")
+		return
+	case len(u.checking) >= MaxLoginChecks:
+		u.mu.Unlock()
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusServiceUnavailable, "too many logins are being checked at this moment. Try again in a moment.")
+		return
 	}
+	if u.checking == nil {
+		u.checking = map[string]bool{}
+	}
+	u.checking[from] = true
 	u.mu.Unlock()
 
-	ok := u.PasswordHash != "" && node.CheckPassword(u.PasswordHash, req.Password)
+	check := u.check
+	if check == nil {
+		check = node.CheckPassword
+	}
+	ok := u.PasswordHash != "" && check(u.PasswordHash, req.Password)
 
 	now = u.now()
 	u.mu.Lock()
+	delete(u.checking, from)
 	if !ok {
 		if u.failed == nil {
 			u.failed = map[string]*loginFailures{}
@@ -210,12 +273,21 @@ func (u *UI) login(w http.ResponseWriter, r *http.Request) {
 		f := u.failed[from]
 		if f == nil {
 			if len(u.failed) >= maxLoginFailed {
-				// bounded: start the record again rather than let it grow
-				clear(u.failed)
+				// bounded: the address whose last wrong password is the oldest
+				// gives way, and the others stay closed out
+				var oldest string
+				var at time.Time
+				for addr, x := range u.failed {
+					if oldest == "" || x.last.Before(at) {
+						oldest, at = addr, x.last
+					}
+				}
+				delete(u.failed, oldest)
 			}
 			f = &loginFailures{}
 			u.failed[from] = f
 		}
+		f.last = now
 		if f.n++; f.n >= MaxLoginFailures {
 			f.n, f.until = 0, now.Add(LoginLockout)
 		}
@@ -254,11 +326,12 @@ func (u *UI) login(w http.ResponseWriter, r *http.Request) {
 	u.sessions[sha256.Sum256([]byte(value))] = now.Add(SessionLifetime)
 	u.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{
-		Name:     SessionCookie,
+		Name:     SessionCookieName(r.Host),
 		Value:    value,
 		Path:     "/",
 		MaxAge:   int(SessionLifetime / time.Second),
 		HttpOnly: true,
+		Secure:   u.Secure,
 		SameSite: http.SameSiteStrictMode,
 	})
 	w.WriteHeader(http.StatusNoContent)
@@ -266,7 +339,7 @@ func (u *UI) login(w http.ResponseWriter, r *http.Request) {
 
 // loggedIn reports whether the request carries the cookie of a login that has not ended.
 func (u *UI) loggedIn(r *http.Request) bool {
-	c, err := r.Cookie(SessionCookie)
+	c, err := r.Cookie(SessionCookieName(r.Host))
 	if err != nil || c.Value == "" || u.Off {
 		return false
 	}
@@ -278,14 +351,16 @@ func (u *UI) loggedIn(r *http.Request) bool {
 
 // logout ends the login of the request's cookie, if it has one.
 func (s *Server) logout(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+	name, secure := SessionCookieName(r.Host), false
 	if u := s.cfg.UI; u != nil {
-		if c, err := r.Cookie(SessionCookie); err == nil {
+		secure = u.Secure
+		if c, err := r.Cookie(name); err == nil {
 			u.mu.Lock()
 			delete(u.sessions, sha256.Sum256([]byte(c.Value)))
 			u.mu.Unlock()
 		}
 	}
-	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode})
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -21,7 +21,15 @@ Www-Authenticate: Bearer
 {"error":"missing or wrong access token"}
 ```
 
-已经登录网页界面的浏览器改由它的 cookie 授权(见文末的“登录”)。API 是明文 HTTP。
+已经登录网页界面的浏览器改由它的 cookie 授权(见文末的“登录”)。
+
+API 是明文 HTTP，除非节点带 `-api-tls` 或 `-api-cert` 启动。那时它在同一个端口上是 HTTPS，不带 TLS 的请求不被服务。API 出示的证书在数据目录的 `api.tls` 里：
+
+```
+$ curl --cacert /var/lib/tcpraid/api.tls -H "Authorization: Bearer $(cat /var/lib/tcpraid/api.token)" https://127.0.0.1:9850/api/v1/status
+```
+
+节点自己生成的证书里写着 `localhost`、`127.0.0.1`、`::1`、主机名，以及 `-api` 的地址(当它指明了一个地址时)。用别的名字访问 API 的程序，需要你用 `-api-cert` 给出自己的证书。这时要用那张证书里有的名字来访问 API。
 
 错误以 JSON 返回，形式是 `{"error": "..."}`。状态码 `400` 表示请求本身不对，`404` 表示路径或名字不存在，`405` 表示这个路径没有这种方法，`409` 表示路径测试现在不能开始，`502` 表示另一个节点没有完成配对，`504` 表示配对超时。
 
@@ -34,10 +42,12 @@ Www-Authenticate: Bearer
 ### GET /api/v1/status
 
 ```
-{"version":"0.7.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.8.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
- "sessions":2,"peers":1,"rules":2}
+ "sessions":2,"peers":1,"rules":2,"listen":["0.0.0.0:9851"],"advertise":["nas-b.example:9851"]}
 ```
+
+`listen` 和 `advertise` 是 0.8.0 版新增的。`listen` 是节点接受其他节点 TLS 连接的地址，按实际绑定的写，没有 `-listen` 的节点是空的。`advertise` 是 `-advertise` 给的地址，申请配对码时不带地址就用它们。两者都是列表，旧版本节点的回答里没有这两项。
 
 ### PUT /api/v1/node
 
@@ -119,7 +129,7 @@ Cache-Control: no-store
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.7.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.8.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
 `online` 表示和这个对端之间有一条控制连接连着。`version` 和 `last_message` 在收到过对端的消息之后才出现。0.6.0 版新增的 `spares` 是两个节点之间正在等会话的备用连接数，没有时不出现。0.7.0 版新增的 `transport` 是本节点上和这个对端之间的会话用来取代节点设置的那些传输层设置，对端没有设时不出现(见“传输层的设置”)。加入到本节点的对端，在这里没有 `addresses`，也没有 `paths`。配对密钥绝不会出现在回答里，显示代理时不带它的用户名和密码。
@@ -137,7 +147,7 @@ Cache-Control: no-store
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.7.0",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.8.0",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 
@@ -148,7 +158,7 @@ $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","u
 ```
 $ curl -X PUT ... -d '{"transport":{"window":"8MB","grace":null}}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"9d875c73...b9a2cd07","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"","udp_dial":"","online":true,"version":"0.7.0","last_message":"2026-01-15T10:00:28.39632723Z",
+ "allow":"","udp_dial":"","online":true,"version":"0.8.0","last_message":"2026-01-15T10:00:28.39632723Z",
  "spares":2,"transport":{"window":"8MB"}}
 ```
 
@@ -161,7 +171,7 @@ $ curl -X PUT ... -d '{"subs":4}' http://127.0.0.1:9850/api/v1/peers/nas-a/paths
 {"created":false,"peer":{"name":"nas-a","fingerprint":"e5645f9b...7795ec86","addresses":["nas-a.example.org:9851"],
  "paired_at":"2026-01-15T10:00:20Z",
  "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":4}],
- "allow":"","udp_dial":"","online":true,"version":"0.7.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
+ "allow":"","udp_dial":"","online":true,"version":"0.8.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
 ```
 
 `DELETE` 删除这条路径，回答是对端。对端没有这条路径时是 `404`。
@@ -342,14 +352,16 @@ HTTP/1.1 400 Bad Request
 
 ### POST /api/v1/login
 
-请求体 `{"password": "..."}`。不需要令牌。
+请求体 `{"password": "..."}`。不需要令牌。从 0.8.0 版起必须带请求头 `X-Tcpraid-Request: 1`，不带的话在查看密码之前就回答 `403`。
 
 ```
 HTTP/1.1 204 No Content
-Set-Cookie: tcpraid_session=d4719741...; Path=/; Max-Age=43200; HttpOnly; SameSite=Strict
+Set-Cookie: tcpraid_session_9850=d4719741...; Path=/; Max-Age=43200; HttpOnly; SameSite=Strict
 ```
 
-密码错误是 `401`。同一个地址连续错五次之后，一分钟内的回答是 `429`。
+从 0.8.0 版起，cookie 的名字以请求的 `Host` 头里的端口结尾，这样同一台主机上两个端口的两个节点的登录互不相干。`Host` 里没有端口的请求得到的名字是 `tcpraid_session`。经 TLS 时 cookie 还带 `Secure`。
+
+密码错误是 `401`。同一个地址连续错五次之后，一分钟内的回答是 `429`。节点对同一个地址一次只核对一个密码，总共同时核对四个。某个地址的密码正在核对时，它的第二次登录是 `429`。已有四个在核对时，新的登录是 `503`。两者都带 `Retry-After: 1`。
 
 由这个 cookie 授权、并且会修改东西的请求，也就是 `GET` 和 `HEAD` 以外的任何方法，还必须带上请求头 `X-Tcpraid-Request: 1`。不带的话回答是 `403`。
 

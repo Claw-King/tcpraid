@@ -226,7 +226,11 @@ stats sessions=1 goroutines=28 rss=20MB heap=6MB unacked=0MB resends=0 kicks=0/0
 
 - 忘了密码，或者日志里显示生成密码的那一行已经找不到了，比如容器启动了很久：自己设一个。在容器里，把它写进环境变量 `TCPRAID_UI_PASSWORD`，compose 文件和各个模板里都有这一项，再用 `docker compose up -d` 重新创建容器。单纯重启容器用的还是旧的环境变量。用二进制文件时，用这个变量或 `-ui-password-file FILE`。它会取代旧密码(见 `reference-files.md`)。如果想要一个新的生成密码，就停掉节点，删掉数据目录里的 `ui.password`，再启动节点。新密码会在日志里显示一次。
 - "too many wrong passwords from this address"：等一分钟。
-- 同一台主机上有两个节点时反复被登出：两者用的是同一个 cookie 名字。请给每个节点用各自的主机名来访问。
+- "another login from this address is being checked" 和 "too many logins are being checked at this moment"：稍后再试。节点对同一个地址一次只核对一个密码，总共同时核对四个。
+- "a login needs the header X-Tcpraid-Request: 1"：从 0.8.0 版起，不经浏览器登录的程序必须带上这个请求头。
+- 升级到 0.8.0 之后被登出：从这一版起登录的 cookie 换了名字。重新登录一次即可。
+- 浏览器对证书提出警告：带 `-api-tls` 启动的节点用它自己生成的证书提供页面。它的日志里有一行 "the API at ... is served over TLS"，后面是证书的 SHA-256 指纹。把它和浏览器显示的指纹对一下，一样就接受这张证书。
+- 命令报 "the API at ... presents another certificate than api.tls holds"：命令在 `api.addr` 写的地址上看到的证书不是节点记下的那一张，所以什么都没有发。要么那个地址上监听的是别的东西，要么这两个文件之一被换过。节点每次启动都会写这两个文件，重新启动它即可。
 - 从别的机器打不开页面：API 监听在 `127.0.0.1`，除非用 `-api` 另外指定。
 
 ## 节点启动不了

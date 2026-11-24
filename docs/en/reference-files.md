@@ -5,7 +5,9 @@
 | Flag | Default | Meaning |
 |---|---|---|
 | `-data DIR` | `/var/lib/tcpraid` on Linux; see "The data directory" for macOS and Windows | data directory; created if missing (mode 0700) |
-| `-api ADDR` | `127.0.0.1:9850` | listen address of the local API and the web page (plain HTTP) |
+| `-api ADDR` | `127.0.0.1:9850` | listen address of the local API and the web page (plain HTTP, or HTTPS with `-api-tls`) |
+| `-api-tls` | off | serve the local API and the web page over TLS, with a certificate the node makes for itself and keeps in the data directory. The commands on the host follow by themselves (`security.md`) |
+| `-api-cert FILE`, `-api-key FILE` | none | a certificate and its key (PEM) to serve the local API and the web page with over TLS, in the place of the node's own |
 | `-name NAME` | the name it has | name of the node. Given, it renames the node. Not given, the node keeps its name. At the first start it takes the host name and adds a hyphen and four random characters, as in `nas-k3x9`, so that two machines with the same host name do not become two nodes of the same name. A name is 1 to 64 bytes of printable characters, with no space at either end |
 | `-listen ADDR` | off | listen address for other nodes (TLS). Without it the node can join another node but cannot be joined |
 | `-advertise HOST:PORT` | none | where other nodes reach `-listen`; goes into the pairing codes this node makes. May be given more than once |
@@ -36,7 +38,7 @@
 The start-up lines of the log repeat what is in effect:
 
 ```
-node 0.7.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+node 0.8.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
 transport window=128MB budget=256MB grace=20m0s hol=1s timeline=off maxrss=off
 tuned target=500ms
 ```
@@ -85,9 +87,13 @@ changed with `tcpraid transport set` is stored in `state.json` and holds
 after a restart, unless the command line of the next start gives the same
 setting.
 
-The web page does not show these settings and does not change them. An edit
-of a peer or a rule made in the web page leaves its transport settings as
-they are.
+Since version 0.8.0 the web page shows the node's settings under Settings,
+with where each value comes from, and changes them there like
+`tcpraid transport set`. A setting that the command line gives cannot be
+changed in the page either. The settings of a peer and of a rule are shown
+with the peer and the rule and are changed with the commands. An edit of a
+peer or a rule made in the web page leaves its transport settings as they
+are.
 
 - A size is written `256MB`, `64KB` or `1GB`, or as a plain number of bytes.
   A duration is written `3600s`, `500ms`, `15m`.
@@ -166,6 +172,9 @@ Owner, size and date are left out below.
 $ ls -la /var/lib/tcpraid
 drwx------  .
 -rw-------  api.addr
+-rw-r--r--  api.crt
+-rw-------  api.key
+-rw-------  api.tls
 -rw-------  api.token
 -rw-r--r--  identity.crt
 -rw-------  identity.key
@@ -182,6 +191,8 @@ drwx------  .
 | `api.token` | access token of the local API |
 | `ui.password` | a salted hash (PBKDF2-HMAC-SHA256) of the password of the web page; never the password |
 | `api.addr` | the address the API is reached at from this host, written at each start; the commands read it |
+| `api.key`, `api.crt` | only after a start with `-api-tls`: an ECDSA P-256 private key (PKCS#8, PEM) and a self-signed certificate for it, which the API and the web page are served with. The key is created once and never replaced. The certificate is valid for 800 days and is made again for the same key at a start that finds less than 30 days left, or a name missing. The host name is one of the names, so a container without a fixed host name gets a new certificate, for the same key, whenever it is made again |
+| `api.tls` | only while the node was last started with TLS for the API: the certificate that the API presents, the node's own, or the certificate of `-api-cert`. The commands read it and talk only to an API that holds its key. A start without TLS removes the file |
 | `lock` | empty; locked by the node while it runs |
 
 - **One node runs on a data directory at a time.** A second `tcpraid run` on

@@ -53,6 +53,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -129,6 +130,12 @@ type Config struct {
 	// request for one of its pages is then answered like any request without a token,
 	// with 401). A UI that is switched off (UI.Off) answers 404 for its pages instead.
 	UI *UI
+	// Listen are the addresses at which the node takes connections of other nodes
+	// with TLS, as they are bound; none when it has no such listener. Advertise are
+	// the addresses the node was started with for other nodes to reach it. The status
+	// reports both.
+	Listen    []string
+	Advertise []string
 }
 
 // Status is the answer of GET /api/v1/status.
@@ -141,6 +148,12 @@ type Status struct {
 	Sessions      int        `json:"sessions"`
 	Peers         int        `json:"peers"`
 	Rules         int        `json:"rules"`
+	// Since 0.8.0. Listen: the addresses at which the node takes connections of other
+	// nodes with TLS, as bound (an address like 0.0.0.0:9851 stands for every address
+	// of the host); empty when the node cannot be joined. Advertise: the addresses the
+	// node puts into a pairing code that is asked for without any.
+	Listen    []string `json:"listen"`
+	Advertise []string `json:"advertise"`
 }
 
 // StatusNode names the node in a Status.
@@ -504,6 +517,7 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		Handler:           s,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
+		ErrorLog:          log.New(serverLog{}, "", 0),
 		// "OPTIONS *" goes through ServeHTTP like every request, and so needs the token;
 		// the server would otherwise answer it 200 itself
 		DisableGeneralOptionsHandler: true,
@@ -523,6 +537,18 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	}
 	<-shut
 	return nil
+}
+
+// serverLog takes what the HTTP server logs by itself. A TLS handshake that fails is
+// not logged: anyone who reaches the listener can cause as many as they like. Anything
+// else goes to the log of the program.
+type serverLog struct{}
+
+func (serverLog) Write(p []byte) (int, error) {
+	if !bytes.Contains(p, []byte("TLS handshake error")) {
+		log.Print(strings.TrimRight(string(p), "\n"))
+	}
+	return len(p), nil
 }
 
 // match compares the segments of a request path with a route's. ok says whether they
@@ -621,6 +647,9 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request, _ map[string]str
 		Sessions:      int(s.cfg.Engine.Sessions()),
 		Peers:         n.PeerCount(),
 		Rules:         n.RuleCount(),
+		// no addresses is [], not null
+		Listen:    append([]string{}, s.cfg.Listen...),
+		Advertise: append([]string{}, s.cfg.Advertise...),
 	})
 }
 

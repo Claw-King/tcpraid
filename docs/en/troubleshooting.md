@@ -329,8 +329,23 @@ stream data.
   node, delete `ui.password` in the data directory and start the node. The
   new password is printed once in the log.
 - "too many wrong passwords from this address": wait a minute.
-- Logged out again and again with two nodes on one host: both use the same
-  cookie name. Reach each under its own host name.
+- "another login from this address is being checked" and "too many logins are
+  being checked at this moment": try again in a moment. The node checks one
+  password at a time for one address and four in all.
+- "a login needs the header X-Tcpraid-Request: 1": a program that logs in
+  without a browser has to send that header since version 0.8.0.
+- Logged out after an upgrade to 0.8.0: the cookie of a login has another
+  name since then. Log in once more.
+- The browser warns about the certificate: a node started with `-api-tls`
+  serves the page with a certificate it made for itself. Its log has the line
+  "the API at ... is served over TLS" with the SHA-256 fingerprint of the
+  certificate. Compare that with the fingerprint the browser shows, and
+  accept the certificate if they are the same.
+- "the API at ... presents another certificate than api.tls holds", from a
+  command: the command found a certificate at the address in `api.addr` that
+  the node did not record, and sent nothing. Something else
+  listens at that address, or one of the two files was replaced. The node
+  writes both at each start, so start it again.
 - The page does not open from another machine: the API listens on
   `127.0.0.1` unless `-api` says otherwise.
 

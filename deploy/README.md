@@ -12,7 +12,7 @@ formats.
 
 | Port | For |
 |---|---|
-| 9850 | web interface and local API (plain HTTP: publish it on a network you trust) |
+| 9850 | web interface and local API (plain HTTP unless the node is started with `-api-tls`: publish it on a network you trust) |
 | 9851 | connections from other nodes; open it on the node that the other one can reach |
 | 50000-50010 | forwarding rules; a rule listens on one of them, at the address `0.0.0.0` |
 | 8446/udp | optional: feedback from the other node over UDP. Off unless the node is started with `-udp-listen` |
@@ -33,10 +33,10 @@ QNAP template does not publish it. Add the port and the argument there by hand.
 - `build.sh`: builds the release binaries (static on Linux) with the version built in, and a
   file with their SHA-256 sums. The targets are linux/amd64, linux/arm64 and
   linux/arm v7, macOS amd64 and arm64, and Windows amd64 and arm64. Run it as
-  `deploy/build.sh 0.7.0`. Its header shows how to run it without Go installed.
+  `deploy/build.sh 0.8.0`. Its header shows how to run it without Go installed.
 - `Dockerfile`: the image, which is the binary and the system's certificate
   authorities on an empty base. Build it with
-  `docker build -f deploy/Dockerfile --build-arg VERSION=0.7.0 -t tcpraid:0.7.0 .`
+  `docker build -f deploy/Dockerfile --build-arg VERSION=0.8.0 -t tcpraid:0.8.0 .`
   The default command starts a node with its data in the volume `/data`, and the
   health check is `tcpraid status`. Any other tcpraid command line can be given
   instead.

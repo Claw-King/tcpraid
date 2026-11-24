@@ -127,3 +127,30 @@ func TestFilesAreSelfContained(t *testing.T) {
 		t.Error("index.html has an inline script or style, which its content security policy forbids")
 	}
 }
+
+// The page has the block for the node's transport settings, and its script fills the
+// address field of a new pairing code from what the status says about the node. (What
+// the script does with them is checked by running it outside the repository; no
+// browser has been used.)
+func TestPageHasTheTransportBlockAndThePrefill(t *testing.T) {
+	html, js := read(t, "index.html"), read(t, "app.js")
+	for _, id := range []string{`id="transport-card"`, `id="transport-table"`, `id="transport-save"`, `id="transport-error"`} {
+		if !strings.Contains(html, id) {
+			t.Errorf("index.html lacks %s", id)
+		}
+	}
+	for _, want := range []string{
+		"function pairingAddresses(st)", "st.advertise", "st.listen", "value: pairingAddresses(state.status)",
+		"api('GET', 'transport')", "api('PUT', 'transport', { set: set })", "s.source === 'command line'",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+	d := dictionary(t)
+	for _, key := range []string{"transport.title", "transport.pinned", "transport.saved", "transport.of_peer", "transport.of_rule"} {
+		if d["en"][key] == "" || d["zh"][key] == "" || d["en"][key] == d["zh"][key] {
+			t.Errorf("the text %q is missing in one language, or the same in both", key)
+		}
+	}
+}

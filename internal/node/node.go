@@ -10,6 +10,9 @@
 //	api.token     access token of the local API (0600)
 //	api.addr      address the local API listens on, written at each start (0600)
 //
+// A node whose API is served over TLS keeps three more, described in apicert.go:
+// api.key, api.crt and api.tls.
+//
 // Every file is written to a temporary file first and then put in place in one step, so
 // a reader never sees half of one. The key and the token are put in place without
 // replacing: creating them fails if they exist. (On a file system without hard links
@@ -245,7 +248,7 @@ func (n *Node) Warnings() []string {
 			ws = append(ws, fmt.Sprintf("%s is writable by group or others (mode %04o)", n.Dir, mode))
 		}
 	}
-	for _, name := range []string{KeyFile, TokenFile} {
+	for _, name := range []string{KeyFile, TokenFile, APIKeyFile} {
 		path := filepath.Join(n.Dir, name)
 		fi, err := os.Stat(path)
 		if err != nil {

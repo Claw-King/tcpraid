@@ -193,7 +193,12 @@ This is a first version, made by one developer in spare time. What is known:
   repository and through no transfer on a real line. The documents say what
   each setting changes and name no values to use.
 - **The web page has been used very little.** It was rendered and clicked
-  through by a script, and one person has used it to pair two nodes.
+  through by a script, and one person has used it to pair two nodes. What
+  came with version 0.8.0, the block for the transport settings and the
+  address that the form for a pairing code starts with, was run by a script
+  without a browser, and nobody has looked at it in one. The same holds for
+  the page served over TLS (`-api-tls`): the commands and `curl` were run
+  against it, and no browser.
 - **A host name as the destination of a rule needs version 0.4.0 or later on
   both nodes.** The peer looks the name up for every connection. Nothing is
   kept between two connections, so each one waits for that lookup first.
@@ -229,8 +234,11 @@ This is a first version, made by one developer in spare time. What is known:
 - **The systemd unit was checked by `systemd-analyze` only.** It runs the node
   as a separate user with a set of restrictions, and it has not been
   installed or started on a machine.
-- **The web page and the local API are plain HTTP.** Use them on a network you
-  trust, or behind a reverse proxy with TLS.
+- **The web page and the local API are plain HTTP unless the node is started
+  with `-api-tls`.** Without it, use them on a network you trust, or behind a
+  reverse proxy with TLS. With it, the node serves them with a certificate it
+  made for itself, which a browser does not know and asks about
+  (`docs/en/security.md`).
 - **A listener limits, but does not prevent,** what someone can do by holding
   many connections open against it (`docs/en/security.md`).
 - **Both nodes must run the same wire protocol version.** There is no

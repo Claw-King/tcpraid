@@ -304,7 +304,8 @@ function ruleRow(r, transparent) {
         });
       }
     }));
-  var cells = [h('td', { text: r.name })];
+  var own = settingsText(r.transport);
+  var cells = [h('td', {}, r.name, own ? h('div', { class: 'hint', text: t('transport.of_rule', own) }) : null)];
   if (transparent) cells.push(h('td', { class: 'wrap', text: r.match }), h('td', { text: r.peer }));
   else cells.push(h('td', { text: r.listen }), h('td', { text: r.peer }), h('td', { text: r.destination }));
   cells.push(h('td', {}, toggle), h('td', {}, ruleStatus(r)), num(String(r.sessions)), num(speedText(ruleSpeed(r.name))), actions);
@@ -535,7 +536,9 @@ function renderPeerDetail() {
       h('summary', { text: t('peers.advanced') }),
       h('dl', { class: 'facts' },
         h('dt', { text: t('peers.allow') }), h('dd', { class: 'wrap', text: peer.allow || t('peers.allow_any') }),
-        h('dt', { text: t('peers.udp_dial') }), h('dd', { class: 'wrap', text: peer.udp_dial || t('peers.udp_none') })),
+        h('dt', { text: t('peers.udp_dial') }), h('dd', { class: 'wrap', text: peer.udp_dial || t('peers.udp_none') }),
+        settingsText(peer.transport) ? [h('dt', { text: t('transport.of_peer') }),
+          h('dd', { class: 'wrap' }, settingsText(peer.transport), h('div', { class: 'hint', text: t('transport.of_peer_hint') }))] : null),
       h('button', { type: 'button', class: 'small', text: t('act.edit'), onclick: function () { peerOptionsForm(peer); } })),
     h('p', {}, h('button', {
       type: 'button', class: 'danger', text: t('peers.remove'), onclick: function () {
@@ -567,8 +570,21 @@ function peerOptionsForm(peer) {
   });
 }
 
+// pairingAddresses returns what the address field of a new pairing code starts with:
+// the addresses the node was started with for other nodes or, without any, the
+// addresses it listens on for them. An address like 0.0.0.0:9851 stands for every
+// address of the host and tells another node nothing, so it is left out.
+function pairingAddresses(st) {
+  var given = (st && st.advertise) || [];
+  if (given.length) return given.join(', ');
+  return ((st && st.listen) || []).filter(function (a) {
+    var host = a.slice(0, a.lastIndexOf(':'));
+    return host !== '' && host !== '0.0.0.0' && host !== '[::]';
+  }).join(', ');
+}
+
 function createCodeForm() {
-  var addresses = h('input', { placeholder: '203.0.113.5:9851' });
+  var addresses = h('input', { value: pairingAddresses(state.status), placeholder: '203.0.113.5:9851' });
   var ttl = h('input', { type: 'number', min: '1', max: '43200', value: '60', required: true });
   openDialog({
     title: t('peers.create_code'),
@@ -615,6 +631,76 @@ function enterCodeForm() {
   });
 }
 
+// ---------- transport settings of the node ----------
+
+var transportInputs = {}; // name of a setting that can be changed here -> {input, was}
+
+// settingsText writes the transport settings of a peer or a rule: "window=16MB, target=500ms".
+function settingsText(o) {
+  return Object.keys(o || {}).sort().map(function (k) { return k + '=' + o[k]; }).join(', ');
+}
+
+function transportSource(s) {
+  if (s.source === 'command line') return t('transport.from_command_line');
+  if (s.source === 'stored') return t('transport.from_stored');
+  return t('transport.from_default');
+}
+
+function renderTransport(list) {
+  transportInputs = {};
+  var rows = list.map(function (s) {
+    var pinned = s.source === 'command line';
+    var input = (s.value === 'true' || s.value === 'false')
+      ? select([['true', 'true'], ['false', 'false']], s.value)
+      : h('input', { value: s.value, spellcheck: 'false', autocomplete: 'off' });
+    input.setAttribute('aria-label', s.name);
+    input.disabled = pinned;
+    if (!pinned) transportInputs[s.name] = { input: input, was: s.value };
+    var change = {};
+    change[s.name] = null;
+    var reset = h('button', { type: 'button', class: 'small', text: t('transport.reset'), onclick: function () { saveTransport(change); } });
+    reset.disabled = s.source !== 'stored';
+    return h('tr', {},
+      h('td', {}, h('code', { text: s.name }), s.shared ? h('div', { class: 'hint', text: t('transport.shared') }) : null),
+      h('td', {}, input, pinned ? h('div', { class: 'hint', text: t('transport.pinned', s.name) }) : null),
+      h('td', { text: s.default }),
+      h('td', { text: transportSource(s) }),
+      h('td', { class: 'actions' }, reset));
+  });
+  table($('#transport-table'), [t('transport.setting'), t('transport.value'), t('transport.default'), t('transport.from'), ''], rows, '');
+}
+
+// loadTransport reads the node's transport settings and draws them. It runs when the
+// settings page is opened and after a change, not with every refresh: a value that is
+// being typed must stay.
+function loadTransport() {
+  return api('GET', 'transport').then(function (res) {
+    $('#transport-card').hidden = false;
+    $('#transport-error').textContent = '';
+    renderTransport((res && res.settings) || []);
+  }, function () { $('#transport-card').hidden = true; });
+}
+
+// saveTransport sends a change: a name with a value sets it, a name with null puts the
+// setting back to its default.
+function saveTransport(set) {
+  $('#transport-error').textContent = '';
+  return api('PUT', 'transport', { set: set }).then(function (res) {
+    renderTransport((res && res.settings) || []);
+    toast(t('transport.saved'));
+  }).catch(function (e) { $('#transport-error').textContent = e.message; });
+}
+
+function saveTransportChanges() {
+  var set = {}, n = 0;
+  Object.keys(transportInputs).forEach(function (name) {
+    var x = transportInputs[name], v = x.input.value.trim();
+    if (v !== x.was) { set[name] = v; n++; }
+  });
+  if (n === 0) { toast(t('transport.unchanged')); return; }
+  saveTransport(set);
+}
+
 // ---------- pages, refresh, login ----------
 
 var renderers = { overview: renderOverview, peers: renderPeers, rules: renderRules, sessions: renderSessions, settings: function () {} };
@@ -628,6 +714,7 @@ function setPage(name) {
     $('#set-name').value = state.status.node.name;
     $('#set-version').textContent = state.status.version;
   }
+  if (name === 'settings' && state.loggedIn) loadTransport();
   refresh();
 }
 
@@ -694,6 +781,7 @@ function setLang(l) {
   applyI18n();
   state.detailKey = '';
   if (state.loggedIn) renderers[state.page]();
+  if (state.loggedIn && state.page === 'settings') loadTransport();
 }
 
 function start() {
@@ -734,6 +822,7 @@ function start() {
       return refresh();
     }).catch(function (err) { toast(err.message, true); });
   });
+  $('#transport-save').addEventListener('click', saveTransportChanges);
   $('#logout').addEventListener('click', function () {
     api('POST', 'logout').catch(function () { /* the login is gone either way */ }).then(showLogin);
   });

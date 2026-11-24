@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -59,7 +61,7 @@ func call(s *Server, method, path, body string, cookie *http.Cookie, header bool
 
 func login(t *testing.T, s *Server, password, from string) (*httptest.ResponseRecorder, *http.Cookie) {
 	t.Helper()
-	w := call(s, "POST", PathLogin, fmt.Sprintf(`{"password":%q}`, password), nil, false, from)
+	w := call(s, "POST", PathLogin, fmt.Sprintf(`{"password":%q}`, password), nil, true, from)
 	for _, c := range w.Result().Cookies() {
 		if c.Name == SessionCookie {
 			return w, c
@@ -314,5 +316,260 @@ func TestLoginAnswersHoldNoSecret(t *testing.T) {
 		if strings.Contains(all.String(), secret) {
 			t.Errorf("an answer holds %q", secret)
 		}
+	}
+}
+
+// A login needs the request header that a page of another site cannot make a browser
+// send. Without it the login is refused before the password is looked at, so such
+// requests do not count as wrong passwords and close the login to nobody.
+func TestLoginNeedsTheHeader(t *testing.T) {
+	s, _ := newUIServer(t)
+	const a = "192.0.2.1:1000"
+	for i := 0; i < 3*MaxLoginFailures; i++ {
+		w := call(s, "POST", PathLogin, `{"password":"wrong"}`, nil, false, a)
+		if w.Code != 403 || len(w.Result().Cookies()) != 0 {
+			t.Fatalf("a login without the header: %d", w.Code)
+		}
+	}
+	if w := call(s, "POST", PathLogin, `{"password":"secret word"}`, nil, false, a); w.Code != 403 {
+		t.Fatalf("the right password without the header: %d, want 403", w.Code)
+	}
+	s.cfg.UI.mu.Lock()
+	n := len(s.cfg.UI.failed)
+	s.cfg.UI.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d addresses have failures on record after logins without the header", n)
+	}
+	if w, c := login(t, s, "secret word", a); w.Code != 204 || c == nil {
+		t.Fatalf("a login with the header afterwards: %d", w.Code)
+	}
+}
+
+// When the record of failures is full, the address whose last wrong password is the
+// oldest gives way. The others stay closed out.
+func TestFullLoginRecordDropsTheOldest(t *testing.T) {
+	s, now := newUIServer(t)
+	addr := func(i int) string { return fmt.Sprintf("[2001:db8::%x]:1000", i+1) }
+	for i := 0; i < maxLoginFailed; i++ {
+		for k := 0; k < MaxLoginFailures; k++ {
+			if w, _ := login(t, s, "wrong", addr(i)); w.Code != 401 {
+				t.Fatalf("address %d, wrong password %d: %d", i, k, w.Code)
+			}
+		}
+		*now = now.Add(time.Millisecond)
+	}
+	for _, i := range []int{0, 1, maxLoginFailed - 1} {
+		if w, _ := login(t, s, "secret word", addr(i)); w.Code != 429 {
+			t.Fatalf("address %d is not closed out with the record full: %d", i, w.Code)
+		}
+	}
+	// one more address with a wrong password: the record has no room for it
+	if w, _ := login(t, s, "wrong", "192.0.2.77:1000"); w.Code != 401 {
+		t.Fatalf("a wrong password from a new address: %d", w.Code)
+	}
+	if w, c := login(t, s, "secret word", addr(0)); w.Code != 204 || c == nil {
+		t.Errorf("the address with the oldest failures was not let go: %d", w.Code)
+	}
+	for _, i := range []int{1, 2, maxLoginFailed / 2, maxLoginFailed - 1} {
+		if w, _ := login(t, s, "secret word", addr(i)); w.Code != 429 {
+			t.Errorf("address %d was let go with the oldest: %d, want 429", i, w.Code)
+		}
+	}
+	s.cfg.UI.mu.Lock()
+	n := len(s.cfg.UI.failed)
+	s.cfg.UI.mu.Unlock()
+	if n > maxLoginFailed {
+		t.Errorf("%d addresses on record, more than %d", n, maxLoginFailed)
+	}
+}
+
+// slowChecks makes the check of the password "slow" wait until the returned function is
+// called, and reports each check that has begun on the returned channel.
+func slowChecks(t *testing.T, u *UI) (release func(), began chan struct{}) {
+	t.Helper()
+	gate := make(chan struct{})
+	began = make(chan struct{}, 64)
+	u.check = func(hash, password string) bool {
+		if password == "slow" {
+			began <- struct{}{}
+			<-gate
+		}
+		return node.CheckPassword(hash, password)
+	}
+	var once bool
+	release = func() {
+		if !once {
+			once = true
+			close(gate)
+		}
+	}
+	t.Cleanup(release)
+	return release, began
+}
+
+// While the password of one address is being checked, another address logs in without
+// waiting for it, and a second login of the first address is sent away.
+func TestLoginDoesNotWaitForAnotherAddress(t *testing.T) {
+	s, _ := newUIServer(t)
+	release, began := slowChecks(t, s.cfg.UI)
+	const a, b = "192.0.2.1:1000", "192.0.2.2:1000"
+	done := make(chan int, 1)
+	go func() {
+		w, _ := login(t, s, "slow", a)
+		done <- w.Code
+	}()
+	<-began
+	got := make(chan int, 1)
+	go func() {
+		w, _ := login(t, s, "secret word", b)
+		got <- w.Code
+	}()
+	select {
+	case code := <-got:
+		if code != 204 {
+			t.Fatalf("the login of another address while one is being checked: %d", code)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the login of another address waited for the check that was running")
+	}
+	w, _ := login(t, s, "secret word", "192.0.2.1:2000")
+	if w.Code != 429 || w.Header().Get("Retry-After") == "" {
+		t.Fatalf("a second login of an address whose password is being checked: %d", w.Code)
+	}
+	release()
+	if code := <-done; code != 401 {
+		t.Fatalf("the slow login with a wrong password: %d", code)
+	}
+	if w, c := login(t, s, "secret word", a); w.Code != 204 || c == nil {
+		t.Fatalf("a login of the first address afterwards: %d", w.Code)
+	}
+}
+
+// No more than MaxLoginChecks passwords are checked at one time. One more login is told
+// to come back, and counts as no failure.
+func TestLoginChecksAreBounded(t *testing.T) {
+	s, _ := newUIServer(t)
+	release, began := slowChecks(t, s.cfg.UI)
+	done := make(chan int, MaxLoginChecks)
+	for i := 0; i < MaxLoginChecks; i++ {
+		go func() {
+			w, _ := login(t, s, "slow", fmt.Sprintf("192.0.2.%d:1000", i+1))
+			done <- w.Code
+		}()
+	}
+	for i := 0; i < MaxLoginChecks; i++ {
+		<-began
+	}
+	const late = "198.51.100.9:1000"
+	w, c := login(t, s, "secret word", late)
+	if w.Code != 503 || c != nil || w.Header().Get("Retry-After") == "" {
+		t.Fatalf("one login more than %d at one time: %d", MaxLoginChecks, w.Code)
+	}
+	release()
+	for i := 0; i < MaxLoginChecks; i++ {
+		if code := <-done; code != 401 {
+			t.Fatalf("a slow login with a wrong password: %d", code)
+		}
+	}
+	if w, c := login(t, s, "secret word", late); w.Code != 204 || c == nil {
+		t.Fatalf("the login that was sent away, tried again: %d", w.Code)
+	}
+}
+
+// Two nodes at two ports of one host: a browser keeps one set of cookies for the host,
+// whatever the port. The cookie of each login is named after the port, so that the
+// second login does not replace the first.
+func TestTwoNodesOnOneHostKeepTheirLogins(t *testing.T) {
+	a, _ := newUIServer(t)
+	b, _ := newUIServer(t)
+	sa, sb := httptest.NewServer(a), httptest.NewServer(b)
+	defer sa.Close()
+	defer sb.Close()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar}
+	request := func(method, base, path, body string) int {
+		t.Helper()
+		req, err := http.NewRequest(method, base+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set(RequestHeader, "1")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, base := range []string{sa.URL, sb.URL} {
+		if code := request("POST", base, PathLogin, `{"password":"secret word"}`); code != 204 {
+			t.Fatalf("login at %s: %d", base, code)
+		}
+	}
+	for _, base := range []string{sa.URL, sb.URL} {
+		if code := request("GET", base, PathStatus, ""); code != 200 {
+			t.Errorf("the status at %s after a login at each node: %d", base, code)
+		}
+	}
+	// the jar holds both, under two names, and sends both to each node
+	u, _ := url.Parse(sa.URL)
+	names := map[string]bool{}
+	for _, c := range jar.Cookies(u) {
+		names[c.Name] = true
+	}
+	ua, _ := url.Parse(sa.URL)
+	ub, _ := url.Parse(sb.URL)
+	wantA, wantB := SessionCookie+"_"+ua.Port(), SessionCookie+"_"+ub.Port()
+	if len(names) != 2 || !names[wantA] || !names[wantB] {
+		t.Errorf("cookies that go to the first node: %v, want %s and %s", names, wantA, wantB)
+	}
+	// logging out of one leaves the other
+	if code := request("POST", sa.URL, PathLogout, ""); code != 204 {
+		t.Fatalf("logout: %d", code)
+	}
+	if code := request("GET", sa.URL, PathStatus, ""); code != 401 {
+		t.Errorf("the status at the node that was logged out of: %d, want 401", code)
+	}
+	if code := request("GET", sb.URL, PathStatus, ""); code != 200 {
+		t.Errorf("the status at the other node: %d", code)
+	}
+}
+
+func TestSessionCookieName(t *testing.T) {
+	for host, want := range map[string]string{
+		"nas.example":        SessionCookie,
+		"nas.example:9850":   SessionCookie + "_9850",
+		"127.0.0.1:19850":    SessionCookie + "_19850",
+		"[2001:db8::1]:443":  SessionCookie + "_443",
+		"[2001:db8::1]":      SessionCookie,
+		"nas.example:":       SessionCookie,
+		"nas.example:9x":     SessionCookie,
+		"nas.example:123456": SessionCookie,
+		"":                   SessionCookie,
+	} {
+		if got := SessionCookieName(host); got != want {
+			t.Errorf("host %q: cookie %q, want %q", host, got, want)
+		}
+	}
+}
+
+// Over TLS the cookie of a login is marked for TLS only; without TLS it is not.
+func TestCookieIsSecureOverTLS(t *testing.T) {
+	s, _ := newUIServer(t)
+	if _, c := login(t, s, "secret word", ""); c == nil || c.Secure {
+		t.Fatalf("the cookie of a login without TLS: %+v", c)
+	}
+	s.cfg.UI.Secure = true
+	_, c := login(t, s, "secret word", "")
+	if c == nil || !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteStrictMode {
+		t.Fatalf("the cookie of a login over TLS: %+v", c)
+	}
+	w := call(s, "POST", PathLogout, "", c, true, "")
+	gone := w.Result().Cookies()
+	if w.Code != 204 || len(gone) != 1 || !gone[0].Secure || gone[0].MaxAge >= 0 {
+		t.Fatalf("logout over TLS: %d, cookies %+v", w.Code, gone)
 	}
 }

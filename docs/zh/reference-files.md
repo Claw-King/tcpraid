@@ -5,7 +5,9 @@
 | 参数 | 默认值 | 含义 |
 |---|---|---|
 | `-data DIR` | Linux 上是 `/var/lib/tcpraid`；macOS 和 Windows 见“数据目录”一节 | 数据目录；不存在时会创建(权限 0700) |
-| `-api ADDR` | `127.0.0.1:9850` | 本机 API 和网页界面的监听地址(明文 HTTP) |
+| `-api ADDR` | `127.0.0.1:9850` | 本机 API 和网页界面的监听地址(明文 HTTP，带 `-api-tls` 时是 HTTPS) |
+| `-api-tls` | 关闭 | 经 TLS 提供本机 API 和网页界面，用的是节点自己生成并存在数据目录里的证书。本机上的命令会自己跟上(见 `security.md`) |
+| `-api-cert FILE`、`-api-key FILE` | 无 | 一张证书和它的密钥(PEM)，用来经 TLS 提供本机 API 和网页界面，取代节点自己的那张 |
 | `-name NAME` | 它已有的名字 | 节点的名字。给了就给节点改名。不给，节点保留原来的名字。第一次启动时用主机名加上一个连字符和四个随机字符，例如 `nas-k3x9`，这样主机名相同的两台机器不会变成两个同名的节点。名字是 1 到 64 字节的可打印字符，两端不能有空格 |
 | `-listen ADDR` | 关闭 | 供其他节点连接的监听地址(TLS)。没有它，节点可以去加入别的节点，但别的节点不能来加入它 |
 | `-advertise HOST:PORT` | 无 | 其他节点连 `-listen` 时用的地址；会写进本节点生成的配对码。可以给多次 |
@@ -36,7 +38,7 @@
 日志的启动行会把实际生效的设置重复一遍：
 
 ```
-node 0.7.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+node 0.8.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
 transport window=128MB budget=256MB grace=20m0s hol=1s timeline=off maxrss=off
 tuned target=500ms
 ```
@@ -63,7 +65,7 @@ tuned target=500ms
 
 `tcpraid run` 的命令行上给出的设置在这个节点运行期间一直有效，`tcpraid transport set` 不能改它。用 `tcpraid transport set` 改的设置存在 `state.json` 里，重启之后仍然有效，除非下一次启动的命令行给了同一项设置。
 
-网页界面不显示这些设置，也不改它们。在网页界面里改一个对端或一条规则，它的传输层设置保持原样。
+从 0.8.0 版起，网页界面在“设置”页里显示节点的这些设置和每个值的来历，并且可以在那里修改，效果和 `tcpraid transport set` 一样。命令行上给出的设置在页面里同样改不了。对端和规则的设置显示在对端和规则那里，要用命令来改。在网页界面里改一个对端或一条规则，它的传输层设置保持原样。
 
 - 大小写成 `256MB`、`64KB`、`1GB`，或者一个字节数。时间写成 `3600s`、`500ms`、`15m`。
 - `-window` 是整数 MB，至少 1 MB。`-budget` 至少 1 MB。`-grace` 和 `-hol` 大于零。其余各项的范围在上面的表里。
@@ -116,6 +118,9 @@ Linux 上默认是 `/var/lib/tcpraid`。macOS 和 Windows 上是当前用户的�
 $ ls -la /var/lib/tcpraid
 drwx------  .
 -rw-------  api.addr
+-rw-r--r--  api.crt
+-rw-------  api.key
+-rw-------  api.tls
 -rw-------  api.token
 -rw-r--r--  identity.crt
 -rw-------  identity.key
@@ -132,6 +137,8 @@ drwx------  .
 | `api.token` | 本机 API 的访问令牌 |
 | `ui.password` | 网页界面密码的加盐哈希(PBKDF2-HMAC-SHA256)；绝不是密码本身 |
 | `api.addr` | 从本机访问 API 用的地址，每次启动时写入；各条命令会读它 |
+| `api.key`、`api.crt` | 带 `-api-tls` 启动过才有：一把 ECDSA P-256 私钥(PKCS#8，PEM)和它的自签名证书，API 和网页界面用它们提供。密钥只创建一次，之后绝不替换。证书有效期 800 天，启动时发现剩余不到 30 天、或者缺了某个名字，就为同一把密钥重新生成。主机名是其中一个名字，所以没有固定主机名的容器每次重建都会得到一张新证书，密钥不变 |
+| `api.tls` | 只在节点上一次启动时给 API 开了 TLS 才有：API 出示的那张证书，也就是节点自己的那张，或者 `-api-cert` 给的那张。各条命令会读它，只和持有它的密钥的 API 通信。不带 TLS 启动时这个文件会被删掉 |
 | `lock` | 空文件；节点运行期间锁着它 |
 
 - **一个数据目录上同一时间只能运行一个节点。** 在同一个目录上再执行一次 `tcpraid run` 会报错退出，什么都不会改变。节点运行期间不要删除 `lock` 文件。它不是残留物，没有它，第二个节点就可能在这个目录上启动起来。

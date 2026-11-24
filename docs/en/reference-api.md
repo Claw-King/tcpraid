@@ -28,7 +28,22 @@ Www-Authenticate: Bearer
 ```
 
 A browser that is logged in to the web page is authorized by its cookie
-instead (see "Login" at the end). The API is plain HTTP.
+instead (see "Login" at the end).
+
+The API is plain HTTP unless the node was started with `-api-tls` or with
+`-api-cert`. Then it is HTTPS on the same port, and a request without TLS is
+not served. The certificate that the API presents is in `api.tls` in the
+data directory:
+
+```
+$ curl --cacert /var/lib/tcpraid/api.tls -H "Authorization: Bearer $(cat /var/lib/tcpraid/api.token)" https://127.0.0.1:9850/api/v1/status
+```
+
+The certificate that the node makes for itself names `localhost`,
+`127.0.0.1`, `::1`, the host name, and the address of `-api` when that names
+one address. A program that reaches the API by another name needs a
+certificate of yours, given with `-api-cert`, and then calls the API by a
+name that certificate holds.
 
 Errors are JSON, `{"error": "..."}`. The status is `400` for a request that
 cannot be right, `404` for a path or a name that does not exist, `405` for a
@@ -45,10 +60,16 @@ that ran out of time.
 ### GET /api/v1/status
 
 ```
-{"version":"0.7.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.8.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
- "sessions":2,"peers":1,"rules":2}
+ "sessions":2,"peers":1,"rules":2,"listen":["0.0.0.0:9851"],"advertise":["nas-b.example:9851"]}
 ```
+
+`listen` and `advertise` came with version 0.8.0. `listen` holds the address
+at which the node takes connections of other nodes with TLS, as it is bound,
+and is empty for a node without `-listen`. `advertise` holds the addresses of
+`-advertise`, which go into a pairing code that is asked for without
+addresses. Both are lists, and a client of an older node finds neither.
 
 ### PUT /api/v1/node
 
@@ -146,7 +167,7 @@ code. The answer is the new peer, as below.
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.7.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.8.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
 `online` means that a control connection with the peer is up. `version` and
@@ -182,7 +203,7 @@ peer.
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.7.0",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.8.0",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 
@@ -199,7 +220,7 @@ is:
 ```
 $ curl -X PUT ... -d '{"transport":{"window":"8MB","grace":null}}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"9d875c73...b9a2cd07","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"","udp_dial":"","online":true,"version":"0.7.0","last_message":"2026-01-15T10:00:28.39632723Z",
+ "allow":"","udp_dial":"","online":true,"version":"0.8.0","last_message":"2026-01-15T10:00:28.39632723Z",
  "spares":2,"transport":{"window":"8MB"}}
 ```
 
@@ -222,7 +243,7 @@ $ curl -X PUT ... -d '{"subs":4}' http://127.0.0.1:9850/api/v1/peers/nas-a/paths
 {"created":false,"peer":{"name":"nas-a","fingerprint":"e5645f9b...7795ec86","addresses":["nas-a.example.org:9851"],
  "paired_at":"2026-01-15T10:00:20Z",
  "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":4}],
- "allow":"","udp_dial":"","online":true,"version":"0.7.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
+ "allow":"","udp_dial":"","online":true,"version":"0.8.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
 ```
 
 The `DELETE` removes the path and answers with the peer. A peer without that
@@ -471,15 +492,25 @@ HTTP/1.1 400 Bad Request
 
 ### POST /api/v1/login
 
-Body `{"password": "..."}`. Needs no token.
+Body `{"password": "..."}`. Needs no token. Since version 0.8.0 it needs the
+header `X-Tcpraid-Request: 1`, and without it the answer is `403` before the
+password is looked at.
 
 ```
 HTTP/1.1 204 No Content
-Set-Cookie: tcpraid_session=d4719741...; Path=/; Max-Age=43200; HttpOnly; SameSite=Strict
+Set-Cookie: tcpraid_session_9850=d4719741...; Path=/; Max-Age=43200; HttpOnly; SameSite=Strict
 ```
 
+Since version 0.8.0 the name of the cookie ends with the port of the `Host`
+header of the request, so that the logins of two nodes at two ports of one
+host stay apart. A request whose `Host` names no port gets the name
+`tcpraid_session`. Over TLS the cookie also has `Secure`.
+
 A wrong password is `401`. After five in a row from one address, the answer
-is `429` for a minute.
+is `429` for a minute. The node checks one password at a time for one
+address and four in all. A second login from an address whose password is
+being checked is `429`, and a login when four are being checked is `503`,
+both with `Retry-After: 1`.
 
 A request authorized by this cookie that changes something, that is, any
 method but `GET` and `HEAD`, must also carry the header

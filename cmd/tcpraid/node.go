@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -147,6 +148,9 @@ func runFlags(args []string, stderr io.Writer) (o runOptions, code int, done boo
 	fs.StringVar(&o.transparent, "transparent", "", "listen address for connections that an nftables or iptables redirect rule of the host sends to this node, to be routed by transparent rules (empty: off)")
 	fs.StringVar(&o.udpListen, "udp-listen", "", "listen address (UDP) for feedback from peers that are told to send it here (empty: off)")
 	spares := fs.Int("spares", defaultSpares, "spare connections: how many this node asks a peer that it has no path to for, and the most it keeps to a peer that asks (0 to "+strconv.Itoa(control.MaxSpares)+", and 0 for none). A session that the peer opens the connections of begins on one at once.")
+	fs.BoolVar(&o.apiTLS, "api-tls", false, "serve the local API and the web interface over TLS, with a certificate the node makes for itself and keeps in the data directory")
+	fs.StringVar(&o.apiCertFile, "api-cert", "", "certificate (PEM) that the local API and the web interface are served with over TLS, in the place of the node's own (needs -api-key)")
+	fs.StringVar(&o.apiKeyFile, "api-key", "", "private key (PEM) of -api-cert")
 	fs.BoolVar(&o.noUI, "no-ui", false, "switch the web interface off: its pages and the login answer 404, and the local API with its token stays")
 	fs.StringVar(&o.uiPasswordFile, "ui-password-file", "", "file with the password of the web interface (default: the environment variable "+uiPasswordEnv+", or else a password made at the first start and logged once)")
 	transport := defaultTransport()
@@ -182,6 +186,9 @@ type runOptions struct {
 	advertise              stringList
 	transparent, udpListen string
 	uiPasswordFile         string
+	apiTLS                 bool              // the API and the web interface are served over TLS
+	apiCertFile            string            // with this certificate in the place of the node's own (implies apiTLS)
+	apiKeyFile             string            // and its key
 	noUI                   bool              // no web interface
 	spares                 *int              // spare connections asked for and kept; nil: defaultSpares
 	transport              *transportOptions // nil: the defaults
@@ -195,6 +202,9 @@ func (o *runOptions) check() error {
 	}
 	if o.certFile != "" && o.listen == "" {
 		return errors.New("-cert is shown at -listen. Set -listen as well.")
+	}
+	if (o.apiCertFile == "") != (o.apiKeyFile == "") {
+		return errors.New("-api-cert and -api-key go together")
 	}
 	for _, a := range o.advertise {
 		if err := pair.CheckAddress(a); err != nil {
@@ -217,6 +227,60 @@ func (o *runOptions) check() error {
 		return o.transport.check()
 	}
 	return nil
+}
+
+// apiCertificate returns the certificate the API is served with over TLS: the one of
+// -api-cert, or else, with -api-tls, the node's own, which is kept in the data
+// directory dir and made there if need be. nil: the API is served without TLS.
+func (o *runOptions) apiCertificate(dir string) (*tls.Certificate, error) {
+	if o.apiCertFile != "" {
+		c, err := tls.LoadX509KeyPair(o.apiCertFile, o.apiKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("-api-cert / -api-key: %w", err)
+		}
+		if c.Leaf == nil {
+			// the parsed certificate is recorded for the commands
+			if c.Leaf, err = x509.ParseCertificate(c.Certificate[0]); err != nil {
+				return nil, fmt.Errorf("-api-cert: %w", err)
+			}
+		}
+		return &c, nil
+	}
+	if !o.apiTLS {
+		return nil, nil
+	}
+	// The names a program on this host uses for it. Whoever needs other names in the
+	// certificate gives one with -api-cert.
+	names := []string{"localhost", "127.0.0.1", "::1"}
+	if h, err := os.Hostname(); err == nil && hostName(h) {
+		names = append(names, h)
+	}
+	if host, _, err := net.SplitHostPort(o.apiAddr); err == nil {
+		if ip := net.ParseIP(host); ip != nil && !ip.IsUnspecified() {
+			names = append(names, ip.String())
+		} else if ip == nil && hostName(host) {
+			names = append(names, host)
+		}
+	}
+	c, err := node.APICertificate(dir, names, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("-api-tls: %w", err)
+	}
+	return &c, nil
+}
+
+// hostName reports whether s can stand in a certificate as a DNS name: letters, digits,
+// hyphens and dots, at most 253 characters.
+func hostName(s string) bool {
+	if s == "" || len(s) > 253 {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '.') {
+			return false
+		}
+	}
+	return true
 }
 
 // engineConfig returns the settings of the node's transport: the defaults, with what
@@ -306,16 +370,23 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 		ln    net.Listener
 		serve func(context.Context, net.Listener) error
 	}
+	// The certificate of the API, when it is served over TLS: the one of -api-cert, or
+	// the node's own. It is read or made before anything is bound.
+	apiCert, err := o.apiCertificate(n.Dir)
+	if err != nil {
+		return err
+	}
 	// Without a web interface no password is made, read or stored: the environment
 	// variable is ignored, and a hash that an earlier start stored is left as it is.
-	ui := &api.UI{Files: web.Files, Off: o.noUI}
+	ui := &api.UI{Files: web.Files, Off: o.noUI, Secure: apiCert != nil}
 	if !o.noUI {
 		if ui.PasswordHash, err = uiPassword(n.Dir, o.uiPasswordFile); err != nil {
 			return err
 		}
 	}
-	apiSrv := api.New(api.Config{Version: version, Token: n.Token, Node: svc, Engine: e, Rules: rules, UI: ui})
-	listeners := []*listener{{flag: "-api", addr: o.apiAddr, serve: apiSrv.Serve}}
+	// the API is served by a function that is set once the addresses are bound,
+	// because its status reports them
+	listeners := []*listener{{flag: "-api", addr: o.apiAddr}}
 	if o.listen != "" {
 		listeners = append(listeners, &listener{flag: "-listen", addr: o.listen, serve: lsrv.ServeTLS})
 	}
@@ -347,8 +418,33 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 		}
 		bound["-udp-listen"] = o.udpListen
 	}
-	// recorded where "tcpraid status" finds it: the address actually bound (the port may
-	// have been left to the system), in a form that connects from this host
+	apiConfig := api.Config{Version: version, Token: n.Token, Node: svc, Engine: e, Rules: rules, UI: ui, Advertise: o.advertise}
+	if o.listen != "" {
+		apiConfig.Listen = []string{bound["-listen"]}
+	}
+	apiSrv := api.New(apiConfig)
+	listeners[0].serve = apiSrv.Serve
+	if apiCert != nil {
+		// TLS 1.2 as well as 1.3: the page is for browsers, not only for this program
+		tc := &tls.Config{Certificates: []tls.Certificate{*apiCert}, MinVersion: tls.VersionTLS12}
+		listeners[0].serve = func(ctx context.Context, ln net.Listener) error {
+			return apiSrv.Serve(ctx, tls.NewListener(ln, tc))
+		}
+	}
+	// Recorded where the commands on this host find it. First whether the API speaks
+	// TLS and with which certificate, so that no command sends the token without TLS to
+	// an address that has just been recorded for a node with TLS.
+	if apiCert != nil {
+		err = node.WriteAPITLS(n.Dir, apiCert.Leaf)
+	} else {
+		err = node.RemoveAPITLS(n.Dir)
+	}
+	if err != nil {
+		closeAll()
+		return err
+	}
+	// the address actually bound (the port may have been left to the system), in a
+	// form that connects from this host
 	if err := node.WriteAPIAddr(n.Dir, reachableAddr(listeners[0].ln.Addr())); err != nil {
 		closeAll()
 		return err
@@ -373,9 +469,21 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 		if a.IP.IsUnspecified() {
 			host = "127.0.0.1" // every address of this machine: its own is the one sure to work
 		}
-		log.Printf("web interface: open http://%s in a browser on this machine", net.JoinHostPort(host, strconv.Itoa(a.Port)))
+		scheme := "http"
+		if apiCert != nil {
+			scheme = "https"
+		}
+		log.Printf("web interface: open %s://%s in a browser on this machine", scheme, net.JoinHostPort(host, strconv.Itoa(a.Port)))
 	}
-	if a, ok := listeners[0].ln.Addr().(*net.TCPAddr); ok && !a.IP.IsLoopback() {
+	switch {
+	case apiCert != nil && o.apiCertFile != "":
+		log.Printf("the API at %s is served over TLS with the certificate of -api-cert. SHA-256 fingerprint of the certificate: %s", bound["-api"], node.CertificateSHA256(apiCert.Leaf))
+	case apiCert != nil:
+		// what a person compares with the certificate their browser shows them before
+		// they accept it
+		log.Printf("the API at %s is served over TLS with a certificate the node made for itself, which no browser knows, so a browser warns before it shows the page. SHA-256 fingerprint of the certificate: %s", bound["-api"], node.CertificateSHA256(apiCert.Leaf))
+	}
+	if a, ok := listeners[0].ln.Addr().(*net.TCPAddr); ok && !a.IP.IsLoopback() && apiCert == nil {
 		if o.noUI {
 			log.Printf("the API at %s is plain HTTP and reachable from other hosts. Use it on a network you trust, or put a reverse proxy with TLS in front.", a)
 		} else {
@@ -476,27 +584,75 @@ func cmdStatus(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// nodeAPI is how a command on this host reaches the API of a node: where it is, the
+// token, and a client that talks to that node and to nothing else.
+type nodeAPI struct {
+	base   string // "http://HOST:PORT" or "https://HOST:PORT"
+	addr   string
+	token  string
+	client *http.Client
+	close  func()
+}
+
+// openAPI reads, from the files the node keeps in its data directory, where the API is,
+// the token, and whether the API is served over TLS. With TLS the client accepts one
+// certificate only: the one the node recorded in the data directory, by its key.
+// Nothing is sent, the token least of all, to an API that presents another.
+func openAPI(dataDir string, timeout time.Duration) (*nodeAPI, error) {
+	token, err := node.ReadToken(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	addr, err := node.ReadAPIAddr(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	// no proxy from the environment: the token goes to the node and nowhere else
+	tr := &http.Transport{Proxy: nil}
+	a := &nodeAPI{base: "http://" + addr, addr: addr, token: token, close: tr.CloseIdleConnections}
+	switch cert, err := node.ReadAPITLS(dataDir); {
+	case err == nil:
+		want := node.FingerprintBytes(cert)
+		a.base = "https://" + addr
+		tr.TLSClientConfig = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			// The certificate is not checked against the authorities of the system or
+			// against a name: it has to be the one in the data directory, which is
+			// checked here, before the handshake ends and anything is sent.
+			InsecureSkipVerify: true,
+			VerifyConnection: func(cs tls.ConnectionState) error {
+				if len(cs.PeerCertificates) == 0 {
+					return errors.New("the API presented no certificate")
+				}
+				if got := node.FingerprintBytes(cs.PeerCertificates[0]); got != want {
+					return fmt.Errorf("the API at %s presents another certificate than %s holds. Nothing was sent to it.", addr, node.APITLSFile)
+				}
+				return nil
+			},
+		}
+	case !errors.Is(err, os.ErrNotExist):
+		return nil, err
+	}
+	a.client = &http.Client{Transport: tr, Timeout: timeout}
+	return a, nil
+}
+
 // queryStatus asks the node whose data directory is dataDir for its status: the token
 // and the API address are read from files the node keeps there. It returns the decoded
 // status and the answer as received.
 func queryStatus(dataDir string) (*api.Status, []byte, error) {
-	token, err := node.ReadToken(dataDir)
+	a, err := openAPI(dataDir, 5*time.Second)
 	if err != nil {
 		return nil, nil, err
 	}
-	addr, err := node.ReadAPIAddr(dataDir)
+	defer a.close()
+	addr := a.addr
+	req, err := http.NewRequest(http.MethodGet, a.base+api.PathStatus, nil)
 	if err != nil {
 		return nil, nil, err
 	}
-	req, err := http.NewRequest(http.MethodGet, "http://"+addr+api.PathStatus, nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	// no proxy from the environment: the token goes to the node and nowhere else
-	tr := &http.Transport{Proxy: nil}
-	defer tr.CloseIdleConnections()
-	resp, err := (&http.Client{Transport: tr, Timeout: 5 * time.Second}).Do(req)
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	resp, err := a.client.Do(req)
 	if err != nil {
 		return nil, nil, err
 	}
