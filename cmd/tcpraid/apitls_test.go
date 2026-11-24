@@ -247,7 +247,9 @@ func TestAPIWithAGivenCertificate(t *testing.T) {
 	if err := os.WriteFile(junk, []byte("junk"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err = runNodeWith(t.Context(), runOptions{dataDir: t.TempDir(), apiAddr: "127.0.0.1:0", apiCertFile: junk, apiKeyFile: junk})
+	// the node is given a name: where the test runs, the host name may be one that no
+	// node can take
+	err = runNodeWith(t.Context(), runOptions{dataDir: t.TempDir(), name: "alpha", apiAddr: "127.0.0.1:0", apiCertFile: junk, apiKeyFile: junk})
 	if err == nil || !strings.Contains(err.Error(), "-api-cert") {
 		t.Errorf("a certificate file that is none: %v", err)
 	}
