@@ -14,6 +14,8 @@
 | `-listen-plain ADDR` | off | listen address for peers without TLS, for paths of the tier `off` |
 | `-cert FILE`, `-key FILE` | none | a certificate and its key (PEM) for peers that use the `owncert` tier; needs `-listen`. The node logs the fingerprint of the certificate's key at start |
 | `-transparent ADDR` | off | listen address for connections that the host redirects to the node; transparent rules decide where they go. Linux only |
+| `-redirect MODE` | off | the node installs the redirect rules for its transparent rules with the `nft` program of the host, and removes them when it stops. `MODE` is `forwarded`, `local` or `both`. Linux only, with `-transparent`. See "Redirect rules installed by the node" |
+| `-redirect-print` | off | with `-redirect`: the node logs the rules it would give `nft`, at the start and whenever its rules change, and installs none |
 | `-udp-listen ADDR` | off | listen address (UDP) for feedback from peers that are told to send it here |
 | `-ui-password-file FILE` | none | file with the password of the web page |
 | `-no-ui` | off | switches the web page off. Its files and the login answer `404` and no password is made. The API with its token works as before |
@@ -38,7 +40,7 @@
 The start-up lines of the log repeat what is in effect:
 
 ```
-node 0.8.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+node 0.9.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
 transport window=128MB budget=256MB grace=20m0s hol=1s timeline=off maxrss=off
 tuned target=500ms
 ```
@@ -133,6 +135,64 @@ What each setting changes, and the figure in the log that belongs to it:
 | `-fbevery` | sends fewer reports, and the sending node learns later what arrived | reports take a noticeable share of a slow return direction |
 | `-coalesce` | waits longer to fill a chunk | an application sends small pieces and waits for an answer to each. `0s` sends each piece without waiting |
 
+### Redirect rules installed by the node
+
+A transparent rule takes the connections that the host redirects to the
+node's transparent listener. Without `-redirect` you write the redirect
+rules of the host yourself (`install-binary.md`). With `-redirect`, since
+version 0.9.0, the node writes them for its enabled transparent rules and
+keeps them in line when those rules change:
+
+```
+# tcpraid run -transparent :9800 -redirect forwarded ...
+# tcpraid rules add lan -peer nas-b -match 198.51.100.0/24:5000
+# nft list table inet tcpraid
+table inet tcpraid {
+	chain prerouting {
+		type nat hook prerouting priority dstnat - 10; policy accept;
+		ip daddr 198.51.100.0/24 tcp dport 5000 redirect to :9800
+	}
+}
+```
+
+| `MODE` | Connections that are redirected | Chain |
+|---|---|---|
+| `forwarded` | those that pass through this host on their way, as on a router | hook `prerouting` |
+| `local` | those that programs on this host open | hook `output` |
+| `both` | both kinds | both chains |
+
+- **One table, and nothing else.** The node writes the table `tcpraid` of
+  the family `inet` and reads or changes no other table. At a start it
+  replaces a table of that name that is already there. When it stops it
+  deletes the table. A node that is killed cannot do that: the table stays,
+  and the connections it redirects find no listener until the node runs
+  again or you delete the table with `nft delete table inet tcpraid`.
+- **Where the node's chains stand among others.** They have the priority
+  -110. The `nft` manual says that chains of one hook are traversed in
+  ascending order of priority, and gives -100 as the standard priority of
+  destination NAT (`dstnat`), so the node's chains come before chains at
+  that standard priority.
+- **The listener has to be where the connections arrive.** The rules use
+  the `redirect` statement, which the `nft` manual describes as a form of
+  destination NAT that "always translates the destination address to the
+  local host's one". A transparent listener on every address, as in
+  `-transparent :9800`, receives them.
+- **The node's own connections.** With `local` and `both`, the first rule of
+  the `output` chain lets pass every connection of a process that runs as
+  the same user as the node. Without it, a connection that the node opens
+  to a destination could be redirected back to the node. Programs that run
+  as that same user are therefore not redirected either. Run the node as a
+  separate user, as the systemd unit in `deploy/` does, when programs on
+  the host are to be redirected.
+- **What it needs.** Linux, the program `nft` in the node's `PATH`, and the
+  capability `CAP_NET_ADMIN`. Without one of them a node that is started
+  with `-redirect` ends with a message that says which is missing. The
+  container image holds no `nft`. The systemd unit in `deploy/` gives the
+  node no capability at all, so add `CAP_NET_ADMIN` to the unit's two
+  capability lines before you use `-redirect` with it.
+- `-redirect-print` shows what the node would give `nft` without installing
+  anything, which needs neither `nft` nor the capability.
+
 ### The password of the web page
 
 Where it comes from, in this order:
@@ -217,7 +277,9 @@ drwx------  .
   The same goes for a rule with a `-dial` other than `auto`, which version
   0.5.0 and older do not take, and for a transport setting stored for the
   node, a peer or a rule, which version 0.6.0 and older do not take. Take
-  such a setting off with the word `default` in the place of its value.
+  such a setting off with the word `default` in the place of its value. A
+  SOCKS5 rule is the newest case: version 0.8.0 and older do not take a file
+  that holds one, so remove such rules before you go back.
 
 ## Ports at a glance
 
@@ -227,6 +289,7 @@ drwx------  .
 | 9851 TCP | `-listen` | other nodes, TLS |
 | any TCP | `-listen-plain` | other nodes, tier `off` |
 | any TCP | a rule's listen address | applications |
+| any TCP, 1080 by custom | a SOCKS5 rule's address | applications that speak SOCKS5 |
 | any TCP | `-transparent` | redirected connections |
 | any UDP | `-udp-listen` | feedback from peers |
 

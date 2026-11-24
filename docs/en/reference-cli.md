@@ -39,7 +39,7 @@ after telling its peers and resetting the application connections it carries.
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.8.0 (wire protocol 1)
+version      0.9.0 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -92,7 +92,7 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.8.0, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.9.0, last heard 2026-01-15T10:00:05Z
 spares       2 connections wait for a session to begin on them
 
 PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS  MARK
@@ -316,7 +316,7 @@ $ tcpraid rules remove rsync
 rule rsync removed. Connections it carries now run to their end.
 ```
 
-`rules add NAME -peer PEER` with either
+`rules add NAME -peer PEER` with one of
 
 - `-listen IP:PORT[-PORT] -dest HOST:PORT[-PORT]`: a fixed rule. The IP of
   `-listen` may be left out, as in `:9801`, which means every address. An
@@ -331,6 +331,9 @@ rule rsync removed. Connections it carries now run to their end.
   `-transparent`. The networks are in CIDR form with an optional port or
   range, separated by commas, as in
   `192.0.2.0/24:873,[2001:db8::/32]:5000-5010`.
+- `-socks [IP]:PORT`: a SOCKS5 rule, since version 0.9.0. The node listens
+  there for SOCKS5 clients, and each connection goes to the destination its
+  client asks for, as seen from the peer. See "SOCKS5 rules" below.
 
 `-disabled` stores the rule switched off. A node has at most 256 rules, and a
 rule's name is up to 64 bytes without spaces.
@@ -434,6 +437,72 @@ A rule whose destination is a host name also says when the name gave no
 address: the peer does not know the name, the peer is not connected, its
 allow list holds none of the name's addresses, or it runs a version that does
 not look names up.
+
+### SOCKS5 rules
+
+```
+$ tcpraid rules add web -peer nas-a -socks :1080
+rule web added: listening
+
+$ tcpraid rules
+NAME  TAKES                     PEER   DESTINATION           SESSIONS  STATE
+web   SOCKS5 on 127.0.0.1:1080  nas-a  (as the client asks)  0         listening
+
+$ curl --socks5-hostname 127.0.0.1:1080 http://files.lan:8080/big.bin -o big.bin
+```
+
+A SOCKS5 rule has no destination. A program that speaks SOCKS5 connects to
+the rule and names the destination in its request, and the node carries that
+connection through the peer. `tcpraid sessions` shows each connection with
+the destination it went to.
+
+- **The address.** `-socks :1080`, or `-socks 1080`, listens on the loopback
+  address `127.0.0.1`, where only programs on the same host reach it. To
+  listen elsewhere, write the address, as in `-socks 192.0.2.5:1080`. A rule
+  listens on one port.
+- **No client is asked who it is.** The rule takes the method "no
+  authentication" and no other. Whoever can connect to its port reaches,
+  through the peer, every destination that the peer's allow list lets this
+  node reach. The command says so when a rule is added on an address that is
+  not loopback, and the node says so in its log when the rule begins to
+  listen.
+- **What a client can ask for.** The command CONNECT, to an IPv4 address, an
+  IPv6 address or a domain name. A domain name is looked up by the peer, like
+  the host name of a fixed rule's destination, and needs version 0.4.0 or
+  later on the peer. The commands BIND and UDP ASSOCIATE are refused.
+- **The allow list holds.** At the peer the destination is held against the
+  allow list that the peer keeps for this node, exactly as for a fixed rule.
+- `-paths`, `-subs`, `-dial` and the transport settings work as for a fixed
+  rule.
+
+The node answers a request with one of these reply codes of SOCKS5:
+
+| Code | When |
+|---|---|
+| 0, succeeded | the connection to the destination began |
+| 2, connection not allowed by ruleset | the peer's allow list does not let the destination through |
+| 4, host unreachable | the peer could not connect to the destination, or could not find the address of the name |
+| 7, command not supported | the request is not CONNECT |
+| 8, address type not supported | the address is none of the three kinds |
+| 1, general SOCKS server failure | everything else: the peer is not connected, the peer is too old to look a name up, the name cannot be a host name, the port is 0. `tcpraid rules` shows the reason |
+
+The peer tells this node immediately that it took a connection, and tells it
+only afterwards if it could not connect to the destination. So the node
+answers "succeeded" as soon as data arrives from the destination, or 150
+milliseconds after the peer took the connection if the peer has reported no
+failure by then. A destination that refuses, and one that the allow list
+does not hold, are usually reported within that time and get their code.
+When the report comes later, they show like the next case. A
+destination that does not answer at all is reported later, and the client
+then sees a connection that began and is reset.
+
+A client has 10 seconds from connecting to the end of its request, and a
+rule keeps at most 64 clients in that state. A further one is closed
+immediately.
+
+A SOCKS5 rule is not a path of the type `socks5`. The rule is a way into the
+node for applications. The path type is a way for the node to reach its peer
+through a SOCKS5 proxy (`peers path`).
 
 ## sessions
 
@@ -551,9 +620,69 @@ and so is a value outside the range of its setting. `-json` on
 (`reference-api.md`). A node that runs a version before 0.7.0 answers both
 commands with a message that says so.
 
+## connect
+
+```
+$ echo hello | tcpraid connect -peer nas-a 192.0.2.10:7
+hello
+
+$ ssh -o ProxyCommand='tcpraid connect -peer nas-a %h:%p' admin@192.0.2.10
+```
+
+`tcpraid connect -peer PEER HOST:PORT` opens one connection to `HOST:PORT` as
+seen from the peer and puts it on the standard input and output of the
+command, since version 0.9.0. The destination can also be written as two
+arguments, `HOST PORT`, which suits an IPv6 address. `HOST` is an IP address
+or a host name. The peer looks a host name up and needs version 0.4.0 or
+later for that.
+
+The command goes through the node on the same host, by its API, and reads
+the token from the data directory like the other commands (`-data DIR`). The
+connection is one session, with the transport settings of the peer and the
+node. At the peer the destination is held against the allow list that the
+peer keeps for this node.
+
+The command writes the data from the destination to its standard output and
+nothing else. What it has to say goes to its standard error. It ends when
+both directions have ended. When its input ends, it tells the destination so
+and goes on until the destination's side ends as well. When the
+destination's side ends first, it closes its standard output and goes on
+sending until its input ends.
+
+| Exit status | Meaning |
+|---|---|
+| 0 | the data from the destination ended completely, and the input ended and the node took all of it |
+| 1 | the node could not be asked, or did not take the request: no node runs on the data directory, or the node is older than 0.9.0 |
+| 2 | the command line is wrong |
+| 3 | the node took the request, and no connection to the destination began. The reason is on the standard error: the peer is not connected, the allow list, the destination, the name |
+| 4 | the connection began and was cut off |
+
+The destination never reads the end of a complete stream after a part of the
+input. A cut reaches it as a reset. The status of the command says less than
+that. Status 0 says that the node took all of the input, which the node may
+still hold when the command ends. When the connection is cut off after that,
+the destination sees the reset and the command, which has ended, does not
+learn of it. That happens when the destination's side ended first, and when
+the destination ends its side before it has read everything.
+
+The same wait as for a SOCKS5 rule applies before the connection counts as
+begun, so a destination that does not answer at all can end with status 4
+and not 3.
+
+In a wrapper script, start the command with `exec`. Otherwise the script
+keeps the command's output open, and the program that reads it may not see
+the end when the destination's side ends first.
+
+OpenSSH runs a command to reach the server when its option `ProxyCommand`
+is set. Its manual says that the command "should read from its standard
+input and write to its standard output", and that `%h` stands for the remote
+host name and `%p` for the remote port. That is what the second example
+uses. The tokens are put in "without quoting or escaping of shell
+characters", so the quoting of the command line is yours to check.
+
 ## version
 
 ```
 $ tcpraid version
-tcpraid 0.8.0 (wire protocol 1)
+tcpraid 0.9.0 (wire protocol 1)
 ```

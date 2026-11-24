@@ -28,7 +28,7 @@ tcpraid version
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.8.0 (wire protocol 1)
+version      0.9.0 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -77,7 +77,7 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.8.0, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.9.0, last heard 2026-01-15T10:00:05Z
 spares       2 connections wait for a session to begin on them
 
 PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS  MARK
@@ -243,10 +243,11 @@ $ tcpraid rules remove rsync
 rule rsync removed. Connections it carries now run to their end.
 ```
 
-`rules add NAME -peer PEER`，后面跟下面两者之一：
+`rules add NAME -peer PEER`，后面跟下面三者之一：
 
 - `-listen IP:PORT[-PORT] -dest HOST:PORT[-PORT]`：固定规则。`-listen` 的 IP 可以不写，例如 `:9801`，表示所有地址。IPv6 地址要放在方括号里。两段端口长度相同，最多 1024 个端口，逐个端口对应。两条规则不能监听同一个地址的同一个端口。目的地可以写 IP 地址，也可以写主机名，例如 `-dest nas.lan:873`。目的地在对端的网络里，所以名字由对端解析，每条连接解析一次，连接去往对端给本节点设的允许列表放行的第一个地址。写主机名时，两个节点都要是 0.4.0 或更新的版本。
 - `-match NETWORKS`：透明规则，用于以 `-transparent` 启动的节点。网段写成 CIDR 形式，可带端口或端口段，用逗号分隔，例如 `192.0.2.0/24:873,[2001:db8::/32]:5000-5010`。
+- `-socks [IP]:PORT`：SOCKS5 规则，0.9.0 版新增。节点在这个地址上监听 SOCKS5 客户端，每条连接去往它的客户端请求的目的地，这个目的地是从对端那边看的。见下面的“SOCKS5 规则”。
 
 `-disabled` 把规则以停用状态保存。一个节点最多有 256 条规则，规则的名字最长 64 字节，不能有空格。
 
@@ -310,6 +311,44 @@ rsync  0.0.0.0:9801  nas-a  192.0.2.10:873  0         listening, last connection
 两个节点各自持有通往对方的路径、而本节点自己的路径不通时，新会话的连接改由对端打开，直到本节点的路径恢复(见 `connecting.md`)。这期间规则的状态是 `listening, the peer opens the connections while this node's path is down`。带 `-paths` 或 `-subs` 的规则不会这样切换，因为它写的名字是本节点的路径。
 
 目的地是主机名的规则，在名字没有解析出地址时也会写明原因，比如对端不认识这个名字、对端没有连上、对端的允许列表里没有这个名字的任何地址，或者对端的版本不解析名字。
+
+### SOCKS5 规则
+
+```
+$ tcpraid rules add web -peer nas-a -socks :1080
+rule web added: listening
+
+$ tcpraid rules
+NAME  TAKES                     PEER   DESTINATION           SESSIONS  STATE
+web   SOCKS5 on 127.0.0.1:1080  nas-a  (as the client asks)  0         listening
+
+$ curl --socks5-hostname 127.0.0.1:1080 http://files.lan:8080/big.bin -o big.bin
+```
+
+SOCKS5 规则没有目的地。会说 SOCKS5 的程序连到这条规则上，在请求里说出目的地，节点把这条连接经对端送过去。`tcpraid sessions` 里每条连接都带着它去的目的地。
+
+- **地址。** `-socks :1080` 或 `-socks 1080` 监听在回环地址 `127.0.0.1` 上，只有同一台主机上的程序连得到。要监听在别处，就把地址写出来，例如 `-socks 192.0.2.5:1080`。一条规则监听一个端口。
+- **不问客户端是谁。** 规则只接受“无认证”这一种方法。能连到这个端口的人，就能经对端访问对端的允许列表放行给本节点的每一个目的地。在非回环地址上添加规则时命令会提醒这一点，规则开始监听时节点也会在日志里写一遍。
+- **客户端能请求什么。** CONNECT 命令，目的地是 IPv4 地址、IPv6 地址或域名。域名由对端解析，和固定规则目的地里的主机名一样，要求对端是 0.4.0 或更新的版本。BIND 和 UDP ASSOCIATE 两个命令会被拒绝。
+- **允许列表照常生效。** 在对端那里，目的地要过对端为本节点保存的允许列表，和固定规则完全一样。
+- `-paths`、`-subs`、`-dial` 和传输层设置的用法与固定规则相同。
+
+节点用下面这些 SOCKS5 应答码回答请求：
+
+| 应答码 | 什么时候 |
+|---|---|
+| 0，成功 | 到目的地的连接开始了 |
+| 2，规则集不允许 | 对端的允许列表不放行这个目的地 |
+| 4，主机不可达 | 对端连不上目的地，或者找不到这个名字的地址 |
+| 7，不支持的命令 | 请求不是 CONNECT |
+| 8，不支持的地址类型 | 地址不是上面三种之一 |
+| 1，一般性失败 | 其余情况：对端没有连着，对端版本太旧不能解析名字，名字不可能是主机名，端口是 0。原因看 `tcpraid rules` |
+
+对端接下一条连接时会立刻告诉本节点，连不上目的地则要到事后才说。所以节点在目的地有数据到达时回答“成功”，或者在对端接下连接 150 毫秒之后、对端还没有报告失败时回答“成功”。目的地拒绝连接、目的地不在允许列表里，这两种情况通常在这段时间内报告，客户端会拿到对应的应答码。报告来得更晚时，表现和下面那种情况一样。目的地完全没有回应时，报告来得更晚，客户端看到的是一条已经开始、随后被重置的连接。
+
+客户端从连上到发完请求有 10 秒时间，一条规则同时最多留 64 个处在这个阶段的客户端，再多的立刻关掉。
+
+SOCKS5 规则和类型为 `socks5` 的路径是两回事。规则是应用进入节点的入口。那种路径类型是节点经一个 SOCKS5 代理去连对端的办法(见 `peers path`)。
 
 ## sessions
 
@@ -402,9 +441,40 @@ tcpraid transport set: invalid: the node was started with -grace 20m0s on its co
 
 和节点的 `-maxrss` 对不上的 `budget` 同样会被拒绝，超出范围的值也一样。`tcpraid transport` 带 `-json` 时打印 `GET /api/v1/transport` 的回答(见 `reference-api.md`)。节点运行的是 0.7.0 之前的版本时，这两条命令会用一句话说明这一点。
 
+## connect
+
+```
+$ echo hello | tcpraid connect -peer nas-a 192.0.2.10:7
+hello
+
+$ ssh -o ProxyCommand='tcpraid connect -peer nas-a %h:%p' admin@192.0.2.10
+```
+
+`tcpraid connect -peer PEER HOST:PORT` 打开一条到 `HOST:PORT` 的连接，把它接在命令的标准输入和标准输出上，目的地是从对端那边看的。0.9.0 版新增。目的地也可以写成两个参数 `HOST PORT`，写 IPv6 地址时方便。`HOST` 是 IP 地址或主机名。主机名由对端解析，要求对端是 0.4.0 或更新的版本。
+
+命令经同一台主机上的节点、通过它的 API 工作，和别的命令一样从数据目录读令牌(`-data DIR`)。这条连接是一个会话，用对端一层和节点一层的传输层设置。在对端那里，目的地要过对端为本节点保存的允许列表。
+
+命令只把目的地发来的数据写到标准输出，别的什么都不写。它要说的话写到标准错误。两个方向都结束了，命令才结束。输入结束时，它把这一点告诉目的地，然后继续，直到目的地那一侧也结束。目的地那一侧先结束时，它关掉自己的标准输出，继续发送，直到输入结束。
+
+| 退出状态 | 含义 |
+|---|---|
+| 0 | 目的地发来的数据完整结束，输入也已经结束并且节点全部收下了 |
+| 1 | 问不到节点，或者节点没有接受这个请求：这个数据目录上没有节点在运行，或者节点比 0.9.0 旧 |
+| 2 | 命令行写错了 |
+| 3 | 节点接受了请求，但到目的地的连接没有开始。原因在标准错误里：对端没有连着、允许列表、目的地、名字 |
+| 4 | 连接开始之后被切断 |
+
+目的地绝不会在只收到一部分输入之后读到“完整结束”，被切断时它收到的是重置。命令的退出状态说的比这少。状态 0 表示节点收下了全部输入，而命令结束时这些输入可能还在节点里。此后连接再被切断，目的地会看到重置，已经结束的命令却无从得知。目的地那一侧先结束时会这样，目的地还没读完就结束了它那一侧时也会这样。
+
+连接算作“已开始”之前的等待和 SOCKS5 规则相同，所以完全没有回应的目的地可能以状态 4 而不是 3 结束。
+
+在包装脚本里要用 `exec` 启动这条命令。否则脚本会一直拿着命令的输出，目的地那一侧先结束时，读输出的程序可能看不到结束。
+
+OpenSSH 设了 `ProxyCommand` 选项时，会运行一条命令来连接服务器。它的手册说这条命令 "should read from its standard input and write to its standard output"，并说 `%h` 代表远端主机名、`%p` 代表远端端口。第二个例子用的就是这些。手册还说这些记号在展开时 "without quoting or escaping of shell characters"，所以命令行的引号要你自己检查。
+
 ## version
 
 ```
 $ tcpraid version
-tcpraid 0.8.0 (wire protocol 1)
+tcpraid 0.9.0 (wire protocol 1)
 ```

@@ -36,7 +36,9 @@ func newPeerNode(t *testing.T, name string) *peerNode {
 	}
 	e := engine.New(engine.DefaultConfig())
 	dialer := &link.Dialer{Identity: n.Identity}
-	rules := &forward.Runtime{Node: n, Engine: e, Dialer: dialer, Version: "1.2.3-test"}
+	// a second for the peer to report that it could not connect a session, where a
+	// node waits 150 ms: a busy machine must not turn a refusal into a success
+	rules := &forward.Runtime{Node: n, Engine: e, Dialer: dialer, Version: "1.2.3-test", EntrySettle: time.Second}
 	svc := &link.Service{Node: n, Dialer: dialer, PeerRemoved: rules.PeerRemoved}
 	srv := &link.Server{
 		Identity:          n.Identity,

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/Claw-King/tcpraid/internal/api"
+	"github.com/Claw-King/tcpraid/internal/forward"
+	"github.com/Claw-King/tcpraid/internal/node"
 )
 
 func rulePath(name string) string { return api.PathRules + "/" + url.PathEscape(name) }
@@ -90,7 +92,7 @@ func setRuleEnabled(dataDir, name string, enabled bool, stdout io.Writer) error 
 		}
 		// the paths and sub-connections of the rule and who dials are not sent: the
 		// node keeps what the rule has
-		spec := api.RuleSpec{Name: r.Name, Listen: r.Listen, Destination: r.Destination, Match: r.Match, Peer: r.Peer, Enabled: &enabled}
+		spec := api.RuleSpec{Name: r.Name, Listen: r.Listen, Destination: r.Destination, Match: r.Match, Socks: r.Socks, Peer: r.Peer, Enabled: &enabled}
 		var out api.Rule
 		if err := apiCall(dataDir, http.MethodPut, rulePath(name), spec, &out, shortCall); err != nil {
 			return err
@@ -124,8 +126,11 @@ func cmdRules(args []string, stdout, stderr io.Writer) int {
 				fmt.Fprintln(tw, "NAME\tTAKES\tPEER\tDESTINATION\tSESSIONS\tSTATE")
 				for _, r := range list {
 					takes, dest := r.Listen, r.Destination
-					if r.Match != "" {
+					switch {
+					case r.Match != "":
 						takes, dest = "redirected to "+r.Match, "(as redirected)"
+					case r.Socks != "":
+						takes, dest = "SOCKS5 on "+r.Socks, "(as the client asks)"
 					}
 					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n", r.Name, takes, r.Peer, dest, r.Sessions, ruleState(r))
 				}
@@ -133,12 +138,13 @@ func cmdRules(args []string, stdout, stderr io.Writer) int {
 			},
 		},
 		"add": {
-			name: "rules add", usage: "NAME -peer PEER (-listen IP:PORT[-PORT] -dest IP:PORT[-PORT] | -match NETWORKS) [-paths NAMES] [-subs N] [-dial auto|self|peer|both] [-SETTING VALUE]...", nargs: 1,
+			name: "rules add", usage: "NAME -peer PEER (-listen IP:PORT[-PORT] -dest IP:PORT[-PORT] | -match NETWORKS | -socks [IP]:PORT) [-paths NAMES] [-subs N] [-dial auto|self|peer|both] [-SETTING VALUE]...", nargs: 1,
 			flags: func(fs *flag.FlagSet) {
 				fs.StringVar(&spec.Peer, "peer", "", "name of the peer the connections go to")
 				fs.StringVar(&spec.Listen, "listen", "", "fixed rule: where this node listens, IP:port or IP:first-last (without the IP: every address)")
 				fs.StringVar(&spec.Destination, "dest", "", "fixed rule: where the connections go at the peer's end, HOST:port or HOST:first-last, with an IP address or a host name that the peer looks up (same number of ports as -listen)")
 				fs.StringVar(&spec.Match, "match", "", "transparent rule: original destinations it takes, networks with optional ports such as 192.0.2.0/24:873,[2001:db8::/32]:5000-5010 (needs tcpraid run -transparent)")
+				fs.StringVar(&spec.Socks, "socks", "", "SOCKS5 rule: where this node listens for SOCKS5 clients, IP:port, or :port for the loopback address 127.0.0.1. Each connection goes to the destination its client asks for, as seen from the peer.")
 				fs.BoolVar(&disabled, "disabled", false, "store the rule switched off")
 				fs.StringVar(&paths, "paths", "", "names of the paths the rule's connections use, separated by commas, as the node that holds the paths calls them (\"\": every path)")
 				fs.IntVar(&subs, "subs", 0, "the most data sub-connections a connection of the rule keeps on each path (0: as many as the path has)")
@@ -174,9 +180,12 @@ func cmdRules(args []string, stdout, stderr io.Writer) int {
 				var out api.Rule
 				if err := apiCall(dataDir, http.MethodPost, api.PathRules, spec, &out, shortCall); err != nil {
 					return olderNode(err, map[string]string{"paths": "paths for a rule", "subs": "a number of sub-connections for a rule", "dial": "the dial of a rule",
-						"transport": "transport settings for a rule"})
+						"transport": "transport settings for a rule", "socks": "SOCKS5 rules"})
 				}
 				fmt.Fprintf(stdout, "rule %s added: %s\n", out.Name, ruleState(out))
+				if out.Socks != "" && !node.SocksLoopback(out.Socks) {
+					fmt.Fprintf(stdout, "Note: %s\n", forward.SocksOpenWarning(out.Socks, out.Peer))
+				}
 				if out.Enabled && !out.Listening {
 					return errors.New("the rule is stored but does not take connections")
 				}
@@ -202,7 +211,7 @@ func cmdRules(args []string, stdout, stderr io.Writer) int {
 					}
 					// what the request does not name stays as the node has it: paths,
 					// sub-connections, who dials, and the settings not given here
-					spec := api.RuleSpec{Name: r.Name, Listen: r.Listen, Destination: r.Destination, Match: r.Match, Peer: r.Peer, Enabled: &r.Enabled, Transport: ruleTransport}
+					spec := api.RuleSpec{Name: r.Name, Listen: r.Listen, Destination: r.Destination, Match: r.Match, Socks: r.Socks, Peer: r.Peer, Enabled: &r.Enabled, Transport: ruleTransport}
 					var out api.Rule
 					if err := apiCall(dataDir, http.MethodPut, rulePath(r.Name), spec, &out, shortCall); err != nil {
 						return olderNode(err, map[string]string{"transport": "transport settings for a rule"})

@@ -25,6 +25,7 @@
 //	DELETE /api/v1/rules/{name}           remove a rule; its sessions run to their end
 //	GET    /api/v1/transport              the transport settings of the node (Transport)
 //	PUT    /api/v1/transport              set some of them while the node runs (TransportUpdate -> Transport)
+//	POST   /api/v1/connect                carry this very connection to a destination at a peer (ConnectRequest); see connect.go
 //
 // A change of the rules takes effect at once and touches only the listeners of the
 // rules that changed.
@@ -77,6 +78,7 @@ const (
 	PathPeers        = "/api/v1/peers"
 	PathRules        = "/api/v1/rules"
 	PathTransport    = "/api/v1/transport"
+	PathConnect      = "/api/v1/connect"
 )
 
 // MaxBody is the largest request body the API reads.
@@ -115,6 +117,7 @@ type Rules interface {
 	TestPeer(ctx context.Context, name string, opt forward.TestOptions) (forward.TestResult, error)
 	Transport() []forward.TransportValue
 	SetTransport(change map[string]*string) ([]forward.TransportValue, error)
+	Connect(peer, host string, port int, c net.Conn, rd io.Reader, begin func() error) error
 }
 
 // Config is what a Server serves.
@@ -320,14 +323,19 @@ type PathSet struct {
 // In a PUT, either one that is absent stays as the stored rule has it, so that a
 // caller that does not know the two fields does not take them away.
 type RuleSpec struct {
-	Name        string    `json:"name"`
-	Listen      string    `json:"listen,omitempty"`
-	Destination string    `json:"destination,omitempty"`
-	Match       string    `json:"match,omitempty"`
-	Peer        string    `json:"peer"`
-	Enabled     *bool     `json:"enabled,omitempty"`
-	Paths       *[]string `json:"paths,omitempty"`
-	Subs        *int      `json:"subs,omitempty"`
+	Name        string `json:"name"`
+	Listen      string `json:"listen,omitempty"`
+	Destination string `json:"destination,omitempty"`
+	Match       string `json:"match,omitempty"`
+	// Socks (since 0.9.0) makes the rule a SOCKS5 rule: the address this node listens
+	// on for SOCKS5 clients, "IP:port", or ":port" for the loopback address
+	// 127.0.0.1. In a PUT that names none of listen, destination, match and socks,
+	// the rule keeps the ones it has.
+	Socks   string    `json:"socks,omitempty"`
+	Peer    string    `json:"peer"`
+	Enabled *bool     `json:"enabled,omitempty"`
+	Paths   *[]string `json:"paths,omitempty"`
+	Subs    *int      `json:"subs,omitempty"`
 	// Dial (since 0.6.0) says which node opens the sub-connections of the rule's
 	// connections: "auto", "self", "peer" or "both". In a POST, absent means "auto"; in
 	// a PUT, absent leaves the rule as it is.
@@ -345,11 +353,14 @@ type Rule struct {
 	Listen      string `json:"listen,omitempty"`
 	Destination string `json:"destination,omitempty"`
 	Match       string `json:"match,omitempty"`
-	Peer        string `json:"peer"`
-	Enabled     bool   `json:"enabled"`
-	Listening   bool   `json:"listening"`       // connections for the rule are being taken
-	Error       string `json:"error,omitempty"` // why not, or what went wrong with the last connection
-	Sessions    int    `json:"sessions"`        // live sessions the rule carries
+	// Socks (since 0.9.0): the address a SOCKS5 rule listens on; absent for the other
+	// kinds of rule.
+	Socks     string `json:"socks,omitempty"`
+	Peer      string `json:"peer"`
+	Enabled   bool   `json:"enabled"`
+	Listening bool   `json:"listening"`       // connections for the rule are being taken
+	Error     string `json:"error,omitempty"` // why not, or what went wrong with the last connection
+	Sessions  int    `json:"sessions"`        // live sessions the rule carries
 	// ErrorAt is when what Error says happened (since 0.3.0); absent where Error is a
 	// state that holds now and not an event.
 	ErrorAt *time.Time `json:"error_at,omitempty"`
@@ -505,6 +516,7 @@ func New(cfg Config) *Server {
 		add(http.MethodPost, PathPeers+"/{name}/test", s.testPeer)
 		add(http.MethodGet, PathTransport, s.getTransport)
 		add(http.MethodPut, PathTransport, s.putTransport)
+		add(http.MethodPost, PathConnect, s.connect)
 	}
 	return s
 }
@@ -980,7 +992,7 @@ func (s *Server) testPeer(w http.ResponseWriter, r *http.Request, arg map[string
 
 func apiRule(st forward.RuleStatus) Rule {
 	r := st.Rule
-	out := Rule{Name: r.Name, Listen: r.Listen, Destination: r.Destination, Match: r.Match, Peer: r.Peer, Enabled: r.Enabled,
+	out := Rule{Name: r.Name, Listen: r.Listen, Destination: r.Destination, Match: r.Match, Socks: r.Socks, Peer: r.Peer, Enabled: r.Enabled,
 		Listening: st.Listening, Error: st.Error, Sessions: st.Sessions, Subs: r.Subs, PeerDials: st.PeerDials, Dial: r.Dial}
 	if len(r.Paths) > 0 {
 		out.Paths = append([]string{}, r.Paths...)
@@ -1016,13 +1028,25 @@ func (s *Server) ruleStatus(w http.ResponseWriter, code int, name string) {
 
 // nodeRule makes the rule a request describes. was, if not nil, is the stored rule that
 // the request replaces: what the request does not say about paths, sub-connections, who
-// dials and the transport settings stays as was has it. An error is a transport setting
-// that cannot be stored.
+// dials and the transport settings stays as was has it, and so does what the rule takes
+// (listen and destination, match, or socks) when the request names none of the four:
+// a caller that does not know a kind of rule can still switch it on and off. An error
+// is a transport setting that cannot be stored.
 func nodeRule(spec RuleSpec, was *node.Rule) (node.Rule, error) {
-	r := node.Rule{Name: spec.Name, Listen: spec.Listen, Destination: spec.Destination, Match: spec.Match, Peer: spec.Peer,
+	r := node.Rule{Name: spec.Name, Listen: spec.Listen, Destination: spec.Destination, Match: spec.Match, Socks: spec.Socks, Peer: spec.Peer,
 		Enabled: spec.Enabled == nil || *spec.Enabled}
+	if r.Socks != "" {
+		// ":1080" is the loopback address. What cannot be read stays as it came, for
+		// the rule's check to refuse it.
+		if stored, err := node.SocksAddr(r.Socks); err == nil {
+			r.Socks = stored
+		}
+	}
 	if was != nil {
 		r.Paths, r.Subs, r.Dial, r.Transport = was.Clone().Paths, was.Subs, was.Dial, was.Transport.Clone()
+		if r.Listen == "" && r.Destination == "" && r.Match == "" && r.Socks == "" {
+			r.Listen, r.Destination, r.Match, r.Socks = was.Listen, was.Destination, was.Match, was.Socks
+		}
 	}
 	if spec.Transport != nil {
 		next, err := r.Transport.Merge(spec.Transport, false)

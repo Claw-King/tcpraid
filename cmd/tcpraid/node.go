@@ -36,6 +36,7 @@ import (
 	"github.com/Claw-King/tcpraid/internal/link"
 	"github.com/Claw-King/tcpraid/internal/node"
 	"github.com/Claw-King/tcpraid/internal/pair"
+	"github.com/Claw-King/tcpraid/internal/redirect"
 	"github.com/Claw-King/tcpraid/internal/web"
 )
 
@@ -78,9 +79,11 @@ func subcommand(args []string, stdout, stderr io.Writer) (code int, ok bool) {
 		return cmdSessions(args[1:], stdout, stderr), true
 	case "transport":
 		return cmdTransport(args[1:], stdout, stderr), true
+	case "connect":
+		return cmdConnect(args[1:], connectStdin, stdout, stderr), true
 	}
 	fmt.Fprintf(stderr, "tcpraid: unknown command %q\n"+
-		"commands: run, status, version, pair, peers, rules, sessions, transport (tcpraid COMMAND -h lists a command's flags)\n"+
+		"commands: run, status, version, pair, peers, rules, sessions, transport, connect (tcpraid COMMAND -h lists a command's flags)\n"+
 		"without a command, tcpraid takes the manual-mode flags (tcpraid -h)\n", args[0])
 	return 2, true
 }
@@ -151,6 +154,8 @@ func runFlags(args []string, stderr io.Writer) (o runOptions, code int, done boo
 	fs.BoolVar(&o.apiTLS, "api-tls", false, "serve the local API and the web interface over TLS, with a certificate the node makes for itself and keeps in the data directory")
 	fs.StringVar(&o.apiCertFile, "api-cert", "", "certificate (PEM) that the local API and the web interface are served with over TLS, in the place of the node's own (needs -api-key)")
 	fs.StringVar(&o.apiKeyFile, "api-key", "", "private key (PEM) of -api-cert")
+	fs.StringVar(&o.redirect, "redirect", "", "install the redirect rules for the transparent rules with the nft program of the host, in a table of the node, and remove them when the node stops: forwarded (connections that pass through this host), local (connections that programs on this host open) or both. Linux only, with -transparent, nft and the capability CAP_NET_ADMIN (empty: you install them)")
+	fs.BoolVar(&o.redirectPrint, "redirect-print", false, "with -redirect: log the rules that the node would give nft, at the start and whenever its rules change, and install none")
 	fs.BoolVar(&o.noUI, "no-ui", false, "switch the web interface off: its pages and the login answer 404, and the local API with its token stays")
 	fs.StringVar(&o.uiPasswordFile, "ui-password-file", "", "file with the password of the web interface (default: the environment variable "+uiPasswordEnv+", or else a password made at the first start and logged once)")
 	transport := defaultTransport()
@@ -190,6 +195,8 @@ type runOptions struct {
 	apiCertFile            string            // with this certificate in the place of the node's own (implies apiTLS)
 	apiKeyFile             string            // and its key
 	noUI                   bool              // no web interface
+	redirect               string            // which connections the node's own redirect rules take; empty: it installs none
+	redirectPrint          bool              // the rules are logged and not installed
 	spares                 *int              // spare connections asked for and kept; nil: defaultSpares
 	transport              *transportOptions // nil: the defaults
 	stats                  time.Duration     // how often the totals are logged; 0: never
@@ -222,6 +229,17 @@ func (o *runOptions) check() error {
 	}
 	if o.transparent != "" && !engine.TransparentSupported {
 		return errors.New("-transparent is only available on Linux, because it needs the host to redirect connections to the node")
+	}
+	switch {
+	case o.redirect == "" && o.redirectPrint:
+		return errors.New("-redirect-print goes with -redirect, which says which connections the rules take")
+	case o.redirect == "":
+	case !engine.TransparentSupported:
+		return errors.New("-redirect is only available on Linux, where the node installs the rules with nft")
+	case redirect.CheckMode(o.redirect) != nil:
+		return fmt.Errorf("-redirect: %w", redirect.CheckMode(o.redirect))
+	case o.transparent == "":
+		return errors.New("-redirect needs -transparent, the listener that the rules send the connections to")
 	}
 	if o.transport != nil {
 		return o.transport.check()
@@ -490,6 +508,35 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 			log.Printf("the web interface and the API at %s are plain HTTP and reachable from other hosts. Use them on a network you trust, or put a reverse proxy with TLS in front.", a)
 		}
 	}
+	// The redirect rules for the transparent rules, if the node is to install them:
+	// now, and whenever its rules change. They go when the node stops.
+	if o.redirect != "" {
+		_, p, _ := net.SplitHostPort(bound["-transparent"])
+		port, _ := strconv.Atoi(p)
+		inst := &redirect.Installer{Port: port, Mode: o.redirect, UID: os.Getuid()}
+		if o.redirectPrint {
+			inst.Print = func(script string) {
+				log.Printf("-redirect-print: the node would give nft these rules, and installs none:\n%s", script)
+			}
+		}
+		if err := inst.Apply(n.Rules); err != nil {
+			closeAll()
+			return fmt.Errorf("-redirect: %w", err)
+		}
+		if !o.redirectPrint {
+			log.Printf("redirect rules for the transparent rules are installed in the table inet %s, for %s connections. They are removed when the node stops.", redirect.Table, o.redirect)
+		}
+		rules.RulesChanged = func() {
+			if err := inst.Apply(n.Rules); err != nil {
+				log.Printf("the redirect rules could not be brought in line with the rules of the node: %v", err)
+			}
+		}
+		defer func() {
+			if err := inst.Remove(); err != nil {
+				log.Printf("the table inet %s could not be removed: %v", redirect.Table, err)
+			}
+		}()
+	}
 	// One listener that fails stops the others; the first error is the node's.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -592,6 +639,9 @@ type nodeAPI struct {
 	token  string
 	client *http.Client
 	close  func()
+	// tls is how a connection to the API is checked when the API is served over TLS;
+	// nil when it is not.
+	tls *tls.Config
 }
 
 // openAPI reads, from the files the node keeps in its data directory, where the API is,
@@ -633,6 +683,7 @@ func openAPI(dataDir string, timeout time.Duration) (*nodeAPI, error) {
 	case !errors.Is(err, os.ErrNotExist):
 		return nil, err
 	}
+	a.tls = tr.TLSClientConfig
 	a.client = &http.Client{Transport: tr, Timeout: timeout}
 	return a, nil
 }

@@ -60,7 +60,7 @@ that ran out of time.
 ### GET /api/v1/status
 
 ```
-{"version":"0.8.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.9.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
  "sessions":2,"peers":1,"rules":2,"listen":["0.0.0.0:9851"],"advertise":["nas-b.example:9851"]}
 ```
@@ -167,7 +167,7 @@ code. The answer is the new peer, as below.
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.8.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.9.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
 `online` means that a control connection with the peer is up. `version` and
@@ -203,7 +203,7 @@ peer.
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.8.0",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.9.0",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 
@@ -220,7 +220,7 @@ is:
 ```
 $ curl -X PUT ... -d '{"transport":{"window":"8MB","grace":null}}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"9d875c73...b9a2cd07","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"","udp_dial":"","online":true,"version":"0.8.0","last_message":"2026-01-15T10:00:28.39632723Z",
+ "allow":"","udp_dial":"","online":true,"version":"0.9.0","last_message":"2026-01-15T10:00:28.39632723Z",
  "spares":2,"transport":{"window":"8MB"}}
 ```
 
@@ -243,7 +243,7 @@ $ curl -X PUT ... -d '{"subs":4}' http://127.0.0.1:9850/api/v1/peers/nas-a/paths
 {"created":false,"peer":{"name":"nas-a","fingerprint":"e5645f9b...7795ec86","addresses":["nas-a.example.org:9851"],
  "paired_at":"2026-01-15T10:00:20Z",
  "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":4}],
- "allow":"","udp_dial":"","online":true,"version":"0.8.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
+ "allow":"","udp_dial":"","online":true,"version":"0.9.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
 ```
 
 The `DELETE` removes the path and answers with the peer. A peer without that
@@ -324,6 +324,8 @@ $ curl -X DELETE ... 'http://127.0.0.1:9850/api/v1/peers/nas-a?rules=remove'
 ```
 
 A transparent rule has `match` in the place of `listen` and `destination`.
+A SOCKS5 rule, since version 0.9.0, has `socks`, the address it listens on
+for SOCKS5 clients.
 `error` is present when the rule does not listen, or when its last connection
 could not be carried. `error_at`, added in version 0.3.0, is when that
 happened:
@@ -389,6 +391,11 @@ the transport settings of the rule's connections (see "Transport settings").
 A name that is no setting, a value outside its range, and a setting that all
 sessions of the node share are refused with `400`.
 
+Since version 0.9.0 the body `{"name", "peer", "socks"}` makes a SOCKS5 rule.
+`socks` is `"IP:port"`, or `":port"` for the loopback address `127.0.0.1`,
+and the answer holds the address as it is stored. `reference-cli.md`
+describes the rule under "SOCKS5 rules".
+
 ```
 $ curl -X POST ... -d '{"name":"pg","peer":"nas-a","listen":"127.0.0.1:15432","destination":"192.0.2.10:5432"}' http://127.0.0.1:9850/api/v1/rules
 HTTP/1.1 201 Created
@@ -413,7 +420,10 @@ does not take them away. An empty list for `paths`, `0` for `subs` and
 `"auto"` for `dial` take them away. Within `transport` each name counts for
 itself, so one with a value is set, one with `null` is taken off, and one
 that is not named stays. A change of `transport` alone leaves the rule's listeners
-as they are. Switching a rule off is a
+as they are. Since version 0.9.0, a body that names none of `listen`,
+`destination`, `match` and `socks` leaves those as the rule has them, so
+that a caller which does not know a kind of rule can still switch it on and
+off. Switching a rule off is a
 `PUT` with `"enabled": false`:
 
 ```
@@ -423,6 +433,48 @@ as they are. Switching a rule off is a
 ### DELETE /api/v1/rules/{name}
 
 Removes the rule. `204`. Connections it carries run to their end.
+
+## Connect
+
+### POST /api/v1/connect
+
+Since version 0.9.0. The node carries the very connection that the request
+came on to a destination at a peer, as one session. It is what
+`tcpraid connect` uses (`reference-cli.md`).
+
+Body `{"peer": "NAME", "host": "HOST", "port": N}`. `host` is an IP address
+or a host name, which the peer looks up. The request needs the token like
+every other, and a body that cannot be used is refused with `400` like any
+other. At the peer the destination is held against the allow list that the
+peer keeps for this node.
+
+When the connection to the destination begins, the node answers
+
+```
+HTTP/1.1 101 Switching Protocols
+Connection: Upgrade
+Upgrade: tcpraid-connect
+```
+
+and from the empty line after these headers the connection carries the data
+of the stream in both directions and nothing else. A stream that ended
+completely in both directions ends with an ordinary close of the
+connection. One that was cut off ends with a reset, and over TLS without
+the alert that closes a TLS connection, so that a program never reads the
+end of a stream that was cut off as the end of the data.
+
+When no connection to the destination begins, the node answers with the
+reason and closes:
+
+```
+HTTP/1.1 403 Forbidden
+
+{"error":"peer \"nas-a\" refused the destination 192.0.2.10:7, which is not in the allow list it keeps for this node. Change the list on that node with \"tcpraid peers set\"."}
+```
+
+`403` is the peer's allow list. Every other reason is `502`: the peer is not
+paired or not connected, the destination could not be reached, the name has
+no address.
 
 ## Transport settings
 

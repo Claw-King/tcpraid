@@ -98,12 +98,27 @@ address and port as the peer sees it. A rule can cover a **range of ports**,
 mapped port by port, for example `50000-50010` to `50000-50010`.
 
 A **transparent rule** is for a node on a router or gateway. The host
-redirects connections to the node with an nftables or iptables redirect rule
-that you set up yourself. tcpraid does not touch the host's packet filter. The
+redirects connections to the node with an nftables or iptables redirect rule.
+You set that rule up yourself, and tcpraid does not touch the host's packet
+filter, unless the node is started with `-redirect`: it then writes the
+redirect rules into a table of the node with `nft` (`reference-files.md`). The
 node reads where each connection was originally going, and a transparent rule
 says which original destinations go to which peer. The connections arrive at
 the same address at the peer's end. The applications keep using their normal
 addresses.
+
+A **SOCKS5 rule** listens for programs that speak SOCKS5. It has no
+destination: each program names the destination in its request, and the
+connection comes out at the peer's end and goes there. A destination that
+is given as a name is looked up by the peer.
+
+One connection can also be had without a rule. `tcpraid connect` asks the
+node on the same host for a connection to a destination at a peer and puts
+it on its standard input and output, for programs that run a command to
+reach a server.
+
+Whichever way a connection enters a node, the peer holds its destination
+against the allow list it keeps for that node.
 
 Rules are stored by the node and start with it. They can be added, changed,
 switched off and removed while the node runs. A change touches only that rule,

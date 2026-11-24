@@ -42,7 +42,7 @@ $ curl --cacert /var/lib/tcpraid/api.tls -H "Authorization: Bearer $(cat /var/li
 ### GET /api/v1/status
 
 ```
-{"version":"0.8.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.9.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
  "sessions":2,"peers":1,"rules":2,"listen":["0.0.0.0:9851"],"advertise":["nas-b.example:9851"]}
 ```
@@ -129,7 +129,7 @@ Cache-Control: no-store
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.8.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.9.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
 `online` 表示和这个对端之间有一条控制连接连着。`version` 和 `last_message` 在收到过对端的消息之后才出现。0.6.0 版新增的 `spares` 是两个节点之间正在等会话的备用连接数，没有时不出现。0.7.0 版新增的 `transport` 是本节点上和这个对端之间的会话用来取代节点设置的那些传输层设置，对端没有设时不出现(见“传输层的设置”)。加入到本节点的对端，在这里没有 `addresses`，也没有 `paths`。配对密钥绝不会出现在回答里，显示代理时不带它的用户名和密码。
@@ -147,7 +147,7 @@ Cache-Control: no-store
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.8.0",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.9.0",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 
@@ -158,7 +158,7 @@ $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","u
 ```
 $ curl -X PUT ... -d '{"transport":{"window":"8MB","grace":null}}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"9d875c73...b9a2cd07","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"","udp_dial":"","online":true,"version":"0.8.0","last_message":"2026-01-15T10:00:28.39632723Z",
+ "allow":"","udp_dial":"","online":true,"version":"0.9.0","last_message":"2026-01-15T10:00:28.39632723Z",
  "spares":2,"transport":{"window":"8MB"}}
 ```
 
@@ -171,7 +171,7 @@ $ curl -X PUT ... -d '{"subs":4}' http://127.0.0.1:9850/api/v1/peers/nas-a/paths
 {"created":false,"peer":{"name":"nas-a","fingerprint":"e5645f9b...7795ec86","addresses":["nas-a.example.org:9851"],
  "paired_at":"2026-01-15T10:00:20Z",
  "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":4}],
- "allow":"","udp_dial":"","online":true,"version":"0.8.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
+ "allow":"","udp_dial":"","online":true,"version":"0.9.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
 ```
 
 `DELETE` 删除这条路径，回答是对端。对端没有这条路径时是 `404`。
@@ -232,7 +232,7 @@ $ curl -X DELETE ... 'http://127.0.0.1:9850/api/v1/peers/nas-a?rules=remove'
   "enabled":true,"listening":true,"sessions":1}]
 ```
 
-透明规则用 `match` 代替 `listen` 和 `destination`。规则没有在监听，或者它最近一条连接没能被承载时，会出现 `error`。0.3.0 版新增的 `error_at` 是这件事发生的时间：
+透明规则用 `match` 代替 `listen` 和 `destination`。SOCKS5 规则(0.9.0 版新增)带的是 `socks`，也就是它监听 SOCKS5 客户端的地址。规则没有在监听，或者它最近一条连接没能被承载时，会出现 `error`。0.3.0 版新增的 `error_at` 是这件事发生的时间：
 
 ```
 {"name":"rsync","listen":"0.0.0.0:9801","destination":"192.0.2.10:7000","peer":"nas-a",
@@ -269,6 +269,8 @@ $ curl -X DELETE ... 'http://127.0.0.1:9850/api/v1/peers/nas-a?rules=remove'
 
 从 0.7.0 版起，请求体里可以有 `"transport": {"NAME": "VALUE", ...}`，是这条规则的连接的传输层设置(见“传输层的设置”)。不是设置的名字、超出范围的值、节点的全部会话共用的设置，都回答 `400`。
 
+从 0.9.0 版起，请求体 `{"name", "peer", "socks"}` 新建一条 SOCKS5 规则。`socks` 写成 `"IP:port"`，或者用 `":port"` 表示回环地址 `127.0.0.1`，回答里是保存下来的那个地址。这种规则在 `reference-cli.md` 的“SOCKS5 规则”里说明。
+
 ```
 $ curl -X POST ... -d '{"name":"pg","peer":"nas-a","listen":"127.0.0.1:15432","destination":"192.0.2.10:5432"}' http://127.0.0.1:9850/api/v1/rules
 HTTP/1.1 201 Created
@@ -286,7 +288,7 @@ HTTP/1.1 400 Bad Request
 
 ### PUT /api/v1/rules/{name}
 
-替换这条规则，请求体相同。`paths`、`subs`、`dial` 和 `transport` 是例外：请求体没有提到其中哪一项，规则就保留原有的那一项，这样不认识这几个字段的调用方不会把它们去掉。`paths` 给空列表、`subs` 给 `0`、`dial` 给 `"auto"` 才是去掉。`transport` 里的每个名字各算各的：带值的被设上，值是 `null` 的被去掉，没有提到的保持原样。只改 `transport` 时，规则的监听不动。停用一条规则就是带 `"enabled": false` 的 `PUT`：
+替换这条规则，请求体相同。`paths`、`subs`、`dial` 和 `transport` 是例外：请求体没有提到其中哪一项，规则就保留原有的那一项，这样不认识这几个字段的调用方不会把它们去掉。`paths` 给空列表、`subs` 给 `0`、`dial` 给 `"auto"` 才是去掉。`transport` 里的每个名字各算各的：带值的被设上，值是 `null` 的被去掉，没有提到的保持原样。只改 `transport` 时，规则的监听不动。从 0.9.0 版起，请求体里 `listen`、`destination`、`match` 和 `socks` 一个都没有时，这几项保持规则原有的样子，这样不认识某一种规则的调用方仍然可以启用和停用它。停用一条规则就是带 `"enabled": false` 的 `PUT`：
 
 ```
 {"name":"pg","listen":"127.0.0.1:15432","destination":"192.0.2.10:5432","peer":"nas-a","enabled":false,"listening":false,"sessions":0}
@@ -295,6 +297,34 @@ HTTP/1.1 400 Bad Request
 ### DELETE /api/v1/rules/{name}
 
 删除这条规则。`204`。它正在承载的连接会跑完。
+
+## connect
+
+### POST /api/v1/connect
+
+0.9.0 版新增。节点把发来这个请求的那条连接本身，作为一个会话，送到对端那边的一个目的地。`tcpraid connect` 用的就是它(见 `reference-cli.md`)。
+
+请求体 `{"peer": "NAME", "host": "HOST", "port": N}`。`host` 是 IP 地址或主机名，主机名由对端解析。这个请求和别的请求一样需要令牌，用不了的请求体和别处一样回答 `400`。在对端那里，目的地要过对端为本节点保存的允许列表。
+
+到目的地的连接开始时，节点回答
+
+```
+HTTP/1.1 101 Switching Protocols
+Connection: Upgrade
+Upgrade: tcpraid-connect
+```
+
+从这几行头之后的空行起，这条连接上双向传的只有数据流本身。两个方向都完整结束的流，以连接的正常关闭结束。被切断的流以重置结束，经 TLS 时不发关闭 TLS 连接的那个告警，所以程序绝不会把被切断的流的结尾读成数据的结尾。
+
+到目的地的连接没有开始时，节点回答原因并关闭连接：
+
+```
+HTTP/1.1 403 Forbidden
+
+{"error":"peer \"nas-a\" refused the destination 192.0.2.10:7, which is not in the allow list it keeps for this node. Change the list on that node with \"tcpraid peers set\"."}
+```
+
+`403` 是对端的允许列表。其余原因都是 `502`：对端没有配对或没有连着，目的地连不上，名字没有地址。
 
 ## 传输层的设置
 

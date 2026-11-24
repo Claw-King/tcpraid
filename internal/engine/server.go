@@ -121,6 +121,24 @@ func (l *AllowList) Allows(ip net.IP, port int) bool {
 // Empty reports whether the list has no entry, and so allows everything.
 func (l *AllowList) Empty() bool { return l == nil || len(l.rules) == 0 }
 
+// AllowEntry is one entry of an AllowList: a network and the ports First to Last.
+type AllowEntry struct {
+	Net         *net.IPNet
+	First, Last int
+}
+
+// Entries returns the entries of the list, in their order.
+func (l *AllowList) Entries() []AllowEntry {
+	if l == nil {
+		return nil
+	}
+	out := make([]AllowEntry, 0, len(l.rules))
+	for _, r := range l.rules {
+		out = append(out, AllowEntry{Net: r.nw, First: r.lo, Last: r.hi})
+	}
+	return out
+}
+
 // Match reports whether ip:port is in an entry of the list; unlike Allows, an empty
 // list matches nothing.
 func (l *AllowList) Match(ip net.IP, port int) bool {

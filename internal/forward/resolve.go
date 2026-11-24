@@ -40,6 +40,15 @@ const (
 	maxResolving = 32
 )
 
+// lookupError is why a peer gave no address for a name, with the code of its answer:
+// control.CodeAllow when its allow list lets none of the name's addresses through,
+// control.CodeLookup when the name has no address.
+type lookupError struct {
+	code, text string
+}
+
+func (e *lookupError) Error() string { return e.text }
+
 // resolved is the answer to a resolve: an address, or why there is none.
 type resolved struct {
 	ip           net.IP
@@ -59,14 +68,14 @@ func (rt *Runtime) resolveAt(name, host string, port int) (net.IP, error) {
 	switch {
 	case cc == nil:
 		rt.mu.Unlock()
-		return nil, fmt.Errorf("peer %q is not connected to this node, so it cannot be asked which address %s stands for. The rule's destination is a host name, which the peer looks up.", name, host)
+		return nil, fmt.Errorf("peer %q is not connected to this node, so it cannot be asked which address %s stands for. A destination that is a host name is looked up by the peer.", name, host)
 	case !pc.greeted:
 		rt.mu.Unlock()
 		return nil, fmt.Errorf("the connection with peer %q has only just come up, and it could not be asked yet which address %s stands for. Try again in a moment.", name, host)
 	case !slices.Contains(pc.features, control.FeatureResolve):
 		version := pc.version
 		rt.mu.Unlock()
-		return nil, fmt.Errorf("peer %q does not look up host names for this node (it runs version %q). Both nodes need tcpraid 0.4.0 or later. Until then, give the rule the IP address of %s.", name, version, host)
+		return nil, fmt.Errorf("peer %q does not look up host names for this node (it runs version %q). Both nodes need tcpraid 0.4.0 or later. Until then, use the IP address of %s.", name, version, host)
 	}
 	var b [8]byte
 	if _, err := crand.Read(b[:]); err != nil {
@@ -94,13 +103,13 @@ func (rt *Runtime) resolveAt(name, host string, port int) (net.IP, error) {
 		case r.ip != nil:
 			return r.ip, nil
 		case r.code == control.CodeAllow:
-			return nil, fmt.Errorf("peer %q refused the destination %s, because the name stands for no address in the allow list it keeps for this node. Change the list on that node with \"tcpraid peers set\".", name, net.JoinHostPort(host, strconv.Itoa(port)))
+			return nil, &lookupError{control.CodeAllow, fmt.Sprintf("peer %q refused the destination %s, because the name stands for no address in the allow list it keeps for this node. Change the list on that node with \"tcpraid peers set\".", name, net.JoinHostPort(host, strconv.Itoa(port)))}
 		case r.code == control.CodeBusy:
 			return nil, fmt.Errorf("peer %q looks up as many host names as it does at a time, and did not look up %s. Try again in a moment.", name, host)
 		case r.reason != "":
-			return nil, fmt.Errorf("peer %q could not find the address of %s: %s", name, host, r.reason)
+			return nil, &lookupError{control.CodeLookup, fmt.Sprintf("peer %q could not find the address of %s: %s", name, host, r.reason)}
 		}
-		return nil, fmt.Errorf("peer %q could not find the address of %s", name, host)
+		return nil, &lookupError{control.CodeLookup, fmt.Sprintf("peer %q could not find the address of %s", name, host)}
 	case <-wait.C:
 		return nil, fmt.Errorf("peer %q did not say within %v which address %s stands for", name, ResolveWait, host)
 	case <-rt.ctx.Done():

@@ -9,9 +9,20 @@ import (
 	"time"
 )
 
+// A LAN-side connection is a TCP connection, or something that stands in front of
+// one and passes these on to it (an entry that speaks a protocol of its own before the
+// stream begins). The engine asks for no more than these methods.
+type (
+	lingerer    interface{ SetLinger(sec int) error }
+	closeWriter interface{ CloseWrite() error }
+	// upListener is a LAN-side connection that wants to hear when the other end has
+	// taken the session.
+	upListener interface{ SessionUp() }
+)
+
 // resetClose closes a LAN-side connection with RST: a FIN would read as a clean end.
 func resetClose(c net.Conn) {
-	if tc, ok := c.(*net.TCPConn); ok {
+	if tc, ok := c.(lingerer); ok {
 		tc.SetLinger(0)
 	}
 	c.Close()
@@ -23,7 +34,7 @@ func resetClose(c net.Conn) {
 // Call it as soon as the connection exists. A session that ends cleanly takes it back
 // (cleanClose); a half-close (CloseWrite) is not changed by it.
 func ArmReset(c net.Conn) {
-	if tc, ok := c.(*net.TCPConn); ok {
+	if tc, ok := c.(lingerer); ok {
 		tc.SetLinger(0)
 	}
 }
@@ -31,7 +42,7 @@ func ArmReset(c net.Conn) {
 // cleanClose closes a LAN-side connection the ordinary way: what the socket still holds
 // is sent, then a FIN. Only for a stream that ended completely in both directions.
 func cleanClose(c net.Conn) {
-	if tc, ok := c.(*net.TCPConn); ok {
+	if tc, ok := c.(lingerer); ok {
 		tc.SetLinger(-1)
 	}
 	c.Close()

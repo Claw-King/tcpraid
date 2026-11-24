@@ -13,23 +13,23 @@ with their SHA-256 sums. For Linux:
 
 | Machine (`uname -m`) | File |
 |---|---|
-| `x86_64` | `tcpraid-0.8.0-linux-amd64` |
-| `aarch64` | `tcpraid-0.8.0-linux-arm64` |
-| `armv7l` | `tcpraid-0.8.0-linux-armv7` |
-| | `tcpraid-0.8.0-SHA256SUMS` |
+| `x86_64` | `tcpraid-0.9.0-linux-amd64` |
+| `aarch64` | `tcpraid-0.9.0-linux-arm64` |
+| `armv7l` | `tcpraid-0.9.0-linux-armv7` |
+| | `tcpraid-0.9.0-SHA256SUMS` |
 
 Download the one for your machine and the sums file into the same directory,
 check the binary against the sums, and install it:
 
 ```
-$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.8.0/tcpraid-0.8.0-linux-arm64
-$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.8.0/tcpraid-0.8.0-SHA256SUMS
-$ grep linux-arm64 tcpraid-0.8.0-SHA256SUMS | sha256sum -c
-tcpraid-0.8.0-linux-arm64: OK
-# install -m 0755 tcpraid-0.8.0-linux-arm64 /usr/local/bin/tcpraid
+$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.9.0/tcpraid-0.9.0-linux-arm64
+$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.9.0/tcpraid-0.9.0-SHA256SUMS
+$ grep linux-arm64 tcpraid-0.9.0-SHA256SUMS | sha256sum -c
+tcpraid-0.9.0-linux-arm64: OK
+# install -m 0755 tcpraid-0.9.0-linux-arm64 /usr/local/bin/tcpraid
 
 $ tcpraid version
-tcpraid 0.8.0 (wire protocol 1)
+tcpraid 0.9.0 (wire protocol 1)
 ```
 
 Anything but `OK` on the line of your file means the download is not what was
@@ -41,10 +41,10 @@ released, so do not run it.
 go build -trimpath -o tcpraid ./cmd/tcpraid
 ```
 
-or build all the release binaries with `deploy/build.sh 0.8.0`. The header of
+or build all the release binaries with `deploy/build.sh 0.9.0`. The header of
 that script shows how to do that without Go installed. Copy the one for your
 machine to `/usr/local/bin/tcpraid`. A binary from the plain `go build`
-reports `0.8.0-dev`, while the build script puts in the version it is given.
+reports `0.9.0-dev`, while the build script puts in the version it is given.
 
 ## On macOS and on Windows
 
@@ -56,28 +56,28 @@ the README.
 
 | System | File |
 |---|---|
-| macOS, Apple silicon | `tcpraid-0.8.0-macos-arm64` |
-| macOS, Intel | `tcpraid-0.8.0-macos-amd64` |
-| Windows, x64 | `tcpraid-0.8.0-windows-amd64.exe` |
-| Windows, ARM | `tcpraid-0.8.0-windows-arm64.exe` |
+| macOS, Apple silicon | `tcpraid-0.9.0-macos-arm64` |
+| macOS, Intel | `tcpraid-0.9.0-macos-amd64` |
+| Windows, x64 | `tcpraid-0.9.0-windows-amd64.exe` |
+| Windows, ARM | `tcpraid-0.9.0-windows-arm64.exe` |
 
 **Check the download.** On macOS, in a terminal, in the directory with the
 two files:
 
 ```
-$ grep macos-arm64 tcpraid-0.8.0-SHA256SUMS | shasum -a 256 -c
-tcpraid-0.8.0-macos-arm64: OK
-$ chmod +x tcpraid-0.8.0-macos-arm64
-$ ./tcpraid-0.8.0-macos-arm64 version
+$ grep macos-arm64 tcpraid-0.9.0-SHA256SUMS | shasum -a 256 -c
+tcpraid-0.9.0-macos-arm64: OK
+$ chmod +x tcpraid-0.9.0-macos-arm64
+$ ./tcpraid-0.9.0-macos-arm64 version
 ```
 
 On Windows, in PowerShell, compare the two values by eye. They must be the
 same, except that the case of the letters does not matter:
 
 ```
-> (Get-FileHash .\tcpraid-0.8.0-windows-amd64.exe -Algorithm SHA256).Hash
-> Select-String windows-amd64 .\tcpraid-0.8.0-SHA256SUMS
-> .\tcpraid-0.8.0-windows-amd64.exe version
+> (Get-FileHash .\tcpraid-0.9.0-windows-amd64.exe -Algorithm SHA256).Hash
+> Select-String windows-amd64 .\tcpraid-0.9.0-SHA256SUMS
+> .\tcpraid-0.9.0-windows-amd64.exe version
 ```
 
 **The binaries are not signed.** The first time you start one, the system may
@@ -93,7 +93,7 @@ connect.
 
 **Run it** from a terminal. The commands of tcpraid and their flags are the
 same as on Linux, with the name of the file you downloaded in place of
-`tcpraid`. In PowerShell that is `.\tcpraid-0.8.0-windows-amd64.exe`. The
+`tcpraid`. In PowerShell that is `.\tcpraid-0.9.0-windows-amd64.exe`. The
 shell lines around the commands in this documentation are written for Linux,
 and we have not tried them on these systems. What differs:
 
@@ -126,7 +126,7 @@ By hand, to try it:
 nas-a# tcpraid run -name nas-a -listen 0.0.0.0:9851 -advertise nas-a.example.org:9851
 ... web interface: no password was set, so one was made. It is shown this once: okt7wgr47g3lt6f2
 ... web interface: to set your own, start the node with -ui-password-file FILE or the environment variable TCPRAID_UI_PASSWORD
-... node 0.8.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+... node 0.9.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
 ... transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
 ... web interface: open http://127.0.0.1:9850 in a browser on this machine
 ```
@@ -176,7 +176,7 @@ into the code, and without one it needs `-addr` each time. Then run
 nas-a$ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.8.0 (wire protocol 1)
+version      0.9.0 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0

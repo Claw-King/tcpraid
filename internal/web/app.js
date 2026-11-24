@@ -273,6 +273,7 @@ function ruleStatus(r) {
 function ruleSpec(r, enabled) {
   var spec = { name: r.name, peer: r.peer, enabled: enabled };
   if (r.match) spec.match = r.match;
+  else if (r.socks) spec.socks = r.socks;
   else { spec.listen = r.listen; spec.destination = r.destination; }
   return spec;
 }
@@ -295,8 +296,10 @@ function ruleRow(r, transparent) {
       }).catch(function (e) { toast(e.message, true); refresh(); });
     }
   });
+  // a SOCKS5 rule is shown, switched and deleted here; it is made and changed with
+  // the command
   var actions = h('td', { class: 'actions' },
-    h('button', { type: 'button', class: 'small', text: t('act.edit'), onclick: function () { ruleForm(r, transparent); } }),
+    r.socks ? null : h('button', { type: 'button', class: 'small', text: t('act.edit'), onclick: function () { ruleForm(r, transparent); } }),
     h('button', {
       type: 'button', class: 'small danger', text: t('act.delete'), onclick: function () {
         confirmDialog(t('rules.delete_title', r.name), t('rules.delete_text'), t('act.delete'), function () {
@@ -307,6 +310,7 @@ function ruleRow(r, transparent) {
   var own = settingsText(r.transport);
   var cells = [h('td', {}, r.name, own ? h('div', { class: 'hint', text: t('transport.of_rule', own) }) : null)];
   if (transparent) cells.push(h('td', { class: 'wrap', text: r.match }), h('td', { text: r.peer }));
+  else if (r.socks) cells.push(h('td', { text: t('rules.socks_listen', r.socks) }), h('td', { text: r.peer }), h('td', { class: 'muted', text: t('rules.socks_destination') }));
   else cells.push(h('td', { text: r.listen }), h('td', { text: r.peer }), h('td', { text: r.destination }));
   cells.push(h('td', {}, toggle), h('td', {}, ruleStatus(r)), num(String(r.sessions)), num(speedText(ruleSpeed(r.name))), actions);
   return h('tr', {}, cells);

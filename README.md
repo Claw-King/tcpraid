@@ -81,6 +81,14 @@ that arrive on this port go to that address at the other site".
 Only one of the two nodes has to be reachable from the other. Everything can
 be done in the node's web page or with the `tcpraid` command.
 
+A rule with a fixed destination is the usual way in for an application.
+There are three more. A transparent rule takes the connections that a
+router redirects to the node. A SOCKS5 rule takes programs that speak
+SOCKS5, each of which names the destination it wants. And
+`tcpraid connect` puts a single connection on the standard input and output
+of a command, for programs such as `ssh` that run a command to reach a
+server. `docs/en/reference-cli.md` describes all of them.
+
 When something goes wrong, the node says where to look. `tcpraid rules`
 shows why the last connection of a rule failed, with the reason the other
 node gave. `tcpraid sessions` shows whether a transfer is moving or waiting
@@ -177,8 +185,8 @@ This is a first version, made by one developer in spare time. What is known:
   (Apple silicon) and a Windows machine (amd64) on one local network were
   paired through the web page, and 1 GiB went from one to the other with the
   same checksum at both ends. These exist only on Linux: transparent rules
-  (`-transparent`), `-maxrss`, a socket mark on a path, the container image
-  and the systemd unit.
+  (`-transparent`, `-redirect`), `-maxrss`, a socket mark on a path, the
+  container image and the systemd unit.
 - **Tested on few machines.** The tutorials were run in containers with
   ordinary programs standing in for a NAS. After version 0.1.0 was released,
   its first user ran it on real machines: on amd64 and arm64 hosts, and in
@@ -243,6 +251,21 @@ This is a first version, made by one developer in spare time. What is known:
   many connections open against it (`docs/en/security.md`).
 - **Both nodes must run the same wire protocol version.** There is no
   negotiation.
+- **A SOCKS5 rule and `tcpraid connect` say "connected" before they can be
+  sure.** The other node reports immediately that it took a connection, and
+  only afterwards if it could not reach the destination. So the node waits
+  150 milliseconds for such a report and then tells the client that the
+  connection began. A destination that refuses, or that the allow list does
+  not hold, is usually reported in that time. A destination that does not answer at
+  all is reported later, and the client sees a connection that began and is
+  then reset. The exit status 0 of `tcpraid connect` says that the node took
+  the whole input. A cut after that reaches the destination as a reset and
+  is not seen by the command, which has ended. Both came with version 0.9.0
+  and were run in containers, with `curl` as the SOCKS5 client.
+- **The redirect rules that a node installs itself (`-redirect`)** were run
+  in containers with nftables 1.0.9, for IPv4. The container image holds no
+  `nft`, so the image cannot install them. A node that is killed leaves its
+  table behind until it runs again.
 - **Paths through SOCKS5 and the `owncert` tier** work in the tests of the
   program but were not part of the tutorial runs or of the first use on real
   machines.

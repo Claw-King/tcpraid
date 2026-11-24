@@ -14,6 +14,8 @@
 | `-listen-plain ADDR` | 关闭 | 不带 TLS 的对端监听地址，给 `off` 档的路径用 |
 | `-cert FILE`、`-key FILE` | 无 | 一张证书和它的密钥(PEM)，给使用 `owncert` 档的对端；需要同时有 `-listen`。节点启动时会在日志里记下证书密钥的指纹 |
 | `-transparent ADDR` | 关闭 | 接收由主机重定向到节点的连接的监听地址；它们去哪里由透明规则决定。只在 Linux 上有 |
+| `-redirect MODE` | 关闭 | 节点用主机上的 `nft` 程序为自己的透明规则安装重定向规则，停止时再删掉。`MODE` 是 `forwarded`、`local` 或 `both`。只在 Linux 上有，要和 `-transparent` 一起用。见“节点自己安装的重定向规则” |
+| `-redirect-print` | 关闭 | 和 `-redirect` 一起用：节点在启动时和规则变化时把它本来要交给 `nft` 的规则写进日志，一条也不安装 |
 | `-udp-listen ADDR` | 关闭 | 接收对端回执的监听地址(UDP)，对端要被告知把回执发到这里 |
 | `-ui-password-file FILE` | 无 | 存放网页界面密码的文件 |
 | `-no-ui` | 关闭 | 关掉网页界面。它的文件和登录接口回答 `404`，也不生成密码。带令牌的 API 照常可用 |
@@ -38,7 +40,7 @@
 日志的启动行会把实际生效的设置重复一遍：
 
 ```
-node 0.8.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+node 0.9.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
 transport window=128MB budget=256MB grace=20m0s hol=1s timeline=off maxrss=off
 tuned target=500ms
 ```
@@ -89,6 +91,35 @@ tuned target=500ms
 | `-fbsubs` | 每份报告发在更多条数据子连接上 | 没有哪条路径有控制角色，也没有配 UDP 回执，而结束行里的 `fb gap max` 很长 |
 | `-fbevery` | 报告发得更少，发送端更晚才知道什么到了 | 回程方向很慢，报告占了它可观的一部分 |
 | `-coalesce` | 为了装满一个块等得更久 | 应用每次只发一小段并等对方回答。`0s` 是每一小段都不等，立刻发 |
+
+### 节点自己安装的重定向规则
+
+透明规则接的是主机重定向到节点透明监听上的连接。不带 `-redirect` 时，主机上的重定向规则由你自己写(见 `install-binary.md`)。带 `-redirect` 时，节点为已启用的透明规则写出重定向规则，并在这些规则变化时跟着改。0.9.0 版新增：
+
+```
+# tcpraid run -transparent :9800 -redirect forwarded ...
+# tcpraid rules add lan -peer nas-b -match 198.51.100.0/24:5000
+# nft list table inet tcpraid
+table inet tcpraid {
+	chain prerouting {
+		type nat hook prerouting priority dstnat - 10; policy accept;
+		ip daddr 198.51.100.0/24 tcp dport 5000 redirect to :9800
+	}
+}
+```
+
+| `MODE` | 被重定向的连接 | 链 |
+|---|---|---|
+| `forwarded` | 经过本机转发的连接，路由器上就是这种 | `prerouting` 钩子 |
+| `local` | 本机上的程序自己发起的连接 | `output` 钩子 |
+| `both` | 两种都有 | 两条链 |
+
+- **只动一张表。** 节点写的是 `inet` 族里名叫 `tcpraid` 的表，不读也不改别的表。启动时如果已经有这个名字的表，就把它换掉。停止时把表删掉。被强行杀掉的节点做不到这一步，表会留下来，它重定向的连接找不到监听，直到节点再次运行，或者你用 `nft delete table inet tcpraid` 删掉这张表。
+- **节点的链排在哪里。** 它们的优先级是 -110。`nft` 的手册说，同一个钩子上的链按优先级从小到大依次经过，并给出目的地址转换(`dstnat`)的标准优先级是 -100，所以节点的链排在处于这个标准优先级的链之前。
+- **监听要在连接到达的地方。** 规则用的是 `redirect` 语句，`nft` 的手册说它是目的地址转换的一种形式，"always translates the destination address to the local host's one"。监听所有地址的透明监听，例如 `-transparent :9800`，收得到这些连接。
+- **节点自己的连接。** 用 `local` 和 `both` 时，`output` 链的第一条规则放过和节点同一个用户运行的进程的所有连接。没有它，节点去连目的地的连接可能被重定向回节点自己。所以用同一个用户运行的程序也不会被重定向。要重定向本机上的程序时，让节点用单独的用户运行，`deploy/` 里的 systemd 单元就是这样做的。
+- **需要什么。** Linux，节点的 `PATH` 里有 `nft` 程序，以及 `CAP_NET_ADMIN` 权限。缺任何一样，带 `-redirect` 启动的节点会退出并说明缺的是什么。容器镜像里没有 `nft`。`deploy/` 里的 systemd 单元不给节点任何权限，所以配合它用 `-redirect` 之前，要在单元里那两行权限设置中加上 `CAP_NET_ADMIN`。
+- `-redirect-print` 显示节点本来要交给 `nft` 的内容，什么都不安装，既不需要 `nft` 也不需要这项权限。
 
 ### 网页界面的密码
 
@@ -144,7 +175,7 @@ drwx------  .
 - **一个数据目录上同一时间只能运行一个节点。** 在同一个目录上再执行一次 `tcpraid run` 会报错退出，什么都不会改变。节点运行期间不要删除 `lock` 文件。它不是残留物，没有它，第二个节点就可能在这个目录上启动起来。
 - **这个目录就是节点本身。** 只要 `identity.key` 还在，节点的指纹就不变，所以更换程序或容器时要保留这个目录。还留着 `state.json`、却丢了两个身份文件的目录会被拒绝，因为节点不会给自己造一个新身份。
 - **像备份私钥那样备份它**，绝不要用同一个目录的副本运行两个节点。
-- `state.json` 有格式版本。新版程序能读旧版的文件，并在下一次有改动时按自己的格式写入。它看不懂的文件会被拒绝，并保持原样。目的地是主机名的规则就是一例，0.3.0 及更早的版本不接受它。要退回这些版本之前，先把这样的规则删掉。另一例是 0.5.0 版新增的内容：有多个地址或带标记的路径，以及带 `-paths` 或 `-subs` 的规则。0.4.0 及更早的版本不接受含有它们的文件，所以退回之前先把它们去掉。`-dial` 不是 `auto` 的规则也一样，0.5.0 及更早的版本不接受它。为节点、对端或规则存下的传输层设置同样如此，0.6.0 及更早的版本不接受它。在值的位置写 `default` 就把这样的设置去掉。
+- `state.json` 有格式版本。新版程序能读旧版的文件，并在下一次有改动时按自己的格式写入。它看不懂的文件会被拒绝，并保持原样。目的地是主机名的规则就是一例，0.3.0 及更早的版本不接受它。要退回这些版本之前，先把这样的规则删掉。另一例是 0.5.0 版新增的内容：有多个地址或带标记的路径，以及带 `-paths` 或 `-subs` 的规则。0.4.0 及更早的版本不接受含有它们的文件，所以退回之前先把它们去掉。`-dial` 不是 `auto` 的规则也一样，0.5.0 及更早的版本不接受它。为节点、对端或规则存下的传输层设置同样如此，0.6.0 及更早的版本不接受它。在值的位置写 `default` 就把这样的设置去掉。最新的一例是 SOCKS5 规则：0.8.0 及更早的版本不接受含有它的文件，所以退回之前先把这样的规则删掉。
 
 ## 端口一览
 
@@ -154,6 +185,7 @@ drwx------  .
 | 9851 TCP | `-listen` | 其他节点，TLS |
 | 任意 TCP | `-listen-plain` | 其他节点，`off` 档 |
 | 任意 TCP | 规则的监听地址 | 应用 |
+| 任意 TCP，习惯上用 1080 | SOCKS5 规则的地址 | 会说 SOCKS5 的应用 |
 | 任意 TCP | `-transparent` | 被重定向的连接 |
 | 任意 UDP | `-udp-listen` | 对端的回执 |
 

@@ -50,12 +50,23 @@ type problem struct {
 	seq  uint64 // the number of the connection or event it is about; 0: the rule does not listen
 }
 
-// attempt is one connection of a rule, as far as the rule's status goes.
+// attempt is one connection of a rule, as far as the rule's status goes. A connection
+// that came through the API (Connect) belongs to no rule: its attempt has an empty rule
+// and is kept out of the rules' status.
 type attempt struct {
 	rt   *Runtime
 	rule string
 	seq  uint64
 	said bool // fail has recorded the cause (rt.mu)
+	// What an entry that answers its client with a reason reads (entry.go), all under
+	// rt.mu: text is the cause as fail recorded it. code is the peer's code for a
+	// session it could not connect to its destination (control.CodeAllow,
+	// control.CodeDial), or what a lookup at the peer answered. pending: the peer may
+	// still say why; known is closed when it has.
+	text    string
+	code    string
+	pending bool
+	known   chan struct{}
 }
 
 // dialTrouble is the last dial of a sub-connection to a peer that failed.
@@ -90,10 +101,40 @@ func (rt *Runtime) begin(rule string) *attempt {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	rt.seq++
-	if rt.problems != nil {
+	if rt.problems != nil && rule != "" {
 		delete(rt.problems, rule)
 	}
-	return &attempt{rt: rt, rule: rule, seq: rt.seq}
+	return &attempt{rt: rt, rule: rule, seq: rt.seq, known: make(chan struct{})}
+}
+
+// setCode records the peer's code for the failure of the connection (rt.mu held).
+func (a *attempt) setCode(code string) {
+	a.code = code
+	if a.pending {
+		a.pending = false
+		close(a.known)
+	}
+}
+
+// reason returns why the connection was not carried, as fail recorded it, and the code
+// that goes with it. Where the peer may still say why its end could not connect the
+// session, it waits for that, wait at most.
+func (a *attempt) reason(wait time.Duration) (text, code string) {
+	rt := a.rt
+	rt.mu.Lock()
+	pending := a.pending
+	rt.mu.Unlock()
+	if pending {
+		t := time.NewTimer(wait)
+		defer t.Stop()
+		select {
+		case <-a.known:
+		case <-t.C:
+		}
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return a.text, a.code
 }
 
 // fail records what went wrong with the connection. Only the first call counts.
@@ -105,6 +146,11 @@ func (a *attempt) fail(text string) {
 		return
 	}
 	a.said = true
+	a.text = text
+	if a.rule == "" {
+		rt.logf("connect: %s", text)
+		return
+	}
 	// connection after connection failing the same way is logged once, until one gets
 	// through (ended)
 	if rt.logged[a.rule] != text {
@@ -124,7 +170,10 @@ func (a *attempt) refine(text string) {
 	rt := a.rt
 	rt.mu.Lock()
 	said := a.said
-	if p, ok := rt.problems[a.rule]; ok && said && p.seq == a.seq && p.text != text {
+	if said {
+		a.text = text
+	}
+	if p, ok := rt.problems[a.rule]; ok && a.rule != "" && said && p.seq == a.seq && p.text != text {
 		rt.logf("rule %q: %s", a.rule, text)
 		p.text = text
 		rt.problems[a.rule] = p
@@ -155,7 +204,7 @@ func (rt *Runtime) note(rule, text string) {
 func (rt *Runtime) ended(a *attempt, peer, dst string, end engine.End) {
 	if end.Clean {
 		rt.mu.Lock()
-		if rt.logged != nil {
+		if rt.logged != nil && a.rule != "" {
 			delete(rt.logged, a.rule) // a connection got through: what fails next is news again
 		}
 		rt.mu.Unlock()
@@ -171,9 +220,11 @@ func (rt *Runtime) ended(a *attempt, peer, dst string, end engine.End) {
 		d, told := rt.details[key]
 		if told {
 			delete(rt.details, key)
+			a.setCode(d.code)
 		} else if rt.recent != nil {
 			prune(rt.recent, func(r recentEnd) time.Time { return r.at })
 			rt.recent[key] = recentEnd{a: a, dst: dst, at: time.Now()}
+			a.pending = true
 		}
 		rt.mu.Unlock()
 		switch {
@@ -279,6 +330,9 @@ func (rt *Runtime) sessionFailed(peer string, m control.Message) {
 	r, ended := rt.recent[key]
 	if ended {
 		delete(rt.recent, key)
+		// the text first: setCode wakes whoever waits for the reason
+		r.a.text = unreachable(peer, r.dst, d)
+		r.a.setCode(d.code)
 	} else {
 		prune(rt.details, func(d failDetail) time.Time { return d.at })
 		rt.details[key] = d

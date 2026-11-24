@@ -717,7 +717,11 @@ func (rt *Runtime) runReverse(cc *ctlConn, peer node.Peer, keys engine.Keys, c n
 			rt.sparesUsed++
 			rt.mu.Unlock()
 			id := rv.ID()
-			rt.logf("rule %q: session %x begins on a spare connection of peer %q", how.rule, id[:3], peer.Name)
+			if how.rule == "" {
+				rt.logf("connect: session %x begins on a spare connection of peer %q", id[:3], peer.Name)
+			} else {
+				rt.logf("rule %q: session %x begins on a spare connection of peer %q", how.rule, id[:3], peer.Name)
+			}
 		}
 	}
 	id := rv.ID()

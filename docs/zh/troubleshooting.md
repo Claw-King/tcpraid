@@ -43,6 +43,12 @@ taken  0.0.0.0:9700  nas-a  192.0.2.10:873  0         FAILED: listening on 0.0.0
 | "the rule lets only peer ... open the connections (dial peer), and the peer is not connected to this node" | 规则带了 `-dial peer`，而和对端之间没有控制连接连着。`tcpraid peers` 会显示对端离线。见“对端离线” |
 | "the rule lets both nodes open the connections (dial both), which needs a path on each node, and ..." | 规则带了 `-dial both`，报错的后半句说明是哪个节点没有通往另一个节点的路径，或者没有规则点名的任何一条路径。在那个节点上加路径，或者换一个 `-dial` 重新添加规则 |
 | "peer ... does not open connections of a session that the other node opens connections of too (it runs version ...)" | 规则带了 `-dial both`，而对端的版本早于 0.6.0。升级它，或者换一个 `-dial` |
+| SOCKS5 客户端报告应答码 2、4 或 1 | 规则没能承载这条连接。2 是对面节点的允许列表，4 是对面节点连不上目的地或找不到名字，1 是其余情况。`tcpraid rules` 里有最近一次的原因(见 `reference-cli.md` 的“SOCKS5 规则”) |
+| SOCKS5 客户端或 `tcpraid connect` 的连接刚开始就被重置 | 对面节点接下了连接，事后才发现目的地没有回应。SOCKS5 规则的原因在 `tcpraid rules` 里。`tcpraid connect` 的原因在节点的日志里，那一行以 `connect:` 开头 |
+| `tcpraid connect` 以状态 3 结束 | 到目的地的连接没有开始。原因在它的标准错误里，说法和上面各行相同 |
+| `tcpraid connect` 以状态 1 结束，并说 "does not carry connections for this command" | 本机上的节点比 0.9.0 旧。更新它 |
+| 启动时 "-redirect: the program nft was not found" | 节点用 `nft` 安装重定向规则，而它的 `PATH` 里没有这个程序。安装 nftables，或者不用 `-redirect`、自己写规则。容器镜像里没有 `nft` |
+| 启动时 "-redirect: nft did not take the rules ... Operation not permitted" | 节点没有 `CAP_NET_ADMIN` 权限。给它这项权限，或者不用 `-redirect` |
 | "nothing arrived from peer ... for the whole grace time" | 两个节点之间的线路断开的时间超过了 `-grace`。见下一节 |
 | "peer ... was restarted while it carried a connection of this rule, and the connection was reset" | 另一个节点作为新的进程回来了(它被重启、被杀掉，或者内存耗尽)，本节点把旧进程承载着的那条连接重置了。重新开始传输即可。如果反复出现，去看另一个节点的日志和它的内存上限(`-maxrss`、它所在容器的上限) |
 

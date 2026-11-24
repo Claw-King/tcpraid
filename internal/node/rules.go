@@ -25,11 +25,16 @@ import (
 // A transparent rule has Match instead: it applies to the connections that the host
 // redirected to the node's transparent listener, by their original destination. The first transparent rule that matches, in the order of the list, takes
 // the connection, which goes to that same destination as seen from the peer.
+//
+// A SOCKS5 rule has Socks instead (since 0.9.0): the node listens there for SOCKS5
+// clients, and each connection goes to the destination its client asks for, as seen
+// from the peer.
 type Rule struct {
 	Name        string `json:"name"`                  // unique among the node's rules
 	Listen      string `json:"listen,omitempty"`      // fixed: IP:port or IP:first-last; the IP may be left out (":5000")
 	Destination string `json:"destination,omitempty"` // fixed: HOST:port or HOST:first-last at the peer's end; HOST is an IP address or a host name
 	Match       string `json:"match,omitempty"`       // transparent: networks in the form of engine.ParseAllow
+	Socks       string `json:"socks,omitempty"`       // SOCKS5: IP:port this node listens on for SOCKS5 clients (since 0.9.0)
 	Peer        string `json:"peer"`                  // name of the peer the connections go to
 	Enabled     bool   `json:"enabled"`
 	// Paths names the paths the rule's connections use, of the paths between this node
@@ -98,7 +103,7 @@ func (r Rule) Clone() Rule {
 // it is created, so a change of them needs no new listener.
 func (r Rule) Equal(o Rule) bool {
 	return r.Name == o.Name && r.Listen == o.Listen && r.Destination == o.Destination && r.Match == o.Match &&
-		r.Peer == o.Peer && r.Enabled == o.Enabled && r.Subs == o.Subs && slices.Equal(r.Paths, o.Paths) &&
+		r.Socks == o.Socks && r.Peer == o.Peer && r.Enabled == o.Enabled && r.Subs == o.Subs && slices.Equal(r.Paths, o.Paths) &&
 		r.DialMode() == o.DialMode()
 }
 
@@ -114,6 +119,38 @@ const (
 
 // Transparent reports whether the rule is a transparent rule.
 func (r Rule) Transparent() bool { return r.Match != "" }
+
+// SOCKS5 reports whether the rule is a SOCKS5 rule.
+func (r Rule) SOCKS5() bool { return r.Socks != "" }
+
+// SocksAddr reads the listen address of a SOCKS5 rule as a person writes it, and
+// returns it as a rule stores it: "IP:port". Without an IP (":1080", or the port alone)
+// it is the loopback address 127.0.0.1, because the listener asks nobody who they are.
+func SocksAddr(text string) (string, error) {
+	text = strings.TrimSpace(text)
+	if _, err := strconv.Atoi(text); err == nil {
+		text = ":" + text
+	}
+	p, err := ParsePortRange(text, true)
+	if err != nil {
+		return "", err
+	}
+	if p.Ports() != 1 {
+		return "", fmt.Errorf("%q: a SOCKS5 rule listens on one port", text)
+	}
+	if p.Host == "" {
+		p.Host = "127.0.0.1"
+	}
+	return p.Addr(0), nil
+}
+
+// SocksLoopback reports whether the listen address of a SOCKS5 rule is one that only
+// programs on this host reach.
+func SocksLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	ip := net.ParseIP(host)
+	return err == nil && ip != nil && ip.IsLoopback()
+}
 
 // PortRange is an address with a range of ports: Host:First to Host:Last.
 type PortRange struct {
@@ -249,8 +286,8 @@ func CheckRuleName(name string) error {
 	return nil
 }
 
-// Check reports whether the rule is well-formed on its own: a name, a peer, and either
-// a listen address with a destination or a match. It does not look at other rules or at
+// Check reports whether the rule is well-formed on its own: a name, a peer, and one of
+// a listen address with a destination, a match, and a SOCKS5 listen address. It does not look at other rules or at
 // whether the peer exists.
 func (r Rule) Check() error {
 	if err := CheckRuleName(r.Name); err != nil {
@@ -270,6 +307,19 @@ func (r Rule) Check() error {
 	} else if stored != r.Dial {
 		return errors.New("dial \"auto\" is stored as no dial at all")
 	}
+	if r.SOCKS5() {
+		if r.Listen != "" || r.Destination != "" || r.Match != "" {
+			return errors.New("a rule has one of socks (SOCKS5), match (transparent), and listen with destination (fixed)")
+		}
+		stored, err := SocksAddr(r.Socks)
+		if err != nil {
+			return fmt.Errorf("socks %w", err)
+		}
+		if stored != r.Socks {
+			return fmt.Errorf("socks %q is stored as %q", r.Socks, stored)
+		}
+		return nil
+	}
 	if r.Transparent() {
 		if r.Listen != "" || r.Destination != "" {
 			return errors.New("a rule has either match (transparent) or listen and destination (fixed), not both")
@@ -284,7 +334,7 @@ func (r Rule) Check() error {
 		return nil
 	}
 	if r.Listen == "" || r.Destination == "" {
-		return errors.New("a fixed rule needs listen and destination, and a transparent rule needs match")
+		return errors.New("a fixed rule needs listen and destination, a transparent rule needs match, and a SOCKS5 rule needs socks")
 	}
 	_, _, err := r.Ranges()
 	return err
@@ -327,8 +377,9 @@ func (r Rule) Ranges() (listen, destination PortRange, err error) {
 }
 
 // CheckRules reports whether rules can be the rules of one node: each passes Check, no
-// two have the same name, and no two fixed rules listen on the same port of the same
-// address (whether enabled or not: a rule that is switched on later must not collide).
+// two have the same name, and no two rules that listen (fixed and SOCKS5 rules) do so
+// on the same port of the same address (whether enabled or not: a rule that is switched
+// on later must not collide).
 func CheckRules(rules []Rule) error {
 	if len(rules) > MaxRules {
 		return fmt.Errorf("%d rules (at most %d)", len(rules), MaxRules)
@@ -350,10 +401,17 @@ func CheckRules(rules []Rule) error {
 		if r.Transparent() {
 			continue
 		}
-		l, _, _ := r.Ranges()
+		var l PortRange
+		at := r.Listen
+		if r.SOCKS5() {
+			l, _ = ParsePortRange(r.Socks, false)
+			at = r.Socks
+		} else {
+			l, _, _ = r.Ranges()
+		}
 		for _, t := range listens {
 			if l.overlaps(t.r) {
-				return fmt.Errorf("rule %q listens on %s, which rule %q (%s) already takes", r.Name, r.Listen, t.name, formatRange(t.r))
+				return fmt.Errorf("rule %q listens on %s, which rule %q (%s) already takes", r.Name, at, t.name, formatRange(t.r))
 			}
 		}
 		listens = append(listens, taken{r.Name, l})

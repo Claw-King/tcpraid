@@ -136,6 +136,7 @@ type session struct {
 	// lifecycle
 	closed   bool
 	everUp   bool
+	upOnce   sync.Once // the LAN-side connection is told once that the session was taken (upListener)
 	cleanEnd bool
 	endWhy   string // why the session ended, as shutdown was told
 	// redials: the end that takes this session keeps the sub-connections it dials for
@@ -540,7 +541,12 @@ func (s *session) reader(sb *sub, awaitReply bool) {
 		if mb := int(binary.BigEndian.Uint16(rp[6:8])) << 20; mb > 0 {
 			s.peerBudget = min(s.peerBudget, mb)
 		}
+		local := s.local
 		s.mu.Unlock()
+		// an entry that answers its client only when the session is taken hears of it
+		if u, ok := local.(upListener); ok {
+			s.upOnce.Do(u.SessionUp)
+		}
 	}
 	var h [21]byte
 	for {
@@ -708,7 +714,7 @@ func (s *session) deliverLocal() {
 			continue
 		}
 		if s.peerFin >= 0 && s.cum >= uint64(s.peerFin) {
-			if tc, ok := s.local.(*net.TCPConn); ok {
+			if tc, ok := s.local.(closeWriter); ok {
 				tc.CloseWrite()
 			}
 			s.rxDone = true

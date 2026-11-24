@@ -188,6 +188,40 @@ directory up like a private key, and do not share it between two nodes.**
   the login then answer `404`, no password exists, and only the token gives
   access to the API.
 
+## Who can send connections through a node
+
+A node asks nobody who they are at the places where applications hand it
+their connections. Who can use each of them is decided by who can reach it:
+
+| Way in | Who can use it |
+|---|---|
+| a fixed rule | whoever can connect to the rule's listen address |
+| a transparent rule | whoever's connections the host redirects to the node |
+| a SOCKS5 rule | whoever can connect to the rule's address. It listens on the loopback address unless you give another |
+| `tcpraid connect`, `POST /api/v1/connect` | whoever holds the token of the local API, or is logged in to the web page |
+
+A fixed rule and a transparent rule reach the destinations that the rule
+names. A SOCKS5 rule and `tcpraid connect` reach any destination that is
+asked for. So a SOCKS5 rule on an address that other hosts can reach gives
+every one of those hosts, through the peer, all that the peer's allow list
+lets your node reach. Keep such a rule on loopback, or on a network where
+that is what you want, and give the peer an allow list on its side.
+
+Every one of these ways ends at the same check: the peer holds the
+destination against the allow list it keeps for your node, also when the
+destination was given as a name.
+
+A SOCKS5 rule bounds the clients that have not finished their request: 64 at
+a time for a rule, each for 10 seconds. That limits what idle connections
+can hold, and does not make the listener immune to someone who keeps
+opening them.
+
+With `-redirect` the node runs the program `nft` and needs the capability
+`CAP_NET_ADMIN`. That capability lets a process administer the packet filter
+of the host, and its interfaces and routing tables as well. The node uses it
+for one table (`reference-files.md`). Without `-redirect` the node needs no
+such capability.
+
 ## Listeners and unauthenticated connections
 
 Anyone who can reach a node's listener can open connections to it, so each

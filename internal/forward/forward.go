@@ -5,7 +5,9 @@
 //
 // A fixed rule has listeners of its own, one per port of its range. Transparent rules
 // share the node's transparent listener, if it has one: connections that the host
-// redirected there are matched against the transparent rules in their order.
+// redirected there are matched against the transparent rules in their order. A SOCKS5
+// rule has one listener, and each of its connections goes where its client asks
+// (socks.go).
 //
 // Rules can change while the node runs (Apply): only the listeners of the rules that
 // changed are closed or opened. A session lives on when its rule is changed, switched
@@ -109,16 +111,35 @@ type Runtime struct {
 	// Lookup returns the IP addresses of a host name, for a peer that asks. nil: the
 	// system's resolver.
 	Lookup func(ctx context.Context, host string) ([]net.IP, error)
+	// EntrySettle, if not zero, is how long an entry that answers its client waits
+	// for the peer to report a failure after the peer took the session, in the place
+	// of 150 ms (entry.go). Set before Start.
+	EntrySettle time.Duration
+	// socksOpening, if not zero, is the time a client of a SOCKS5 rule has for its
+	// request, in the place of socksOpeningTime (a test sets it before Start).
+	socksOpening time.Duration
+	// RulesChanged, if not nil, is called after the rules of the node changed and
+	// the listeners were brought in line (AddRule, ReplaceRule, RemoveRule). Set
+	// before Start.
+	RulesChanged func()
 	// Pinned names the transport settings that the command line of the node gave: the
 	// Engine's settings hold their values, and a value stored for the node does not
 	// change them (transport.go). Set before Start.
 	Pinned map[string]bool
 }
 
-// runningRule is a fixed rule with its listeners.
+// runningRule is a fixed rule or a SOCKS5 rule with its listeners.
 type runningRule struct {
 	rule node.Rule
 	lns  []net.Listener
+}
+
+// takes says where a rule that listens does so.
+func takes(r node.Rule) string {
+	if r.SOCKS5() {
+		return r.Socks
+	}
+	return r.Listen
 }
 
 // peerState is what the runtime keeps per peer it carries connections to.
@@ -231,7 +252,7 @@ func (rt *Runtime) Apply() {
 		if r, ok := want[name]; !ok || !r.Equal(rr.rule) {
 			rr.close()
 			delete(rt.running, name)
-			rt.logf("rule %q: stopped listening on %s", name, rr.rule.Listen)
+			rt.logf("rule %q: stopped listening on %s", name, takes(rr.rule))
 		}
 	}
 	for name := range rt.problems {
@@ -258,12 +279,22 @@ func (rt *Runtime) Apply() {
 			continue
 		}
 		rt.running[r.Name] = rr
+		if r.SOCKS5() {
+			rt.logf("rule %q: listening on %s for SOCKS5 clients, whose connections go through peer %q", r.Name, r.Socks, r.Peer)
+			if !node.SocksLoopback(r.Socks) {
+				rt.logf("rule %q: %s", r.Name, SocksOpenWarning(r.Socks, r.Peer))
+			}
+			continue
+		}
 		rt.logf("rule %q: listening on %s for peer %q, destination %s", r.Name, r.Listen, r.Peer, r.Destination)
 	}
 }
 
-// listen opens every listener of a fixed rule, or none.
+// listen opens every listener of a fixed rule or of a SOCKS5 rule, or none.
 func (rt *Runtime) listen(r node.Rule) (*runningRule, error) {
+	if r.SOCKS5() {
+		return rt.listenSocks(r)
+	}
 	from, to, err := r.Ranges()
 	if err != nil {
 		return nil, err
@@ -754,7 +785,14 @@ func (rt *Runtime) AddRule(r node.Rule) error {
 	rt.logf("rule %q added", r.Name)
 	rt.logSettings(r)
 	rt.Apply()
+	rt.rulesChanged()
 	return nil
+}
+
+func (rt *Runtime) rulesChanged() {
+	if rt.RulesChanged != nil {
+		rt.RulesChanged()
+	}
 }
 
 // logSettings logs the transport settings of a rule that has some.
@@ -775,6 +813,7 @@ func (rt *Runtime) ReplaceRule(name string, r node.Rule) error {
 	rt.logf("rule %q changed", name)
 	rt.logSettings(r)
 	rt.Apply()
+	rt.rulesChanged()
 	return nil
 }
 
@@ -786,5 +825,6 @@ func (rt *Runtime) RemoveRule(name string) error {
 	}
 	rt.logf("rule %q removed", name)
 	rt.Apply()
+	rt.rulesChanged()
 	return nil
 }
