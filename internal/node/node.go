@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -72,7 +73,9 @@ type Node struct {
 // is of an older schema version.
 //
 // name is the node's name. An empty name keeps the one in the state file; without a
-// state file it is the host name.
+// state file it is the host name with a hyphen and four random characters after it
+// (DefaultName), so that two machines with the same host name, such as two containers
+// started from the same template, do not become two nodes of the same name.
 //
 // These are errors, and leave every file as it is: a name that CheckName refuses, whether
 // it was given, is stored in the state file or is the host name; a key or token file
@@ -124,10 +127,18 @@ func load(dir, name string) (*Node, error) {
 		name, source = st.Node.Name, "the name stored in "+statePath
 	}
 	if name == "" {
-		if name, _ = os.Hostname(); name == "" {
+		host, _ := os.Hostname()
+		if host == "" {
 			return nil, errors.New("the node has no name and this host has no host name to use. Set -name.")
 		}
-		source = "the host name"
+		name, source = host, "the host name"
+		// a host name that cannot be a name is reported as it is, without the suffix
+		if CheckName(host) == nil {
+			if name, err = DefaultName(host); err != nil {
+				return nil, err
+			}
+			source = "the host name with its suffix"
+		}
 	}
 	if err := CheckName(name); err != nil {
 		if source == "-name" {
@@ -157,6 +168,40 @@ func load(dir, name string) (*Node, error) {
 
 // MaxNameLen is the longest node name, in bytes.
 const MaxNameLen = 64
+
+// cutName returns the longest start of name that has at most max bytes and does not end
+// inside a character.
+func cutName(name string, max int) string {
+	for len(name) > max {
+		_, size := utf8.DecodeLastRuneInString(name)
+		name = name[:len(name)-size]
+	}
+	return name
+}
+
+// nameSuffixLen is the number of random characters DefaultName adds.
+const nameSuffixLen = 4
+
+// DefaultName returns the name of a new node that was given none: host, a hyphen and
+// four random characters out of the lower-case letters and the digits.
+func DefaultName(host string) (string, error) {
+	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, nameSuffixLen)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	for i := range b {
+		// 36 does not divide 256: the first four characters are a little more likely
+		// than the rest, which does not matter for telling two nodes apart
+		b[i] = alphabet[int(b[i])%len(alphabet)]
+	}
+	// a long host name gives up its end to make room; what is left must not end in
+	// a character that only joins two parts of a name
+	if room := MaxNameLen - 1 - nameSuffixLen; len(host) > room {
+		host = strings.TrimRight(cutName(host, room), "-._")
+	}
+	return host + "-" + string(b), nil
+}
 
 // CheckName reports whether name can be a node's name: 1 to MaxNameLen bytes of valid
 // UTF-8, printable characters only, no white space at either end. The name is shown to
@@ -233,7 +278,7 @@ func loadOrCreateToken(dir string) (string, error) {
 // ReadToken returns the API token stored in the data directory dir.
 func ReadToken(dir string) (string, error) {
 	path := filepath.Join(dir, TokenFile)
-	b, err := os.ReadFile(path)
+	b, err := readBusy(path)
 	if err != nil {
 		return "", err
 	}
@@ -253,7 +298,7 @@ func WriteAPIAddr(dir, addr string) error {
 // ReadAPIAddr returns the address recorded by WriteAPIAddr.
 func ReadAPIAddr(dir string) (string, error) {
 	path := filepath.Join(dir, AddrFile)
-	b, err := os.ReadFile(path)
+	b, err := readBusy(path)
 	if err != nil {
 		return "", err
 	}
@@ -264,10 +309,51 @@ func ReadAPIAddr(dir string) (string, error) {
 	return addr, nil
 }
 
+// A file that is busy is tried again busyTries times in all, busyPause apart: about a
+// second.
+const (
+	busyTries = 11
+	busyPause = 100 * time.Millisecond
+)
+
+// What readBusy and renameBusy call; variables so that a test can make them fail.
+var (
+	readFile   = os.ReadFile
+	renameFile = os.Rename
+	busyRename = renameIsBusy
+)
+
+// readBusy reads the file at path. A file that is not there is reported at once. Any
+// other error is tried again for about a second, because it may pass: the node puts
+// its files in place by renaming, and on Windows a file cannot be opened during the
+// moment it is being renamed.
+func readBusy(path string) ([]byte, error) {
+	for try := 1; ; try++ {
+		b, err := readFile(path)
+		if err == nil || errors.Is(err, fs.ErrNotExist) || try == busyTries {
+			return b, err
+		}
+		time.Sleep(busyPause)
+	}
+}
+
+// renameBusy renames tmp to path. Where the system refuses because another process has
+// path open at that moment (renameIsBusy: Windows only), it tries again for about a
+// second.
+func renameBusy(tmp, path string) error {
+	for try := 1; ; try++ {
+		err := renameFile(tmp, path)
+		if err == nil || !busyRename(err) || try == busyTries {
+			return err
+		}
+		time.Sleep(busyPause)
+	}
+}
+
 // writeFile writes data to path with the given permissions, replacing a file that is
 // there: it writes a temporary file in the same directory and renames it over path.
 func writeFile(path string, data []byte, perm os.FileMode) error {
-	return place(path, data, perm, os.Rename)
+	return place(path, data, perm, renameBusy)
 }
 
 // createFile is writeFile for a file that must not exist: the temporary file is linked

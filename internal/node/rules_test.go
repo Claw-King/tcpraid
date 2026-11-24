@@ -23,7 +23,7 @@ func TestParsePortRange(t *testing.T) {
 		{in: "[2001:db8::1]:22", host: "2001:db8::1", first: 22, n: 1},
 		{in: ":5000", any: true, host: "", first: 5000, n: 1},
 		{in: ":5000", errSubstr: "no IP address"},
-		{in: "nas.example.net:873", errSubstr: "host names are not supported"},
+		{in: "nas.example.net:873", errSubstr: "takes no host name"},
 		{in: "192.0.2.1", errSubstr: "want IP:port"},
 		{in: "192.0.2.1:0", errSubstr: "1 to 65535"},
 		{in: "192.0.2.1:70000", errSubstr: "1 to 65535"},
@@ -64,18 +64,19 @@ func TestRuleCheck(t *testing.T) {
 	}
 	change := func(f func(*Rule)) Rule { r := good; f(&r); return r }
 	for want, r := range map[string]Rule{
-		"no name":                      change(func(r *Rule) { r.Name = "" }),
-		"space":                        change(func(r *Rule) { r.Name = "a b" }),
-		"longer than":                  change(func(r *Rule) { r.Name = strings.Repeat("x", MaxRuleNameLen+1) }),
-		"names no peer":                change(func(r *Rule) { r.Peer = "" }),
-		"same length":                  change(func(r *Rule) { r.Destination = "192.0.2.10:50000-50049" }),
-		"host names are not supported": change(func(r *Rule) { r.Destination = "nas.example.net:50000-50050" }),
-		"needs listen":                 change(func(r *Rule) { r.Listen = "" }),
-		"fixed rule needs":             change(func(r *Rule) { r.Destination = "" }),
-		"not both":                     change(func(r *Rule) { r.Match = "198.51.100.0/24" }),
-		"destination":                  change(func(r *Rule) { r.Destination = ":50000-50050" }),
-		"match":                        {Name: "t", Match: "not a network", Peer: "beta"},
-		"match names no networ":        {Name: "t", Match: " , ", Peer: "beta"},
+		"no name":               change(func(r *Rule) { r.Name = "" }),
+		"space":                 change(func(r *Rule) { r.Name = "a b" }),
+		"longer than":           change(func(r *Rule) { r.Name = strings.Repeat("x", MaxRuleNameLen+1) }),
+		"names no peer":         change(func(r *Rule) { r.Peer = "" }),
+		"same length":           change(func(r *Rule) { r.Destination = "192.0.2.10:50000-50049" }),
+		"cannot be used":        change(func(r *Rule) { r.Destination = "nas..example.net:50000-50050" }),
+		"takes no host name":    change(func(r *Rule) { r.Listen = "nas.example.net:50000-50050" }),
+		"needs listen":          change(func(r *Rule) { r.Listen = "" }),
+		"fixed rule needs":      change(func(r *Rule) { r.Destination = "" }),
+		"not both":              change(func(r *Rule) { r.Match = "198.51.100.0/24" }),
+		"destination":           change(func(r *Rule) { r.Destination = ":50000-50050" }),
+		"match":                 {Name: "t", Match: "not a network", Peer: "beta"},
+		"match names no networ": {Name: "t", Match: " , ", Peer: "beta"},
 	} {
 		if err := r.Check(); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("want an error with %q, got %v (%+v)", want, err, r)
@@ -133,10 +134,10 @@ func TestRuleStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	for want, r := range map[string]Rule{
-		"two rules are called":         r1,
-		"already takes":                {Name: "r2", Listen: ":5000", Destination: "192.0.2.10:874", Peer: "beta"},
-		"no peer is called":            {Name: "r3", Listen: ":5001", Destination: "192.0.2.10:874", Peer: "gamma"},
-		"host names are not supported": {Name: "r4", Listen: ":5002", Destination: "host.example:874", Peer: "beta"},
+		"two rules are called":      r1,
+		"already takes":             {Name: "r2", Listen: ":5000", Destination: "192.0.2.10:874", Peer: "beta"},
+		"no peer is called":         {Name: "r3", Listen: ":5001", Destination: "192.0.2.10:874", Peer: "gamma"},
+		"neither an IP address nor": {Name: "r4", Listen: ":5002", Destination: "192.0.2:874", Peer: "beta"},
 	} {
 		if err := n.AddRule(r); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), want) {
 			t.Errorf("AddRule(%+v): %v, want ErrInvalid with %q", r, err, want)
@@ -263,5 +264,61 @@ func TestSchemaTwoIsUpgraded(t *testing.T) {
 	}
 	if err := n.AddRule(Rule{Name: "r", Listen: ":5000", Destination: "192.0.2.9:873", Peer: "one", Enabled: true}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The destination of a rule takes an IP address or a host name, and nothing that is
+// neither.
+func TestParseDestination(t *testing.T) {
+	long := strings.Repeat("a", 63)
+	for _, c := range []struct {
+		in        string
+		host      string
+		named     bool
+		first, n  int
+		errSubstr string
+	}{
+		{in: "192.0.2.1:873", host: "192.0.2.1", first: 873, n: 1},
+		{in: "[2001:db8::1]:22", host: "2001:db8::1", first: 22, n: 1},
+		{in: "nas.example.net:873", host: "nas.example.net", named: true, first: 873, n: 1},
+		{in: "nas:50000-50010", host: "nas", named: true, first: 50000, n: 11},
+		{in: "my_nas-2.lan:22", host: "my_nas-2.lan", named: true, first: 22, n: 1},
+		{in: "NAS.Example.NET:22", host: "NAS.Example.NET", named: true, first: 22, n: 1},
+		{in: "1st.example:22", host: "1st.example", named: true, first: 22, n: 1},
+		{in: long + "." + long + "." + long + "." + strings.Repeat("a", 61) + ":22", host: long + "." + long + "." + long + "." + strings.Repeat("a", 61), named: true, first: 22, n: 1},
+		{in: ":873", errSubstr: "no IP address and no host name"},
+		{in: "nas.example.net", errSubstr: "want HOST:port"},
+		{in: "nas.example.net:0", errSubstr: "1 to 65535"},
+		{in: "nas.example.net:1-1025", errSubstr: "at most 1024"},
+		{in: "192.0.2:873", errSubstr: "neither an IP address nor a host name"},
+		{in: "192.0.2.999:873", errSubstr: "neither an IP address nor a host name"},
+		{in: "12345:873", errSubstr: "neither an IP address nor a host name"},
+		{in: "nas..example.net:873", errSubstr: "between its dots"},
+		{in: "nas.example.net.:873", errSubstr: "between its dots"},
+		{in: ".nas:873", errSubstr: "between its dots"},
+		{in: "-nas.example:873", errSubstr: "hyphen"},
+		{in: "nas-.example:873", errSubstr: "hyphen"},
+		{in: "nas example:873", errSubstr: "letters, digits"},
+		{in: "nas/example:873", errSubstr: "letters, digits"},
+		{in: "n\u00e4s.example:873", errSubstr: "letters, digits"},
+		{in: "user@nas.example:873", errSubstr: "letters, digits"},
+		{in: strings.Repeat("a", 64) + ".example:873", errSubstr: "1 to 63"},
+		{in: long + "." + long + "." + long + "." + strings.Repeat("a", 62) + ":22", errSubstr: "1 to 253"},
+	} {
+		p, err := ParseDestination(c.in)
+		if c.errSubstr != "" {
+			if err == nil || !strings.Contains(err.Error(), c.errSubstr) {
+				t.Errorf("%q: error %v, want one with %q", c.in, err, c.errSubstr)
+			}
+			continue
+		}
+		if err != nil || p.Host != c.host || p.First != c.first || p.Ports() != c.n || p.Named() != c.named {
+			t.Errorf("%q: %+v (named %v), %v", c.in, p, p.Named(), err)
+		}
+	}
+	// a rule with a name for its destination is a rule; one with a name to listen on is not
+	named := Rule{Name: "zfs", Listen: "0.0.0.0:50000-50010", Destination: "nas.example.net:50000-50010", Peer: "beta", Enabled: true}
+	if err := named.Check(); err != nil {
+		t.Errorf("a rule whose destination is a host name: %v", err)
 	}
 }

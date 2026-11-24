@@ -1,6 +1,6 @@
 <Container version="2">
   <Name>tcpraid</Name>
-  <Repository>ghcr.io/claw-king/tcpraid:0.3.0</Repository>
+  <Repository>ghcr.io/claw-king/tcpraid:0.4.0</Repository>
   <Registry>https://ghcr.io/claw-king/tcpraid</Registry>
   <Network>bridge</Network>
   <Privileged>false</Privileged>
@@ -26,4 +26,6 @@
   <Config Name="Rule port 50008" Target="50008" Default="50008" Mode="tcp" Description="A forwarding rule can listen on this port (listen address 0.0.0.0)." Type="Port" Display="always" Required="false" Mask="false"/>
   <Config Name="Rule port 50009" Target="50009" Default="50009" Mode="tcp" Description="A forwarding rule can listen on this port (listen address 0.0.0.0)." Type="Port" Display="always" Required="false" Mask="false"/>
   <Config Name="Rule port 50010" Target="50010" Default="50010" Mode="tcp" Description="A forwarding rule can listen on this port (listen address 0.0.0.0)." Type="Port" Display="always" Required="false" Mask="false"/>
+  <!-- Optional, and unused until the node listens on it: the node does that only when its command line has "-udp-listen 0.0.0.0:8446". deploy/README.md says how. -->
+  <Config Name="UDP feedback" Target="8446" Default="8446" Mode="udp" Description="Optional. Feedback from the other node arrives here, once this node is started with -udp-listen 0.0.0.0:8446 and the other node is told the address with: tcpraid peers set NAME -udp-dial HOST:8446" Type="Port" Display="advanced" Required="false" Mask="false"/>
 </Container>

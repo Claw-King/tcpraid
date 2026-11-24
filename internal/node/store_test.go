@@ -593,3 +593,107 @@ func TestTooManyPaths(t *testing.T) {
 		t.Fatalf("%d paths accepted", MaxPaths+1)
 	}
 }
+
+// ChangePaths reads and writes the paths of a peer in one step: changes that are made
+// at the same time to different paths all take effect, an error of the change leaves
+// everything as it was, and paths that cannot be stored are refused.
+func TestChangePaths(t *testing.T) {
+	n := openNode(t, "alpha")
+	if _, err := n.PutPeer(testPeer("office", 1)); err != nil {
+		t.Fatal(err)
+	}
+	const paths = 8
+	for round := 1; round <= 20; round++ {
+		var wg sync.WaitGroup
+		for i := 0; i < paths; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				name := fmt.Sprintf("p%d", i)
+				_, err := n.ChangePaths("office", func(list []Path) ([]Path, error) {
+					for j := range list {
+						if list[j].Name == name {
+							list[j].Subs = round
+							return list, nil
+						}
+					}
+					p := NewPath(name)
+					p.Addr, p.Subs = "192.0.2.10:9851", round
+					return append(list, p), nil
+				})
+				if err != nil {
+					t.Errorf("round %d, path %s: %v", round, name, err)
+				}
+			}()
+		}
+		wg.Wait()
+		p, _ := n.Peer("office")
+		if len(p.Paths) != 1+paths {
+			t.Fatalf("round %d: %d paths, want %d", round, len(p.Paths), 1+paths)
+		}
+		for _, path := range p.Paths[1:] {
+			if path.Subs != round {
+				t.Fatalf("round %d: path %s has %d sub-connections", round, path.Name, path.Subs)
+			}
+		}
+	}
+	before := stateOnDisk(t, n)
+	boom := errors.New("no")
+	if _, err := n.ChangePaths("office", func(list []Path) ([]Path, error) { return nil, boom }); !errors.Is(err, boom) {
+		t.Errorf("an error of the change: %v", err)
+	}
+	if _, err := n.ChangePaths("office", func(list []Path) ([]Path, error) { list[0].Subs = 0; return list, nil }); !errors.Is(err, ErrInvalid) {
+		t.Errorf("paths that cannot be stored: %v", err)
+	}
+	if _, err := n.ChangePaths("nobody", func(list []Path) ([]Path, error) { return list, nil }); !errors.Is(err, ErrNotFound) {
+		t.Errorf("an unknown peer: %v", err)
+	}
+	if !reflect.DeepEqual(before, stateOnDisk(t, n)) {
+		t.Error("the state file changed after three changes that were refused")
+	}
+	// what the change is given is a copy: writing to it and then failing changes nothing
+	if _, err := n.ChangePaths("office", func(list []Path) ([]Path, error) {
+		list[0].Roles[0] = "bogus"
+		return nil, boom
+	}); !errors.Is(err, boom) {
+		t.Fatal(err)
+	}
+	if p, _ := n.Peer("office"); len(p.Paths) != 1+paths || p.Paths[0].Roles[0] != "data" {
+		t.Errorf("after a change that wrote to its argument and failed: %+v", p.Paths)
+	}
+}
+
+// PathChange.Apply sets what is named and takes away what only went with a setting that
+// is gone.
+func TestPathChangeApply(t *testing.T) {
+	str := func(s string) *string { return &s }
+	p := NewPath("p")
+	if !(PathChange{}).Empty() || (PathChange{Subs: new(int)}).Empty() {
+		t.Error("Empty is wrong about a change with and without a field")
+	}
+	PathChange{Addr: str("192.0.2.1:9851"), Type: str("socks5"), Proxy: str("socks5://192.0.2.2:1080")}.Apply(&p)
+	if p.Addr != "192.0.2.1:9851" || p.Type != "socks5" || p.Proxy == "" || p.Security != SecurityTLS || p.Subs != 8 {
+		t.Fatalf("after addr, type and proxy: %+v", p)
+	}
+	PathChange{Type: str("tcp")}.Apply(&p)
+	if p.Proxy != "" {
+		t.Errorf("type tcp kept the proxy: %+v", p)
+	}
+	pin := strings.Repeat("ab", 32)
+	PathChange{Security: str(SecurityOwnCert), Pin: &pin}.Apply(&p)
+	PathChange{Verify: str(VerifyCA)}.Apply(&p)
+	if p.Verify != VerifyCA || p.Pin != "" {
+		t.Errorf("verify ca kept the pin: %+v", p)
+	}
+	PathChange{Verify: str(VerifyPin), Pin: &pin}.Apply(&p)
+	PathChange{Security: str(SecurityOff)}.Apply(&p)
+	if p.Verify != "" || p.Pin != "" {
+		t.Errorf("security off kept verify and pin: %+v", p)
+	}
+	roles := []string{RoleRepair}
+	PathChange{Roles: &roles}.Apply(&p)
+	roles[0] = "changed afterwards"
+	if p.Roles[0] != RoleRepair {
+		t.Errorf("the path shares the roles of the change: %+v", p.Roles)
+	}
+}

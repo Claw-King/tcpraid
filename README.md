@@ -94,15 +94,14 @@ The example uses two machines: `nas-a`, which the other can reach at
 `nas-a.example.org`, and `nas-b`. Both run the node in a container, with
 `deploy/docker-compose.yml`:
 
-1. **Start a node on each machine.** First set `hostname:` in the compose
-   file to the node's name, `nas-a` on one machine and `nas-b` on the other.
-   A node takes its name from the host name at its first start, and the two
-   names must differ. Then run `docker compose up -d` and
+1. **Start a node on each machine.** Run `docker compose up -d` and
    `docker logs tcpraid`. The log shows the password of the web page, once.
 2. **Open the web page** of each node at `http://ADDRESS-OF-THE-NAS:9850/`.
-3. **Pair them.** If you did not set the names in step 1, set them now,
-   before pairing, under Settings > "Name of this node". A node keeps the
-   name its peer had when they were paired. On `nas-a`, go to Peers >
+3. **Name them and pair them.** A new node is called after its host with
+   four random characters added, for example `tcpraid-k3x9`. Give each node a
+   name you recognise under Settings > "Name of this node", here `nas-a` and
+   `nas-b`. Do it before pairing, because a node keeps the name its peer had
+   when they were paired. On `nas-a`, go to Peers >
    "Create pairing code", enter `nas-a.example.org:9851` as the address at
    which the other node reaches this one, and copy the code. On `nas-b`, go
    to Peers > "Enter pairing code" and paste it. Both pages now list the
@@ -190,7 +189,9 @@ This is a first version, made by one developer in spare time. What is known:
   formats.
 - **The web page has been used very little.** It was rendered and clicked
   through by a script, and one person has used it to pair two nodes.
-- **The destination of a rule is an IP address**, not a host name.
+- **A host name as the destination of a rule needs version 0.4.0 or later on
+  both nodes.** The peer looks the name up for every connection. Nothing is
+  kept between two connections, so each one waits for that lookup first.
 - **Stopping a node while a destination is still being connected.** If a node
   is stopped at the very moment a session that has just begun is connecting to
   its destination at that node, the destination may see a connection that is
@@ -215,6 +216,9 @@ This is a first version, made by one developer in spare time. What is known:
 - **One of the two nodes has to be reachable from the other.** Nothing is
   relayed through a third machine. A node that holds a path to its peer does
   not fall back to asking the peer to connect when that path fails.
+- **The systemd unit was checked by `systemd-analyze` only.** It runs the node
+  as a separate user with a set of restrictions, and it has not been
+  installed or started on a machine.
 - **The web page and the local API are plain HTTP.** Use them on a network you
   trust, or behind a reverse proxy with TLS.
 - **A listener limits, but does not prevent,** what someone can do by holding

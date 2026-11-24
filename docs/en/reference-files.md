@@ -6,7 +6,7 @@
 |---|---|---|
 | `-data DIR` | `/var/lib/tcpraid` on Linux; see "The data directory" for macOS and Windows | data directory; created if missing (mode 0700) |
 | `-api ADDR` | `127.0.0.1:9850` | listen address of the local API and the web page (plain HTTP) |
-| `-name NAME` | the name it has | name of the node. Given, it renames the node. Not given, the node keeps its name; at the first start it takes the host name. A name is 1 to 64 bytes of printable characters, with no space at either end |
+| `-name NAME` | the name it has | name of the node. Given, it renames the node. Not given, the node keeps its name. At the first start it takes the host name and adds a hyphen and four random characters, as in `nas-k3x9`, so that two machines with the same host name do not become two nodes of the same name. A name is 1 to 64 bytes of printable characters, with no space at either end |
 | `-listen ADDR` | off | listen address for other nodes (TLS). Without it the node can join another node but cannot be joined |
 | `-advertise HOST:PORT` | none | where other nodes reach `-listen`; goes into the pairing codes this node makes. May be given more than once |
 | `-listen-plain ADDR` | off | listen address for peers without TLS, for paths of the tier `off` |
@@ -14,6 +14,7 @@
 | `-transparent ADDR` | off | listen address for connections that the host redirects to the node; transparent rules decide where they go. Linux only |
 | `-udp-listen ADDR` | off | listen address (UDP) for feedback from peers that are told to send it here |
 | `-ui-password-file FILE` | none | file with the password of the web page |
+| `-no-ui` | off | switches the web page off. Its files and the login answer `404` and no password is made. The API with its token works as before |
 | `-stats DURATION` | off | log the node's totals this often, and one line for each session that runs then (`troubleshooting.md` explains the lines) |
 | `-window SIZE` | `128MB` | per session: how much data this node holds that the peer has not yet reported received, and the space it offers the peer for data that arrives out of order. Whole MB |
 | `-budget SIZE` | `256MB` | all sessions together: the most data held unacknowledged, and as much again held out of order |
@@ -25,7 +26,7 @@
 The start-up lines of the log repeat what is in effect:
 
 ```
-node 0.3.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+node 0.4.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
 transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
 ```
 
@@ -74,6 +75,10 @@ A password given by file or variable replaces the stored one and keeps working
 after the file or variable is taken away again. To get a new random password,
 stop the node, delete `ui.password` and start it without the two.
 
+A node started with `-no-ui` has no web page and so no password. It makes
+none, ignores the variable, and refuses `-ui-password-file`. A `ui.password`
+that an earlier start left in the data directory stays there unused.
+
 ## The data directory
 
 On Linux the default is `/var/lib/tcpraid`. On macOS and Windows it is a
@@ -120,7 +125,9 @@ drwx------  .
   one directory.
 - `state.json` has a format version. A newer program reads the file of an
   older one and writes it in its own format the next time it changes. A file
-  it cannot make sense of is refused and left as it is.
+  it cannot make sense of is refused and left as it is. One case of that is a
+  rule whose destination is a host name, which version 0.3.0 and older do not
+  take. Remove such rules before you go back to one of those versions.
 
 ## Ports at a glance
 

@@ -13,7 +13,10 @@
 //	GET    /api/v1/peers                  the peers (a list of Peer)
 //	GET    /api/v1/peers/{name}           one peer (Peer)
 //	PUT    /api/v1/peers/{name}           change a peer's paths, allow list, UDP address (PeerUpdate -> Peer)
-//	DELETE /api/v1/peers/{name}           end the pairing with a peer and reset its sessions
+//	DELETE /api/v1/peers/{name}           end the pairing with a peer and reset its sessions; with the query
+//	                                      rules=keep or rules=remove the answer is a PeerRemoval
+//	PUT    /api/v1/peers/{name}/paths/{path}     change or add one path of a peer (PathUpdate -> PathSet)
+//	DELETE /api/v1/peers/{name}/paths/{path}     remove one path of a peer (Peer)
 //	POST   /api/v1/peers/{name}/check     try every path to a peer (PeerCheck)
 //	POST   /api/v1/peers/{name}/test      send test data to a peer and measure the paths (PeerTestRequest -> PeerTest)
 //	GET    /api/v1/rules                  the forwarding rules with their status (a list of Rule)
@@ -92,6 +95,8 @@ type Node interface {
 	Peers() []node.Peer
 	Peer(name string) (node.Peer, error)
 	UpdatePeer(name string, paths *[]node.Path, allow, udpDial *string) (node.Peer, error)
+	SetPath(name, path string, c node.PathChange) (stored node.Peer, created bool, err error)
+	RemovePath(name, path string) (node.Peer, error)
 	RemovePeer(name string) error
 	CheckPeer(ctx context.Context, name string) ([]link.PathResult, error)
 }
@@ -115,7 +120,9 @@ type Config struct {
 	// Rules runs the forwarding rules. nil: the node has none and the rule paths
 	// answer 404.
 	Rules Rules
-	// UI is the web interface. nil: there is none, and only the token gives access.
+	// UI is the web interface. nil: there is none, and only the token gives access (a
+	// request for one of its pages is then answered like any request without a token,
+	// with 401). A UI that is switched off (UI.Off) answers 404 for its pages instead.
 	UI *UI
 }
 
@@ -227,10 +234,37 @@ type PeerUpdate struct {
 	UDPDial *string `json:"udp_dial"`
 }
 
+// PathUpdate is the body of PUT /api/v1/peers/{name}/paths/{path} (since 0.4.0): what
+// to set on that one path. A field that is absent stays as it is; at least one must be
+// there. A path that the peer does not have yet is added: it needs addr, and what the
+// request does not name is type tcp, security tls, the data role and 8 sub-connections.
+// The node changes the one path in one step, so requests for two paths of a peer that
+// arrive at the same time both take effect, which a PUT of the whole list cannot
+// promise.
+type PathUpdate struct {
+	Addr     *string   `json:"addr"`
+	Type     *string   `json:"type"`
+	Proxy    *string   `json:"proxy"`
+	Security *string   `json:"security"`
+	Verify   *string   `json:"verify"`
+	Pin      *string   `json:"pin"`
+	Roles    *[]string `json:"roles"`
+	Subs     *int      `json:"subs"`
+}
+
+// PathSet is the answer of PUT /api/v1/peers/{name}/paths/{path}: whether the path is
+// new, and the peer with all its paths as stored.
+type PathSet struct {
+	Created bool `json:"created"`
+	Peer    Peer `json:"peer"`
+}
+
 // RuleSpec is the body of POST /api/v1/rules and PUT /api/v1/rules/{name}: a fixed rule
 // (listen and destination, each IP:port or IP:first-last, with ranges of the same
-// length) or a transparent rule (match, a list of networks with optional ports). Enabled
-// is true when absent. In a PUT, an absent name means the name in the path.
+// length) or a transparent rule (match, a list of networks with optional ports). Since
+// 0.4.0 the destination may have a host name in the place of the IP, which the peer
+// looks up for every connection. Enabled is true when absent. In a PUT, an absent name
+// means the name in the path.
 type RuleSpec struct {
 	Name        string `json:"name"`
 	Listen      string `json:"listen,omitempty"`
@@ -254,6 +288,19 @@ type Rule struct {
 	// ErrorAt is when what Error says happened (since 0.3.0); absent where Error is a
 	// state that holds now and not an event.
 	ErrorAt *time.Time `json:"error_at,omitempty"`
+}
+
+// PeerRemoval is the answer of DELETE /api/v1/peers/{name} when the request has the
+// query "rules" (since 0.4.0): "rules=keep" removes the peer and lists the rules that
+// still name it, "rules=remove" removes those rules with it. Without the query the
+// answer is 204 with no body, as before, and the rules stay.
+type PeerRemoval struct {
+	Peer string `json:"peer"`
+	// Rules are the names of the rules that named the peer, in the order of the list.
+	Rules []string `json:"rules"`
+	// RulesRemoved: they were removed with the peer. Otherwise they are still there,
+	// and a node that is paired under the same name later takes them over.
+	RulesRemoved bool `json:"rules_removed"`
 }
 
 // PeerCheck is the answer of POST /api/v1/peers/{name}/check.
@@ -336,8 +383,10 @@ func New(cfg Config) *Server {
 	add(http.MethodPut, PathPeers+"/{name}", s.putPeer)
 	add(http.MethodDelete, PathPeers+"/{name}", s.removePeer)
 	add(http.MethodPost, PathPeers+"/{name}/check", s.checkPeer)
+	add(http.MethodPut, PathPeers+"/{name}/paths/{path}", s.putPath)
+	add(http.MethodDelete, PathPeers+"/{name}/paths/{path}", s.removePath)
 	add(http.MethodPut, PathNode, s.putNode)
-	if cfg.UI != nil {
+	if cfg.UI != nil && !cfg.UI.Off {
 		add(http.MethodPost, PathLogout, s.logout)
 	}
 	if cfg.Rules != nil {
@@ -682,12 +731,81 @@ func (s *Server) putPeer(w http.ResponseWriter, r *http.Request, arg map[string]
 	writeJSON(w, http.StatusOK, s.peer(p))
 }
 
-func (s *Server) removePeer(w http.ResponseWriter, _ *http.Request, arg map[string]string) {
-	if err := s.cfg.Node.RemovePeer(arg["name"]); err != nil {
+func (s *Server) putPath(w http.ResponseWriter, r *http.Request, arg map[string]string) {
+	var req PathUpdate
+	if !readBody(w, r, &req) {
+		return
+	}
+	c := node.PathChange{Addr: req.Addr, Type: req.Type, Proxy: req.Proxy, Security: req.Security, Verify: req.Verify, Pin: req.Pin, Roles: req.Roles, Subs: req.Subs}
+	if c.Empty() {
+		writeError(w, http.StatusBadRequest, "the request changes nothing, because it has none of the fields \"addr\", \"type\", \"proxy\", \"security\", \"verify\", \"pin\", \"roles\", \"subs\"")
+		return
+	}
+	p, created, err := s.cfg.Node.SetPath(arg["name"], arg["path"], c)
+	if err != nil {
 		fail(w, err, false)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	code := http.StatusOK
+	if created {
+		code = http.StatusCreated
+	}
+	writeJSON(w, code, PathSet{Created: created, Peer: s.peer(p)})
+}
+
+func (s *Server) removePath(w http.ResponseWriter, _ *http.Request, arg map[string]string) {
+	p, err := s.cfg.Node.RemovePath(arg["name"], arg["path"])
+	if err != nil {
+		fail(w, err, false)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.peer(p))
+}
+
+func (s *Server) removePeer(w http.ResponseWriter, r *http.Request, arg map[string]string) {
+	name := arg["name"]
+	mode := ""
+	if q := r.URL.Query(); q.Has("rules") {
+		if mode = q.Get("rules"); mode != "keep" && mode != "remove" {
+			writeError(w, http.StatusBadRequest, "the query \"rules\" is \"keep\" or \"remove\"")
+			return
+		}
+	}
+	out := PeerRemoval{Peer: name, Rules: []string{}, RulesRemoved: mode == "remove"}
+	if mode != "" {
+		// the peer has to be there before any of its rules goes
+		if _, err := s.cfg.Node.Peer(name); err != nil {
+			fail(w, err, false)
+			return
+		}
+		if s.cfg.Rules != nil {
+			for _, st := range s.cfg.Rules.Rules() {
+				if st.Rule.Peer == name {
+					out.Rules = append(out.Rules, st.Rule.Name)
+				}
+			}
+		}
+	}
+	// the peer first: if its removal fails nothing has changed, and if the removal of a
+	// rule fails afterwards the rules are merely still there, as without "remove"
+	if err := s.cfg.Node.RemovePeer(name); err != nil {
+		fail(w, err, false)
+		return
+	}
+	if mode == "remove" {
+		for _, rule := range out.Rules {
+			// one that somebody else removed in between is gone all the same
+			if err := s.cfg.Rules.RemoveRule(rule); err != nil && !errors.Is(err, node.ErrNotFound) {
+				fail(w, err, false)
+				return
+			}
+		}
+	}
+	if mode == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) checkPeer(w http.ResponseWriter, r *http.Request, arg map[string]string) {

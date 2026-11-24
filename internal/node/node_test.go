@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -343,7 +344,7 @@ func TestStateRefusedAndKept(t *testing.T) {
 		"unknown field in schema 2":           `{"schema":2,"node":{"name":"alpha"},"peers":[],"pairing_codes":[],"rules":[],"extra":1}`,
 		"rules in schema 2":                   `{"schema":2,"node":{"name":"alpha"},"peers":[],"pairing_codes":[],"rules":[{"r":true}]}`,
 		"rules in schema 1":                   `{"schema":1,"node":{"name":"alpha"},"peers":[],"rules":[{"r":true}]}`,
-		"a rule that is not one":              `{"schema":3,"node":{"name":"alpha"},"peers":[],"pairing_codes":[],"rules":[{"name":"r","listen":"0.0.0.0:1","destination":"example.net:1","peer":"x","enabled":true}]}`,
+		"a rule that is not one":              `{"schema":3,"node":{"name":"alpha"},"peers":[],"pairing_codes":[],"rules":[{"name":"r","listen":"0.0.0.0:1","destination":"example..net:1","peer":"x","enabled":true}]}`,
 		"peers in schema 1":                   `{"schema":1,"node":{"name":"alpha"},"peers":[{"k":1}],"rules":[]}`,
 		"peer without a secret":               `{"schema":2,"node":{"name":"alpha"},"peers":[{"name":"x","fingerprint":"` + strings.Repeat("a", 64) + `","pair_secret":"","addresses":[],"paired_at":"2001-02-03T04:05:06Z","paths":[]}],"pairing_codes":[],"rules":[]}`,
 		"schema zero":                         `{"schema":0,"node":{"name":"alpha"},"peers":[],"rules":[]}`,
@@ -378,7 +379,7 @@ func TestStateRefusedAndKept(t *testing.T) {
 
 // A name that is given is used, and renames a node that had another one. Without a name
 // the node keeps the one it has; only a directory without a state file takes the host
-// name.
+// name, with a random suffix that it keeps from then on.
 func TestNodeName(t *testing.T) {
 	host, err := os.Hostname()
 	if err != nil || host == "" {
@@ -418,8 +419,53 @@ func TestNodeName(t *testing.T) {
 		}
 		return
 	}
-	if n := mustOpen(t, fresh, ""); n.Name() != host || stored(fresh) != host {
-		t.Fatalf("new directory without a name: node %q, state file %q, want the host name %q", n.Name(), stored(fresh), host)
+	// a host name that would be too long with the suffix gives up its end
+	if room := MaxNameLen - 1 - nameSuffixLen; len(host) > room {
+		host = strings.TrimRight(cutName(host, room), "-._")
+	}
+	suffixed := regexp.MustCompile("^" + regexp.QuoteMeta(host) + "-[a-z0-9]{4}$")
+	first := mustOpen(t, fresh, "").Name()
+	if !suffixed.MatchString(first) || stored(fresh) != first {
+		t.Fatalf("new directory without a name: node %q, state file %q, want the host name %q with a suffix", first, stored(fresh), host)
+	}
+	// the name stays: a second start makes no new suffix and rewrites nothing
+	before = snapshot(t, fresh)
+	if n := mustOpen(t, fresh, ""); n.Name() != first {
+		t.Fatalf("started again without a name: node %q, want %q as before", n.Name(), first)
+	}
+	sameFiles(t, "starting again without a name", before, snapshot(t, fresh))
+	// another new directory on the same host: another name
+	if other := mustOpen(t, t.TempDir(), "").Name(); !suffixed.MatchString(other) || other == first {
+		t.Fatalf("a second new directory on this host: node %q, the first was %q", other, first)
+	}
+}
+
+// DefaultName adds a hyphen and four characters out of a-z and 0-9, and differs from one
+// call to the next.
+func TestDefaultName(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 50; i++ {
+		name, err := DefaultName("nas")
+		if err != nil || !regexp.MustCompile(`^nas-[a-z0-9]{4}$`).MatchString(name) {
+			t.Fatalf("DefaultName: %q, %v", name, err)
+		}
+		seen[name] = true
+	}
+	if len(seen) < 45 {
+		t.Errorf("50 names, only %d different ones", len(seen))
+	}
+	// a host name that leaves no room for the suffix gives up its end, at a character
+	// and not in the middle of one, and without a joining character before the suffix
+	for host, want := range map[string]string{
+		strings.Repeat("a", 64):               strings.Repeat("a", 59),
+		strings.Repeat("a", 58) + "-bcdef":    strings.Repeat("a", 58),
+		strings.Repeat("a", 57) + "\u00e9xyz": strings.Repeat("a", 57) + "\u00e9",
+		strings.Repeat("a", 58) + "\u00e9xyz": strings.Repeat("a", 58),
+	} {
+		name, err := DefaultName(host)
+		if err != nil || len(name) > MaxNameLen || CheckName(name) != nil || !strings.HasPrefix(name, want+"-") || len(name) != len(want)+1+nameSuffixLen {
+			t.Errorf("DefaultName(%q): %q, %v, want %q with a suffix", host, name, err, want)
+		}
 	}
 }
 

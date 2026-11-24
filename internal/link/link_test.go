@@ -609,8 +609,19 @@ func TestTierOwnCert(t *testing.T) {
 	_, onB3 := pairNodes(t, d, b)
 	p = path(node.VerifyPin, ownFP)
 	p.Addr = d.addr
-	if err := check(b, onB3, p); err == nil {
+	err := check(b, onB3, p)
+	if err == nil {
 		t.Fatal("owncert at a listener that has no operator's certificate succeeded")
+	}
+	// and the error says that the tiers do not match, and what to do about it
+	for _, want := range []string{"security tiers of the two ends do not match", "owncert", "-cert and -key", "security to tls"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("owncert at a listener without a certificate: %q does not say %q", err, want)
+		}
+	}
+	p.Verify, p.Pin = node.VerifyCA, ""
+	if err := check(b, onB3, p); err == nil || !strings.Contains(err.Error(), "security tiers of the two ends do not match") {
+		t.Errorf("owncert with verify ca at a listener without a certificate: %v", err)
 	}
 }
 
@@ -627,11 +638,29 @@ func TestTierOff(t *testing.T) {
 		t.Fatalf("alpha to beta's plain listener: %v", err)
 	}
 	// plain against the TLS listener, and TLS against the plain listener, both fail
-	if err := check(b, onB, off(a.addr)); err == nil {
+	// and each error says that the tiers may not match, and which listener takes what
+	err := check(b, onB, off(a.addr))
+	if err == nil {
 		t.Fatal("a plain connection to the TLS listener succeeded")
 	}
-	if err := check(b, onB, tlsPath(a.plain)); err == nil {
+	for _, want := range []string{"closed the connection without answering", "security tiers of the two ends do not match", "-listen-plain", "security to tls"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("a plain connection to the TLS listener: %q does not say %q", err, want)
+		}
+	}
+	err = check(b, onB, tlsPath(a.plain))
+	if err == nil {
 		t.Fatal("a TLS connection to the plain listener succeeded")
+	}
+	for _, want := range []string{"may be busy. Try again.", "security tiers of the two ends do not match", "-listen-plain"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("a TLS connection to the plain listener: %q does not say %q", err, want)
+		}
+	}
+	// a path of the right tier that fails for another reason does not blame the tier
+	x := startNode(t, "xi", nil)
+	if err := check(x, onB, off(a.plain)); err == nil || strings.Contains(err.Error(), "security tiers") && !strings.Contains(err.Error(), "may also be") {
+		t.Errorf("an unpaired node at the plain listener: %v", err)
 	}
 	// nothing listens
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")

@@ -65,7 +65,7 @@ func TestRuleRoutes(t *testing.T) {
 	}
 	wantError(t, "same name", b.send("POST", PathRules, spec), 400)
 	wantError(t, "unknown peer", b.send("POST", PathRules, `{"name":"x","listen":"127.0.0.1:1","destination":"192.0.2.1:1","peer":"nobody"}`), 400)
-	wantError(t, "host name", b.send("POST", PathRules, `{"name":"x","listen":"127.0.0.1:1","destination":"nas.example.net:1","peer":"alpha"}`), 400)
+	wantError(t, "what is neither an address nor a host name", b.send("POST", PathRules, `{"name":"x","listen":"127.0.0.1:1","destination":"nas..example.net:1","peer":"alpha"}`), 400)
 	wantError(t, "range lengths", b.send("POST", PathRules, `{"name":"x","listen":"127.0.0.1:1-3","destination":"192.0.2.1:1-2","peer":"alpha"}`), 400)
 	wantError(t, "taken port", b.send("POST", PathRules, fmt.Sprintf(`{"name":"x","listen":%q,"destination":"192.0.2.1:1","peer":"alpha"}`, in)), 400)
 	wantError(t, "unknown field", b.send("POST", PathRules, `{"name":"x","listen":"127.0.0.1:1","destination":"192.0.2.1:1","peer":"alpha","sessions":1}`), 400)

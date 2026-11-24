@@ -21,12 +21,18 @@
 //	paths         to the end with the paths    request
 //	paths_reply   the answer                   request, paths
 //	test_end      to the end with the sink     session
+//	resolve       to the end that will connect  request, host, port
+//	resolve_reply the answer                   request, addr, or code and reason
 //
 // session_fail tells the end that carries a session why the other end could not connect
 // it to its destination. paths asks an end for the names and sizes of the paths it holds
 // to the asking end, for a path test that the asking end runs (FeaturePathTest); an open
 // with test_path asks for the sub-connections of such a test, and test_end says that
 // the asking end has ended one of the test's sessions.
+//
+// resolve asks the other end which address a host name stands for in its network, for
+// a session that the asking end is about to carry to that name (FeatureResolve). The
+// answer names one IP address, or says why there is none.
 //
 // A message longer than MaxMessage, or one whose MAC is wrong, ends the connection.
 package control
@@ -74,6 +80,9 @@ const (
 	TypePaths       = "paths"
 	TypePathsReply  = "paths_reply"
 	TypeTestEnd     = "test_end"
+	// since 0.4.0
+	TypeResolve      = "resolve"
+	TypeResolveReply = "resolve_reply"
 )
 
 // FeaturePathTest in a hello says that the sending node takes the sessions of a path
@@ -81,10 +90,21 @@ const (
 // with test_path).
 const FeaturePathTest = "path-test"
 
+// FeatureResolve in a hello says that the sending node answers resolve: it looks up a
+// host name for a peer that carries a connection to it.
+const FeatureResolve = "resolve"
+
 // The codes of a session_fail.
 const (
 	CodeAllow = "allow" // the destination is not in the allow list kept for the other node
 	CodeDial  = "dial"  // connecting to the destination failed; the reason is the system's error
+)
+
+// The codes of a resolve_reply that names no address. CodeAllow is one of them too:
+// the name stands for no address that the allow list kept for the asking node holds.
+const (
+	CodeLookup = "lookup" // the name could not be looked up; the reason is the resolver's error
+	CodeBusy   = "busy"   // the node looks up as many names as it does at a time
 )
 
 // PathInfo is one path in a paths_reply: what the holder of the path calls it, how many
@@ -123,8 +143,16 @@ type Message struct {
 	// keep on it (0: as many as the path has)
 	TestPath int `json:"test_path,omitempty"`
 	TestSubs int `json:"test_subs,omitempty"`
-	// session_fail: CodeAllow or CodeDial
+	// session_fail: CodeAllow or CodeDial. resolve_reply without an address: CodeLookup,
+	// CodeAllow or CodeBusy
 	Code string `json:"code,omitempty"`
+	// resolve: the host name to look up, and the port the session will go to (the
+	// allow list of the answering node may depend on it)
+	Host string `json:"host,omitempty"`
+	Port int    `json:"port,omitempty"`
+	// resolve_reply: the IP address the name stands for at the answering node, as text;
+	// empty when there is none (Code and Reason say why)
+	Addr string `json:"addr,omitempty"`
 	// paths_reply: the paths the sending node holds to the node that asked
 	Paths []PathInfo `json:"paths,omitempty"`
 }

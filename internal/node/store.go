@@ -189,6 +189,103 @@ func withSuffix(name, suffix string) string {
 	return name + suffix
 }
 
+// PathChange says what to set on one path of a peer. A nil field leaves that setting as
+// it is.
+type PathChange struct {
+	Addr, Type, Proxy, Security, Verify, Pin *string
+	Roles                                    *[]string
+	Subs                                     *int
+}
+
+// Empty reports whether the change sets nothing.
+func (c PathChange) Empty() bool {
+	return c.Addr == nil && c.Type == nil && c.Proxy == nil && c.Security == nil && c.Verify == nil && c.Pin == nil && c.Roles == nil && c.Subs == nil
+}
+
+// Apply sets on p what the change names. What only goes with a setting that the change
+// takes away goes with it, unless the change names it too: the proxy when the type is
+// no longer socks5, verify and pin when the security is no longer owncert, the pin when
+// verify becomes ca.
+func (c PathChange) Apply(p *Path) {
+	if c.Addr != nil {
+		p.Addr = *c.Addr
+	}
+	if c.Type != nil {
+		p.Type = *c.Type
+		if p.Type != "socks5" && c.Proxy == nil {
+			p.Proxy = ""
+		}
+	}
+	if c.Proxy != nil {
+		p.Proxy = *c.Proxy
+	}
+	if c.Security != nil {
+		p.Security = *c.Security
+		if p.Security != SecurityOwnCert {
+			if c.Verify == nil {
+				p.Verify = ""
+			}
+			if c.Pin == nil {
+				p.Pin = ""
+			}
+		}
+	}
+	if c.Verify != nil {
+		p.Verify = *c.Verify
+		if p.Verify == VerifyCA && c.Pin == nil {
+			p.Pin = ""
+		}
+	}
+	if c.Pin != nil {
+		p.Pin = *c.Pin
+	}
+	if c.Roles != nil {
+		p.Roles = append([]string{}, *c.Roles...)
+	}
+	if c.Subs != nil {
+		p.Subs = *c.Subs
+	}
+}
+
+// NewPath returns a path called name with the settings a new path has when nothing else
+// is said: type tcp, security tls, the data role, 8 sub-connections. It has no address
+// yet.
+func NewPath(name string) Path {
+	return Path{Name: name, Type: "tcp", Security: SecurityTLS, Roles: []string{RoleData}, Subs: 8}
+}
+
+// ChangePaths changes the paths of the peer called name in one step and returns the
+// peer as stored: change is given a copy of the paths as they are at that moment and
+// returns the paths to store. Nothing can change the peer between the two, so two
+// callers that each change another path both take effect. An error of change is
+// returned as it is and changes nothing; paths that CheckPaths refuses are an error
+// that matches ErrInvalid.
+func (n *Node) ChangePaths(name string, change func(paths []Path) ([]Path, error)) (Peer, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	var stored Peer
+	err := n.update(func(st *State) error {
+		for i := range st.Peers {
+			p := &st.Peers[i]
+			if p.Name != name {
+				continue
+			}
+			paths, err := change(p.clone().Paths)
+			if err != nil {
+				return err
+			}
+			if err := CheckPaths(paths); err != nil {
+				return fmt.Errorf("%w: %w", ErrInvalid, err)
+			}
+			p.Paths = Peer{Paths: paths}.clone().Paths
+			stored = p.clone()
+			return nil
+		}
+		return fmt.Errorf("peer %q: %w", name, ErrNotFound)
+	})
+	return stored, err
+}
+
 // SetPeerPaths replaces the paths of the peer called name by paths and returns the peer
 // as stored; see UpdatePeer.
 func (n *Node) SetPeerPaths(name string, paths []Path) (Peer, error) {

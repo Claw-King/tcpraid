@@ -4,7 +4,7 @@
 tcpraid run     [flags]                       start a node
 tcpraid status  [-json]                       the node on this host
 tcpraid pair    create | list | revoke ID | join [CODE]
-tcpraid peers   [list] | show NAME | check NAME | remove NAME
+tcpraid peers   [list] | show NAME | check NAME | remove NAME [-with-rules]
 tcpraid peers   test NAME [-seconds N] [-path PATH] [-json]
 tcpraid peers   set NAME [-allow LIST] [-udp-dial HOST:PORT]
 tcpraid peers   path set NAME PATH [flags] | path remove NAME PATH
@@ -27,7 +27,7 @@ tcpraid version
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.3.0 (wire protocol 1)
+version      0.4.0 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -76,7 +76,7 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.3.0, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.4.0, last heard 2026-01-15T10:00:05Z
 
 PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS
 default  tcp   nas-a.example.org:9851  -      tls       -       -    data   8
@@ -89,7 +89,18 @@ peer nas-b removed. The other node is not told and still lists this one.
 ```
 
 - `peers check NAME` 在每条路径上按该路径的档位打开一条连接，并让另一个节点证明它持有这个配对。有路径不通时以状态 1 退出。没有通往对端路径的节点没有可检查的。
-- `peers remove NAME` 在本节点上解除配对。和这个对端之间两个方向上的会话都被重置，它的连接从此被拒绝。
+- `peers remove NAME` 在本节点上解除配对。和这个对端之间两个方向上的会话都被重置，它的连接从此被拒绝。命令随后列出仍然指向这个对端的规则。这些规则会保留，以后用同一个名字配对的节点会接手它们。带上 `-with-rules` 时，这些规则和对端一起删除。
+
+```
+$ tcpraid peers remove nas-a
+peer nas-a removed. The other node is not told and still lists this one.
+These rules still name nas-a: rsync, zfs
+A node that is paired with this one under the same name later takes them over. To prevent that, remove them with "tcpraid rules remove".
+
+$ tcpraid peers remove nas-a -with-rules
+peer nas-a removed. The other node is not told and still lists this one.
+The rules that named it were removed with it: rsync, zfs
+```
 
 ### peers test
 
@@ -145,6 +156,8 @@ path side of nas-a removed
 
 一个对端最多有 16 条路径。路径的名字最长 32 字节，不能有空格。不合规定的路径会被拒绝，什么都不会改变。显示代理时不带它的用户名和密码。
 
+节点对这一条路径的修改是一步完成的。两条这样的命令同时运行、改的是同一个对端的两条路径时，两处修改都生效。同时运行的 `peers set` 也一样。
+
 ### peers set
 
 `peers set NAME [-allow LIST] [-udp-dial HOST:PORT]` 修改对端 `NAME` 的两项设置。只有给出的项会改变，给空值就是清除这项设置。两个参数都不给时，命令什么也不改并报错(退出状态 1)。
@@ -193,7 +206,7 @@ rule rsync removed. Connections it carries now run to their end.
 
 `rules add NAME -peer PEER`，后面跟下面两者之一：
 
-- `-listen IP:PORT[-PORT] -dest IP:PORT[-PORT]`：固定规则。`-listen` 的 IP 可以不写，例如 `:9801`，表示所有地址。IPv6 地址要放在方括号里。两段端口长度相同，最多 1024 个端口，逐个端口对应。目的地是 IP 地址，不支持主机名。两条规则不能监听同一个地址的同一个端口。
+- `-listen IP:PORT[-PORT] -dest HOST:PORT[-PORT]`：固定规则。`-listen` 的 IP 可以不写，例如 `:9801`，表示所有地址。IPv6 地址要放在方括号里。两段端口长度相同，最多 1024 个端口，逐个端口对应。两条规则不能监听同一个地址的同一个端口。目的地可以写 IP 地址，也可以写主机名，例如 `-dest nas.lan:873`。目的地在对端的网络里，所以名字由对端解析，每条连接解析一次，连接去往对端给本节点设的允许列表放行的第一个地址。写主机名时，两个节点都要是 0.4.0 或更新的版本。
 - `-match NETWORKS`：透明规则，用于以 `-transparent` 启动的节点。网段写成 CIDR 形式，可带端口或端口段，用逗号分隔，例如 `192.0.2.0/24:873,[2001:db8::/32]:5000-5010`。
 
 `-disabled` 把规则以停用状态保存。一个节点最多有 256 条规则，规则的名字最长 64 字节，不能有空格。
@@ -207,6 +220,8 @@ rsync  0.0.0.0:9801  nas-a  192.0.2.10:873  0         listening, last connection
 ```
 
 对端连不上目的地，或者对端的允许列表里没有这个目的地时，对端会把原因报回来，规则把它显示出来。0.3.0 之前的对端不会报，这时规则会让你去看对端的日志。连接因为对端不应答而等着的时候，规则会说明那些尝试碰到了什么，这种情况不带时间。这条规则的下一条连接到来时，上一条留下的内容会被清掉。
+
+目的地是主机名的规则，在名字没有解析出地址时也会写明原因，比如对端不认识这个名字、对端没有连上、对端的允许列表里没有这个名字的任何地址，或者对端的版本不解析名字。
 
 ## sessions
 
@@ -251,5 +266,5 @@ ID      ROLE    RULE   PEER   DESTINATION     AGE    SENT     RECEIVED  AVERAGE 
 
 ```
 $ tcpraid version
-tcpraid 0.3.0 (wire protocol 1)
+tcpraid 0.4.0 (wire protocol 1)
 ```

@@ -69,6 +69,10 @@ type UI struct {
 	PasswordHash string
 	// Files are the static files, served at the root; index.html is the page. nil: none.
 	Files fs.FS
+	// Off switches the web interface off: the paths of its files and the login answer
+	// 404, and no cookie authorizes anything. Files is still needed, to know which
+	// paths those are. The token and everything it gives access to stay as they are.
+	Off bool
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 
@@ -93,6 +97,13 @@ func (u *UI) now() time.Time {
 // serve answers the requests that need no authorization: the static files and the
 // login. It reports whether it answered.
 func (u *UI) serve(w http.ResponseWriter, r *http.Request) bool {
+	if u.Off {
+		if r.URL.Path == PathLogin || ((r.Method == http.MethodGet || r.Method == http.MethodHead) && u.isFile(r.URL.Path)) {
+			writeError(w, http.StatusNotFound, "the web interface of this node is switched off")
+			return true
+		}
+		return false
+	}
 	switch {
 	case r.URL.Path == PathLogin && r.Method == http.MethodPost:
 		u.login(w, r)
@@ -103,16 +114,36 @@ func (u *UI) serve(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
-// file serves a static file, if the path names one.
-func (u *UI) file(w http.ResponseWriter, r *http.Request) bool {
+// fileName returns the name of the static file that the request path stands for, or ""
+// when it cannot stand for one.
+func (u *UI) fileName(urlPath string) string {
 	if u.Files == nil {
-		return false
+		return ""
 	}
-	name := strings.TrimPrefix(r.URL.Path, "/")
+	name := strings.TrimPrefix(urlPath, "/")
 	if name == "" {
 		name = "index.html"
 	}
 	if strings.Contains(name, "/") || !fs.ValidPath(name) {
+		return ""
+	}
+	return name
+}
+
+// isFile reports whether the request path names one of the static files.
+func (u *UI) isFile(urlPath string) bool {
+	name := u.fileName(urlPath)
+	if name == "" {
+		return false
+	}
+	fi, err := fs.Stat(u.Files, name)
+	return err == nil && !fi.IsDir()
+}
+
+// file serves a static file, if the path names one.
+func (u *UI) file(w http.ResponseWriter, r *http.Request) bool {
+	name := u.fileName(r.URL.Path)
+	if name == "" {
 		return false
 	}
 	b, err := fs.ReadFile(u.Files, name)
@@ -236,7 +267,7 @@ func (u *UI) login(w http.ResponseWriter, r *http.Request) {
 // loggedIn reports whether the request carries the cookie of a login that has not ended.
 func (u *UI) loggedIn(r *http.Request) bool {
 	c, err := r.Cookie(SessionCookie)
-	if err != nil || c.Value == "" {
+	if err != nil || c.Value == "" || u.Off {
 		return false
 	}
 	u.mu.Lock()

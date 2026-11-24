@@ -34,7 +34,7 @@ Www-Authenticate: Bearer
 ### GET /api/v1/status
 
 ```
-{"version":"0.3.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.4.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
  "sessions":2,"peers":1,"rules":2}
 ```
@@ -115,7 +115,7 @@ Cache-Control: no-store
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.3.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.4.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
 `online` 表示和这个对端之间有一条控制连接连着。`version` 和 `last_message` 在收到过对端的消息之后才出现。加入到本节点的对端，在这里没有 `addresses`，也没有 `paths`。配对密钥绝不会出现在回答里，显示代理时不带它的用户名和密码。
@@ -127,11 +127,27 @@ Cache-Control: no-store
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.3.0",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.4.0",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 
 `allow` 是对端经由本节点可以访问的目的地，写成网段，可带端口或端口段，用逗号分隔。留空表示不限。`udp_dial` 是本节点为和这个对端之间的会话发送 UDP 回执的地址。留空表示不发。
+
+### PUT /api/v1/peers/{name}/paths/{path}, DELETE /api/v1/peers/{name}/paths/{path}
+
+0.4.0 版新增。`PUT` 修改对端的一条路径，对端没有这个名字的路径时就新建。请求体里可以有 `addr`、`type`、`proxy`、`security`、`verify`、`pin`、`roles`、`subs` 中的任意几项，至少一项。请求体没有提到的设置保持原样。新路径必须给 `addr`，没有提到的设置取 `tcp`、`tls`、`data` 角色和 8 条子连接。回答是 `{"created": ..., "peer": {...}}`，里面是保存之后的对端。新建时状态是 `201`，修改时是 `200`。
+
+```
+$ curl -X PUT ... -d '{"subs":4}' http://127.0.0.1:9850/api/v1/peers/nas-a/paths/default
+{"created":false,"peer":{"name":"nas-a","fingerprint":"e5645f9b...7795ec86","addresses":["nas-a.example.org:9851"],
+ "paired_at":"2026-01-15T10:00:20Z",
+ "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":4}],
+ "allow":"","udp_dial":"","online":true,"version":"0.4.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
+```
+
+`DELETE` 删除这条路径，回答是对端。对端没有这条路径时是 `404`。
+
+对这两种请求，节点读出和写回对端的路径是一步完成的，所以同时到达、改的是同一个对端两条路径的请求都会生效。整份替换的 `PUT`(`PUT /api/v1/peers/{name}` 带 `paths`)保证不了这一点，因为它送来的那份列表是早先读出来的。
 
 ### POST /api/v1/peers/{name}/check
 
@@ -167,7 +183,14 @@ $ curl -X POST ... -d '{"seconds":10}' http://127.0.0.1:9850/api/v1/peers/nas-a/
 
 ### DELETE /api/v1/peers/{name}
 
-在本节点上解除配对，并重置和这个对端之间的会话。`204`。
+在本节点上解除配对，并重置和这个对端之间的会话。`204`。指向这个对端的规则会保留。
+
+带上 0.4.0 版新增的查询参数 `rules` 时，回答是 `200`，并列出指向这个对端的规则。`?rules=keep` 保留它们，`?rules=remove` 把它们和对端一起删除：
+
+```
+$ curl -X DELETE ... 'http://127.0.0.1:9850/api/v1/peers/nas-a?rules=remove'
+{"peer":"nas-a","rules":["rsync","zfs"],"rules_removed":true}
+```
 
 ## 规则
 
@@ -193,7 +216,7 @@ $ curl -X POST ... -d '{"seconds":10}' http://127.0.0.1:9850/api/v1/peers/nas-a/
 
 ### POST /api/v1/rules
 
-请求体 `{"name", "peer", "listen", "destination"}` 或 `{"name", "peer", "match"}`，还可以带 `"enabled": false`。
+请求体 `{"name", "peer", "listen", "destination"}` 或 `{"name", "peer", "match"}`，还可以带 `"enabled": false`。从 0.4.0 版起，目的地里 IP 地址的位置可以写主机名，例如 `"nas.lan:873"`，由对端在每条连接到来时解析。
 
 ```
 $ curl -X POST ... -d '{"name":"pg","peer":"nas-a","listen":"127.0.0.1:15432","destination":"192.0.2.10:5432"}' http://127.0.0.1:9850/api/v1/rules
@@ -207,7 +230,7 @@ HTTP/1.1 201 Created
 ```
 HTTP/1.1 400 Bad Request
 
-{"error":"invalid: rule \"bad\": destination \"example.org:80\": \"example.org\" is not an IP address (host names are not supported)"}
+{"error":"invalid: rule \"bad\": destination \"192.0.2:80\": \"192.0.2\" cannot be used: it is neither an IP address nor a host name, whose last part is never a number"}
 ```
 
 ### PUT /api/v1/rules/{name}
@@ -240,3 +263,5 @@ Set-Cookie: tcpraid_session=d4719741...; Path=/; Max-Age=43200; HttpOnly; SameSi
 ### POST /api/v1/logout
 
 结束登录。`204`。
+
+带 `-no-ui` 启动的节点没有网页界面。在这样的节点上，登录接口和页面文件的路径回答 `404`，cookie 不授权任何请求。

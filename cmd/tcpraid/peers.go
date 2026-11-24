@@ -9,7 +9,7 @@ package main
 //	tcpraid pair join [CODE] [-addr HOST:PORT]
 //	tcpraid peers
 //	tcpraid peers show NAME
-//	tcpraid peers remove NAME
+//	tcpraid peers remove NAME [-with-rules]
 //	tcpraid peers check NAME
 //	tcpraid peers test NAME [-seconds N] [-path PATH] [-json]
 //	tcpraid peers set NAME [-allow LIST] [-udp-dial HOST:PORT]
@@ -104,7 +104,9 @@ func apiCall(dataDir, method, path string, in, out any, timeout time.Duration) e
 		}
 		return errors.New(e.Error)
 	}
-	if out == nil {
+	if out == nil || len(bytes.TrimSpace(answer)) == 0 {
+		// nothing to read, or a node that answers this request without a body: out
+		// stays as it was
 		return nil
 	}
 	if err := json.Unmarshal(answer, out); err != nil {
@@ -380,14 +382,17 @@ func printPaths(w io.Writer, paths []api.Path) error {
 	return tw.Flush()
 }
 
-// cmdPeersPath is "tcpraid peers path set|remove". Both read the peer, change its list
-// of paths and send the list back: the node replaces the paths as a whole.
+// cmdPeersPath is "tcpraid peers path set|remove". Each asks the node to change the one
+// path: the node reads and writes the peer's paths in one step, so two of these commands
+// that run at the same time for two paths both take effect.
 func cmdPeersPath(args []string, stdout, stderr io.Writer) int {
 	var set *flag.FlagSet
 	var f struct {
 		addr, typ, proxy, security, verify, pin, roles string
 		subs                                           int
 	}
+	// pathURL is the path of one path of a peer in an API request.
+	pathURL := func(peer, path string) string { return peerPath(peer) + "/paths/" + url.PathEscape(path) }
 	return dispatch("peers path", "", []string{"set", "remove"}, map[string]command{
 		"set": {
 			name: "peers path set", usage: "NAME PATH", nargs: 2,
@@ -404,96 +409,69 @@ func cmdPeersPath(args []string, stdout, stderr io.Writer) int {
 			},
 			run: func(dataDir string, args []string, stdout, _ io.Writer) error {
 				peer, pathName := args[0], args[1]
-				var p api.Peer
-				if err := apiCall(dataDir, http.MethodGet, peerPath(peer), nil, &p, shortCall); err != nil {
-					return err
-				}
-				given := map[string]bool{}
-				set.Visit(func(fl *flag.Flag) { given[fl.Name] = true })
-				idx := -1
-				for i := range p.Paths {
-					if p.Paths[i].Name == pathName {
-						idx = i
+				// only what was given is sent: the node leaves the rest of the path as it is
+				var req api.PathUpdate
+				set.Visit(func(fl *flag.Flag) {
+					switch fl.Name {
+					case "addr":
+						req.Addr = &f.addr
+					case "type":
+						req.Type = &f.typ
+					case "proxy":
+						req.Proxy = &f.proxy
+					case "security":
+						req.Security = &f.security
+					case "verify":
+						req.Verify = &f.verify
+					case "pin":
+						req.Pin = &f.pin
+					case "roles":
+						roles := strings.Split(f.roles, ",")
+						req.Roles = &roles
+					case "subs":
+						req.Subs = &f.subs
 					}
+				})
+				needsAddr := fmt.Errorf("%s has no path %s, and a new path needs -addr", peer, pathName)
+				if req == (api.PathUpdate{}) {
+					// nothing to change: the path is shown as it is, as this command always did
+					var p api.Peer
+					if err := apiCall(dataDir, http.MethodGet, peerPath(peer), nil, &p, shortCall); err != nil {
+						return err
+					}
+					for _, path := range p.Paths {
+						if path.Name == pathName {
+							fmt.Fprintf(stdout, "path %s of %s changed\n", pathName, peer)
+							return printPaths(stdout, p.Paths)
+						}
+					}
+					return needsAddr
+				}
+				var done api.PathSet
+				if err := apiCall(dataDir, http.MethodPut, pathURL(peer, pathName), req, &done, shortCall); err != nil {
+					if strings.Contains(err.Error(), "a new path needs an address") {
+						return needsAddr // in the words of this command
+					}
+					return err
 				}
 				verb := "changed"
-				if idx < 0 {
-					if !given["addr"] {
-						return fmt.Errorf("%s has no path %s, and a new path needs -addr", peer, pathName)
-					}
-					p.Paths = append(p.Paths, api.Path{Name: pathName, Type: "tcp", Security: node.SecurityTLS, Roles: []string{node.RoleData}, Subs: 8})
-					idx, verb = len(p.Paths)-1, "added"
-				}
-				path := &p.Paths[idx]
-				if given["addr"] {
-					path.Addr = f.addr
-				}
-				if given["type"] {
-					path.Type = f.typ
-					if f.typ != "socks5" && !given["proxy"] {
-						path.Proxy = "" // a proxy goes with socks5 only
-					}
-				}
-				if given["proxy"] {
-					path.Proxy = f.proxy
-				}
-				if given["security"] {
-					path.Security = f.security
-					if f.security != node.SecurityOwnCert {
-						// verify and pin go with owncert only
-						if !given["verify"] {
-							path.Verify = ""
-						}
-						if !given["pin"] {
-							path.Pin = ""
-						}
-					}
-				}
-				if given["verify"] {
-					path.Verify = f.verify
-					if f.verify == node.VerifyCA && !given["pin"] {
-						path.Pin = ""
-					}
-				}
-				if given["pin"] {
-					path.Pin = f.pin
-				}
-				if given["roles"] {
-					path.Roles = strings.Split(f.roles, ",")
-				}
-				if given["subs"] {
-					path.Subs = f.subs
-				}
-				var stored api.Peer
-				if err := apiCall(dataDir, http.MethodPut, peerPath(peer), api.PeerUpdate{Paths: &p.Paths}, &stored, shortCall); err != nil {
-					return err
+				if done.Created {
+					verb = "added"
 				}
 				fmt.Fprintf(stdout, "path %s of %s %s\n", pathName, peer, verb)
-				return printPaths(stdout, stored.Paths)
+				return printPaths(stdout, done.Peer.Paths)
 			},
 		},
 		"remove": {
 			name: "peers path remove", usage: "NAME PATH", nargs: 2,
 			run: func(dataDir string, args []string, stdout, _ io.Writer) error {
 				peer, pathName := args[0], args[1]
-				var p api.Peer
-				if err := apiCall(dataDir, http.MethodGet, peerPath(peer), nil, &p, shortCall); err != nil {
-					return err
-				}
-				kept := []api.Path{}
-				for _, path := range p.Paths {
-					if path.Name != pathName {
-						kept = append(kept, path)
-					}
-				}
-				if len(kept) == len(p.Paths) {
-					return fmt.Errorf("%s has no path %s", peer, pathName)
-				}
-				if err := apiCall(dataDir, http.MethodPut, peerPath(peer), api.PeerUpdate{Paths: &kept}, nil, shortCall); err != nil {
+				var left api.Peer
+				if err := apiCall(dataDir, http.MethodDelete, pathURL(peer, pathName), nil, &left, shortCall); err != nil {
 					return err
 				}
 				fmt.Fprintf(stdout, "path %s of %s removed\n", pathName, peer)
-				if len(kept) == 0 {
+				if len(left.Paths) == 0 {
 					fmt.Fprintf(stdout, "%s has no path left, so this node cannot reach it\n", peer)
 				}
 				return nil
@@ -509,7 +487,7 @@ func cmdPeers(args []string, stdout, stderr io.Writer) int {
 	var set *flag.FlagSet
 	var allow, udpDial string
 	var test api.PeerTestRequest
-	var testJSON bool
+	var testJSON, withRules bool
 	return dispatch("peers", "list", []string{"list", "show", "remove", "check", "test", "set", "path"}, map[string]command{
 		"test": {
 			name: "peers test", usage: "NAME", nargs: 1,
@@ -643,11 +621,32 @@ func cmdPeers(args []string, stdout, stderr io.Writer) int {
 		},
 		"remove": {
 			name: "peers remove", usage: "NAME", nargs: 1,
+			flags: func(fs *flag.FlagSet) {
+				fs.BoolVar(&withRules, "with-rules", false, "remove the rules that name the peer as well")
+			},
 			run: func(dataDir string, args []string, stdout, _ io.Writer) error {
-				if err := apiCall(dataDir, http.MethodDelete, peerPath(args[0]), nil, nil, shortCall); err != nil {
+				query := "?rules=keep"
+				if withRules {
+					query = "?rules=remove"
+				}
+				var gone api.PeerRemoval
+				if err := apiCall(dataDir, http.MethodDelete, peerPath(args[0])+query, nil, &gone, shortCall); err != nil {
 					return err
 				}
 				fmt.Fprintf(stdout, "peer %s removed. The other node is not told and still lists this one.\n", args[0])
+				if gone.Peer == "" {
+					// the answer of a node from before 0.4.0, which names no rules
+					fmt.Fprintln(stdout, "The running node is older than this command. It did not say which rules name the peer, and it removed none. \"tcpraid rules\" lists them. Restart the node to finish an update.")
+					return nil
+				}
+				switch names := strings.Join(gone.Rules, ", "); {
+				case len(gone.Rules) == 0:
+				case gone.RulesRemoved:
+					fmt.Fprintf(stdout, "The rules that named it were removed with it: %s\n", names)
+				default:
+					fmt.Fprintf(stdout, "These rules still name %s: %s\n"+
+						"A node that is paired with this one under the same name later takes them over. To prevent that, remove them with \"tcpraid rules remove\".\n", args[0], names)
+				}
 				return nil
 			},
 		},

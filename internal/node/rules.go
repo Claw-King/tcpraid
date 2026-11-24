@@ -17,7 +17,9 @@ import (
 // A fixed rule has Listen and Destination: the node listens there, and a connection
 // that arrives goes to Destination, as seen from the peer. Both may name a range of
 // ports ("0.0.0.0:50000-50050"): the ranges have the same length and correspond port
-// by port.
+// by port. The destination may be a host name instead of an IP address
+// ("nas.example.net:873"): the peer, whose network the destination is in, looks the
+// name up for every connection.
 //
 // A transparent rule has Match instead: it applies to the connections that the host
 // redirected to the node's transparent listener, by their original destination. The first transparent rule that matches, in the order of the list, takes
@@ -25,7 +27,7 @@ import (
 type Rule struct {
 	Name        string `json:"name"`                  // unique among the node's rules
 	Listen      string `json:"listen,omitempty"`      // fixed: IP:port or IP:first-last; the IP may be left out (":5000")
-	Destination string `json:"destination,omitempty"` // fixed: IP:port or IP:first-last at the peer's end
+	Destination string `json:"destination,omitempty"` // fixed: HOST:port or HOST:first-last at the peer's end; HOST is an IP address or a host name
 	Match       string `json:"match,omitempty"`       // transparent: networks in the form of engine.ParseAllow
 	Peer        string `json:"peer"`                  // name of the peer the connections go to
 	Enabled     bool   `json:"enabled"`
@@ -43,9 +45,14 @@ func (r Rule) Transparent() bool { return r.Match != "" }
 
 // PortRange is an address with a range of ports: Host:First to Host:Last.
 type PortRange struct {
-	Host        string // an IP address; empty in a listen address means every address
+	// Host is an IP address; empty in a listen address means every address. In a
+	// destination it may be a host name instead (Named).
+	Host        string
 	First, Last int
 }
+
+// Named reports whether the host of the range is a host name and not an IP address.
+func (p PortRange) Named() bool { return p.Host != "" && net.ParseIP(p.Host) == nil }
 
 // Ports returns the number of ports in the range.
 func (p PortRange) Ports() int { return p.Last - p.First + 1 }
@@ -53,19 +60,69 @@ func (p PortRange) Ports() int { return p.Last - p.First + 1 }
 // Addr returns the address of the i-th port of the range, counting from 0.
 func (p PortRange) Addr(i int) string { return net.JoinHostPort(p.Host, strconv.Itoa(p.First+i)) }
 
+// MaxHostNameLen is the longest host name a destination may have, in bytes.
+const MaxHostNameLen = 253
+
+// CheckHostName reports whether name can be the host name in a rule's destination: at
+// most MaxHostNameLen bytes, made of labels that are separated by dots, each 1 to 63
+// letters, digits, hyphens or underscores and neither starting nor ending with a
+// hyphen. The last label must not be all digits, so that an IP address with a mistake
+// in it ("192.0.2") is not taken for a name.
+func CheckHostName(name string) error {
+	if name == "" || len(name) > MaxHostNameLen {
+		return fmt.Errorf("a host name has 1 to %d characters", MaxHostNameLen)
+	}
+	labels := strings.Split(name, ".")
+	for _, l := range labels {
+		if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
+			return errors.New("each part of a host name between its dots has 1 to 63 characters and neither starts nor ends with a hyphen")
+		}
+		for _, c := range []byte(l) {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+				return errors.New("a host name is made of letters, digits, hyphens, underscores and dots")
+			}
+		}
+	}
+	if strings.Trim(labels[len(labels)-1], "0123456789") == "" {
+		return errors.New("it is neither an IP address nor a host name, whose last part is never a number")
+	}
+	return nil
+}
+
+// ParseDestination reads the destination of a fixed rule: "HOST:port" or
+// "HOST:first-last", where HOST is an IP address (an IPv6 address in brackets) or a host
+// name that passes CheckHostName.
+func ParseDestination(s string) (PortRange, error) {
+	return parsePortRange(s, false, true)
+}
+
 // ParsePortRange reads "IP:port" or "IP:first-last" (an IPv6 address in brackets). With
-// anyHost, the IP may be left out. A host name is refused: rules take IP addresses only.
+// anyHost, the IP may be left out. A host name is refused: see ParseDestination.
 func ParsePortRange(s string, anyHost bool) (PortRange, error) {
+	return parsePortRange(s, anyHost, false)
+}
+
+func parsePortRange(s string, anyHost, names bool) (PortRange, error) {
 	host, ports, err := net.SplitHostPort(s)
 	if err != nil {
+		if names {
+			return PortRange{}, fmt.Errorf("%q: want HOST:port or HOST:first-last, where HOST is an IP address or a host name", s)
+		}
 		return PortRange{}, fmt.Errorf("%q: want IP:port or IP:first-last", s)
 	}
 	switch {
 	case host == "" && anyHost:
+	case host == "" && names:
+		return PortRange{}, fmt.Errorf("%q: no IP address and no host name", s)
 	case host == "":
 		return PortRange{}, fmt.Errorf("%q: no IP address", s)
-	case net.ParseIP(host) == nil:
-		return PortRange{}, fmt.Errorf("%q: %q is not an IP address (host names are not supported)", s, host)
+	case net.ParseIP(host) != nil:
+	case names:
+		if err := CheckHostName(host); err != nil {
+			return PortRange{}, fmt.Errorf("%q: %q cannot be used: %w", s, host, err)
+		}
+	default:
+		return PortRange{}, fmt.Errorf("%q: %q is not an IP address. A listen address takes no host name.", s, host)
 	}
 	first, last, ranged := strings.Cut(ports, "-")
 	if !ranged {
@@ -155,7 +212,7 @@ func (r Rule) Ranges() (listen, destination PortRange, err error) {
 	if listen, err = ParsePortRange(r.Listen, true); err != nil {
 		return listen, destination, fmt.Errorf("listen %w", err)
 	}
-	if destination, err = ParsePortRange(r.Destination, false); err != nil {
+	if destination, err = ParseDestination(r.Destination); err != nil {
 		return listen, destination, fmt.Errorf("destination %w", err)
 	}
 	if listen.Ports() != destination.Ports() {

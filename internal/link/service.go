@@ -326,16 +326,75 @@ func (s *Service) UpdatePeer(name string, paths *[]node.Path, allow, udpDial *st
 		return node.Peer{}, err
 	}
 	if paths != nil {
-		var desc []string
-		for _, p := range stored.Paths {
-			desc = append(desc, fmt.Sprintf("%s to %s (%s)", p.Name, p.Addr, p.Security))
-		}
-		s.logf("peer %q: paths set: %s", name, strings.Join(desc, ", "))
+		s.logPaths(name, stored)
 	}
 	if allow != nil || udpDial != nil {
 		s.logf("peer %q: allow list %q, UDP feedback to %q", name, stored.Allow, stored.UDPDial)
 	}
 	return withoutSecret(stored), nil
+}
+
+// SetPath changes one path of the peer called name, or adds it when the peer has no
+// path of that name, and returns the peer as stored (without its pair secret) and
+// whether the path is new. A new path starts as node.NewPath and needs an address. The
+// node reads and writes the peer's paths in one step, so changes to two paths that are
+// made at the same time both take effect. A proxy that is given without user and
+// password keeps the ones the path has for the same proxy host.
+func (s *Service) SetPath(name, path string, c node.PathChange) (stored node.Peer, created bool, err error) {
+	stored, err = s.Node.ChangePaths(name, func(paths []node.Path) ([]node.Path, error) {
+		created = false
+		for i := range paths {
+			if paths[i].Name == path {
+				was := paths[i].Proxy
+				c.Apply(&paths[i])
+				paths[i].Proxy = keepProxyUser(paths[i].Proxy, was)
+				return paths, nil
+			}
+		}
+		if c.Addr == nil {
+			return nil, fmt.Errorf("%w: peer %q has no path %q, and a new path needs an address", node.ErrInvalid, name, path)
+		}
+		created = true
+		p := node.NewPath(path)
+		c.Apply(&p)
+		return append(paths, p), nil
+	})
+	if err != nil {
+		if errors.Is(err, node.ErrInvalid) {
+			err = inputError{err}
+		}
+		return node.Peer{}, false, err
+	}
+	s.logPaths(name, stored)
+	return withoutSecret(stored), created, nil
+}
+
+// RemovePath removes the path called path from the peer called name, in one step like
+// SetPath, and returns the peer as stored (without its pair secret). A peer without
+// that path is an error that matches node.ErrNotFound.
+func (s *Service) RemovePath(name, path string) (node.Peer, error) {
+	stored, err := s.Node.ChangePaths(name, func(paths []node.Path) ([]node.Path, error) {
+		for i := range paths {
+			if paths[i].Name == path {
+				return append(paths[:i], paths[i+1:]...), nil
+			}
+		}
+		return nil, fmt.Errorf("peer %q has no path %q: %w", name, path, node.ErrNotFound)
+	})
+	if err != nil {
+		return node.Peer{}, err
+	}
+	s.logPaths(name, stored)
+	return withoutSecret(stored), nil
+}
+
+// logPaths logs the paths of a peer after they were set.
+func (s *Service) logPaths(name string, stored node.Peer) {
+	var desc []string
+	for _, p := range stored.Paths {
+		desc = append(desc, fmt.Sprintf("%s to %s (%s)", p.Name, p.Addr, p.Security))
+	}
+	s.logf("peer %q: paths set: %s", name, strings.Join(desc, ", "))
 }
 
 // keepProxyUser returns proxy, with the user and password of was put into it when proxy

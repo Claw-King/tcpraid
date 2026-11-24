@@ -5,6 +5,8 @@
 # file, attached to a release of that tag, and the container image for linux/amd64 and
 # linux/arm64, pushed to the GitHub container registry as
 # ghcr.io/<owner>/<repository>:X.Y.Z and :latest.
+# The release waits for the tests on Linux only. The tests on macOS and Windows run
+# and show their result all the same; a failure there does not hold a release back.
 name: ci
 
 on:
@@ -18,19 +20,30 @@ permissions:
 
 jobs:
   test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: gofmt
-        if: matrix.os == 'ubuntu-latest'
         run: test -z "$(gofmt -l .)"
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test -race -count=1 ./...
+
+  test-other:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
       - name: go vet
         run: go vet ./...
       - name: go test

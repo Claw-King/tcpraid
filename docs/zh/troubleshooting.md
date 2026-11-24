@@ -23,6 +23,13 @@ taken  0.0.0.0:9700  nas-a  192.0.2.10:873  0         FAILED: listening on 0.0.0
 | 在这一切之前就被拒绝连接(connection refused) | 那个端口上没有东西在监听。在容器里：规则的端口映射出来了吗？规则是不是监听在 `0.0.0.0` 上？ |
 | "peer ... could not connect to ADDRESS: connect: connection refused"(或者系统给出的别的错误) | 远端节点去连目的地，没连上。那里没有东西在监听，或者从远端节点看过去这个地址不对 |
 | "peer ... refused the destination ADDRESS, which is not in the allow list it keeps for this node" | 远端节点给本节点设的允许列表里没有这个目的地。在远端节点上用 `tcpraid peers set` 改 |
+| "peer ... could not find the address of NAME: no such host" | 规则的目的地是主机名，而负责解析它的远端节点不认识这个名字。在远端节点上检查这个名字，或者给规则写 IP 地址 |
+| "peer ... could not find the address of NAME: the lookup failed. The log of that node says why." | 远端节点的解析器给出的是“no such host”以外的错误，比如它的域名服务器没有应答。远端节点的日志里有这个错误 |
+| "peer ... does not look up host names for this node (it runs version ...)" | 远端节点的版本早于 0.4.0。升级它，或者给规则写 IP 地址 |
+| "peer ... refused the destination NAME:PORT, because the name stands for no address in the allow list it keeps for this node" | 远端节点给本节点设的允许列表里，没有这个名字在这个端口上的任何地址。在远端节点上用 `tcpraid peers set` 修改 |
+| "peer ... did not say within 10s which address NAME stands for" | 远端节点没有及时回答这个名字对应哪个地址。重试这条连接。如果一直这样，看远端节点的日志 |
+| "peer ... looks up as many host names as it does at a time, and did not look up NAME" | 远端节点正忙着解析别的名字。稍后再试 |
+| "peer ... is not connected to this node, so it cannot be asked which address NAME stands for" | 主机名要经两个节点之间的连接去问，而这条连接断着。`tcpraid peers` 会显示对端离线。见“对端离线” |
 | "peer ... could not connect to ADDRESS. Its log says why." | 还是上面两种情况，但远端节点的版本早于 0.3.0，不会把原因报回来。它的日志里有 `dial ADDRESS: ... connection refused`，或者 `dial ADDRESS: not in the allow list of the peer` |
 | 15 秒后被重置，规则在没有路径的节点上 | 已经请对端连过来，但什么都没到：对端已经连不到本节点的监听了 |
 | "peer ... does not answer on the connections this node opens"，30 秒后变成 "peer ... answered on none of the connections within 30 seconds" | 子连接一条都没建起来，后面的文字说明那些尝试碰到了什么。原因之一：另一个节点上已经解除了配对。这时规则会说 "the other node does not accept this node, which is not paired with it or no longer is"，另一个节点的日志里有 "refused a connection from ...: not a peer of this node" 这样的行。重新配对 |
@@ -62,10 +69,11 @@ default  nas-a.example.org:9851 (tls): ok
 
 - `FAILED: dial tcp ...: connect: connection refused`(或者超时)：查地址、途中的端口转发，或者对端的 `-listen` 端口。
 - `FAILED: tls: first record does not look like a TLS handshake`：这个地址通向的不是节点的 TLS 监听，例如连到了节点的 9850 端口而不是 9851。
-- `FAILED: ... connection reset by peer. The other node closed the connection during the handshake and may be busy. Try again.`，而且每次都这样：除了节点正忙之外，`tls` 档的路径连到节点的明文监听(`-listen-plain`)时得到的也是这个。检查端口和路径的档位是否对应。
+- `FAILED: ... connection reset by peer. The other node closed the connection during the handshake and may be busy. Try again.`，而且每次都这样：除了节点正忙之外，`tls` 档的路径连到节点的明文监听(`-listen-plain`)时得到的也是这个，报错的后半句会提到。检查端口和路径的档位是否对应。
+- "the security tiers of the two ends do not match. This path is of the owncert tier, and the listener at ... has no certificate of its operator to show."：这条路径要对方出示自己的证书，而对方启动时没有带 `-cert` 和 `-key`。让对方带上它们启动，或者把路径的档位改成 `tls`。
 - "the node at this address is not the peer. Its key has another fingerprint."：在那个地址上应答的是另一个节点，或者对端因为数据目录丢了而换了新的身份。
 - "the other node does not accept this node, which is not paired with it or no longer is"：另一个节点上已经解除了配对。
-- "the other end closed the connection without answering"：在 `off` 档的路径上，是另一个节点没有和本节点配对。在任何一档，可能是一次被打断的配对之后两边持有不同的配对密钥，或者两边的时钟相差超过十分钟，这时另一个节点的日志会写明。重新配对，或者校准时钟。
+- "the other end closed the connection without answering"：在 `off` 档的路径上，是另一个节点没有和本节点配对，或者这个地址是对方的 `-listen`，那里只接受 TLS。在这样的路径上，报错会把第二种原因写出来。在任何一档，可能是一次被打断的配对之后两边持有不同的配对密钥，或者两边的时钟相差超过十分钟，这时另一个节点的日志会写明。重新配对，或者校准时钟。
 
 没有通往对端路径的节点没法检查，它会说 `this node has no path to ... and can only be reached by it`。请从另一边检查。
 

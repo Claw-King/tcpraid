@@ -73,6 +73,9 @@ type Runtime struct {
 	testing     bool                           // a path test runs
 	sinks       int                            // sessions of path tests that end in this node
 	pathsAsked  map[reverseKey]chan []pathSpec // requests for a peer's paths that wait for the answer
+	resolves    map[reverseKey]chan resolved   // requests for the address of a name that wait for the answer
+	resolving   int                            // names this node looks up for peers at this moment
+	resolveSent int                            // requests for the address of a name this node has sent
 	peers       map[string]*peerState          // by peer name
 	ctl         map[string]*peerControl        // control connections, by peer name
 	reverse     map[reverseKey]*reverseEntry   // sessions whose sub-connections a peer was asked to open
@@ -84,8 +87,13 @@ type Runtime struct {
 	instance   string
 	noInstance bool
 	// noFeatures: the hello names no features (tests set it before Start to be a
-	// version before 0.3.0).
+	// version before 0.3.0). noResolve: it does not name the resolve feature (to be
+	// 0.3.0).
 	noFeatures bool
+	noResolve  bool
+	// Lookup returns the IP addresses of a host name, for a peer that asks. nil: the
+	// system's resolver.
+	Lookup func(ctx context.Context, host string) ([]net.IP, error)
 }
 
 // runningRule is a fixed rule with its listeners.
@@ -145,6 +153,7 @@ func (rt *Runtime) Start(ctx context.Context) {
 	rt.details = map[failKey]failDetail{}
 	rt.recent = map[failKey]recentEnd{}
 	rt.pathsAsked = map[reverseKey]chan []pathSpec{}
+	rt.resolves = map[reverseKey]chan resolved{}
 	rt.peers = map[string]*peerState{}
 	rt.ctl = map[string]*peerControl{}
 	rt.reverse = map[reverseKey]*reverseEntry{}
@@ -227,7 +236,7 @@ func (rt *Runtime) listen(r node.Rule) (*runningRule, error) {
 	if err != nil {
 		return nil, err
 	}
-	dst := net.ParseIP(to.Host)
+	dst := net.ParseIP(to.Host) // nil: a host name, which the peer looks up for every connection
 	rr := &runningRule{rule: r}
 	for i := 0; i < from.Ports(); i++ {
 		ln, err := net.Listen("tcp", from.Addr(i))
@@ -238,6 +247,10 @@ func (rt *Runtime) listen(r node.Rule) (*runningRule, error) {
 		rr.lns = append(rr.lns, ln)
 	}
 	for i, ln := range rr.lns {
+		if dst == nil {
+			go rt.accept(ln, func(c net.Conn) { rt.carryNamed(r, c, to.Host, to.First+i) })
+			continue
+		}
 		go rt.accept(ln, func(c net.Conn) { rt.carry(r, c, dst, to.First+i) })
 	}
 	return rr, nil
@@ -317,7 +330,25 @@ func reset(c net.Conn) {
 // carry takes one application connection of a rule to ip:port at the rule's peer. It
 // returns when the session has ended.
 func (rt *Runtime) carry(r node.Rule, c net.Conn, ip net.IP, port int) {
+	rt.carryAttempt(rt.begin(r.Name), r, c, ip, port)
+}
+
+// carryNamed takes one application connection of a rule to host:port at the rule's peer,
+// where host is a name: the peer is asked which address the name stands for in its
+// network, and the connection goes there. It returns when the session has ended.
+func (rt *Runtime) carryNamed(r node.Rule, c net.Conn, host string, port int) {
 	a := rt.begin(r.Name)
+	ip, err := rt.resolveAt(r.Peer, host, port)
+	if err != nil {
+		a.fail(err.Error())
+		reset(c)
+		return
+	}
+	rt.carryAttempt(a, r, c, ip, port)
+}
+
+// carryAttempt carries the connection that a stands for; see carry.
+func (rt *Runtime) carryAttempt(a *attempt, r node.Rule, c net.Conn, ip net.IP, port int) {
 	if peer, ok := rt.Node.Peer(r.Peer); ok && len(peer.Paths) == 0 {
 		// no way to dial the peer: it is asked to dial
 		rt.carryReverse(a, r, peer, c, ip, port)

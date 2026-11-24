@@ -101,7 +101,7 @@ func cmdRules(args []string, stdout, stderr io.Writer) int {
 			flags: func(fs *flag.FlagSet) {
 				fs.StringVar(&spec.Peer, "peer", "", "name of the peer the connections go to")
 				fs.StringVar(&spec.Listen, "listen", "", "fixed rule: where this node listens, IP:port or IP:first-last (without the IP: every address)")
-				fs.StringVar(&spec.Destination, "dest", "", "fixed rule: where the connections go at the peer's end, IP:port or IP:first-last (same number of ports as -listen)")
+				fs.StringVar(&spec.Destination, "dest", "", "fixed rule: where the connections go at the peer's end, HOST:port or HOST:first-last, with an IP address or a host name that the peer looks up (same number of ports as -listen)")
 				fs.StringVar(&spec.Match, "match", "", "transparent rule: original destinations it takes, networks with optional ports such as 192.0.2.0/24:873,[2001:db8::/32]:5000-5010 (needs tcpraid run -transparent)")
 				fs.BoolVar(&disabled, "disabled", false, "store the rule switched off")
 			},

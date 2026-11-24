@@ -147,7 +147,7 @@ type reverseEntry struct {
 }
 
 // features are what this node says it can do in every hello.
-var features = []string{control.FeaturePathTest}
+var features = []string{control.FeaturePathTest, control.FeatureResolve}
 
 // maxFeatures bounds what is kept of the features a peer names.
 const maxFeatures = 16
@@ -297,6 +297,9 @@ func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}
 	hello := control.Message{Type: control.TypeHello, Name: rt.Node.Name(), Version: rt.Version, Protocols: []int{control.Protocol}, Instance: rt.instance}
 	if !rt.noFeatures {
 		hello.Features = features
+		if rt.noResolve {
+			hello.Features = []string{control.FeaturePathTest}
+		}
 	}
 	if err := cc.Send(hello); err != nil {
 		return err
@@ -356,6 +359,10 @@ func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}
 			rt.servePaths(cc, m)
 		case control.TypePathsReply:
 			rt.pathsAnswered(cc.peer, m)
+		case control.TypeResolve:
+			rt.serveResolve(cc, m)
+		case control.TypeResolveReply:
+			rt.resolveAnswered(cc.peer, m)
 		case control.TypeTestEnd:
 			if id, err := hex.DecodeString(m.Session); err == nil && len(id) == 16 {
 				rt.Engine.EndTest(cc.peer, [16]byte(id))

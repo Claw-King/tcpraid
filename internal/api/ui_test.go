@@ -255,6 +255,52 @@ func TestNoUI(t *testing.T) {
 	}
 }
 
+// A web interface that is switched off: its pages and the login answer 404, a cookie of
+// an earlier login gives no access, and the token works as before.
+func TestUIOff(t *testing.T) {
+	s, _ := newUIServer(t)
+	_, cookie := login(t, s, "secret word", "")
+	if cookie == nil {
+		t.Fatal("no login before the interface is switched off")
+	}
+	s.cfg.UI.Off = true
+	s = New(s.cfg)
+	for _, c := range [][2]string{{"GET", "/"}, {"HEAD", "/"}, {"GET", "/index.html"}, {"GET", "/app.js"}, {"POST", PathLogin}, {"GET", PathLogin}} {
+		w := call(s, c[0], c[1], `{"password":"secret word"}`, nil, true, "")
+		if w.Code != 404 {
+			t.Errorf("%s %s with the interface off: %d, want 404", c[0], c[1], w.Code)
+		}
+		if len(w.Result().Cookies()) != 0 {
+			t.Errorf("%s %s with the interface off set a cookie", c[0], c[1])
+		}
+	}
+	// what is not a page of the interface is as closed as ever, and tells nothing
+	for _, path := range []string{"/nothing.js", PathStatus, PathLogout} {
+		if w := call(s, "GET", path, "", nil, false, ""); w.Code != 401 {
+			t.Errorf("GET %s without the token: %d, want 401", path, w.Code)
+		}
+	}
+	// the cookie of the login made before does not authorize
+	if w := call(s, "GET", PathStatus, "", cookie, true, ""); w.Code != 401 {
+		t.Errorf("a cookie with the interface off: %d, want 401", w.Code)
+	}
+	// the token does, and the logout route is gone with the interface
+	r := httptest.NewRequest("GET", PathStatus, nil)
+	r.Header.Set("Authorization", "Bearer "+s.cfg.Token)
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Errorf("the status with the token: %d", w.Code)
+	}
+	r = httptest.NewRequest("POST", PathLogout, nil)
+	r.Header.Set("Authorization", "Bearer "+s.cfg.Token)
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != 404 {
+		t.Errorf("logout with the token and the interface off: %d, want 404", w.Code)
+	}
+}
+
 // Nothing the login answers or logs holds the password or the token.
 func TestLoginAnswersHoldNoSecret(t *testing.T) {
 	s, _ := newUIServer(t)

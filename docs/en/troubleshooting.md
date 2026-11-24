@@ -27,6 +27,13 @@ taken  0.0.0.0:9700  nas-a  192.0.2.10:873  0         FAILED: listening on 0.0.0
 | connection refused before any of this | nothing listens on that port. In a container: is the rule's port published, and does the rule listen on `0.0.0.0`? |
 | "peer ... could not connect to ADDRESS: connect: connection refused" (or another error of the system) | the far node tried the destination and failed. Nothing listens there, or the address is wrong as the far node sees it |
 | "peer ... refused the destination ADDRESS, which is not in the allow list it keeps for this node" | the far node's allow list for this node does not hold the destination. Change it on the far node with `tcpraid peers set` |
+| "peer ... could not find the address of NAME: no such host" | the rule's destination is a host name, and the far node, which looks it up, does not know it. Check the name on the far node, or give the rule the IP address |
+| "peer ... could not find the address of NAME: the lookup failed. The log of that node says why." | the far node's resolver gave an error other than "no such host", for example because its name server does not answer. The far node's log has the error |
+| "peer ... does not look up host names for this node (it runs version ...)" | the far node is older than 0.4.0. Update it, or give the rule the IP address |
+| "peer ... refused the destination NAME:PORT, because the name stands for no address in the allow list it keeps for this node" | the far node's allow list holds none of the addresses of the name, with that port. Change the list on the far node with `tcpraid peers set` |
+| "peer ... did not say within 10s which address NAME stands for" | the far node did not answer the question in time. Try the connection again. If it keeps happening, look at the far node's log |
+| "peer ... looks up as many host names as it does at a time, and did not look up NAME" | the far node is busy with other lookups. Try again in a moment |
+| "peer ... is not connected to this node, so it cannot be asked which address NAME stands for" | a host name is looked up over the connection between the two nodes, which is down. `tcpraid peers` shows the peer as offline. See "The peer is offline" |
 | "peer ... could not connect to ADDRESS. Its log says why." | the same two cases, with a far node of a version before 0.3.0, which does not report the reason. Its log has `dial ADDRESS: ... connection refused`, or `dial ADDRESS: not in the allow list of the peer` |
 | reset after 15 seconds, rule on the node without a path | the peer was asked to connect and nothing arrived: the peer can no longer reach this node's listener |
 | "peer ... does not answer on the connections this node opens", and after 30 seconds "peer ... answered on none of the connections within 30 seconds" | none of the sub-connections came up, and the text after it says what the attempts ran into. One cause: the pairing was ended on the other node. The rule then says "the other node does not accept this node, which is not paired with it or no longer is", and the other node's log has lines "refused a connection from ...: not a peer of this node". Pair again |
@@ -76,18 +83,25 @@ it holds the pairing. If it fails, the message says where:
 - `FAILED: ... connection reset by peer. The other node closed the connection
   during the handshake and may be busy. Try again.`, every time: besides a
   busy node, this is what a path of the `tls` tier gets from a node's plain
-  listener (`-listen-plain`). Check that the port and the path's tier belong
-  together.
+  listener (`-listen-plain`). The message goes on to say so. Check that the
+  port and the path's tier belong together.
+- "the security tiers of the two ends do not match. This path is of the
+  owncert tier, and the listener at ... has no certificate of its operator to
+  show.": the path expects the other node's own certificate, and that node
+  was started without `-cert` and `-key`. Start it with them, or set the
+  path's security to `tls`.
 - "the node at this address is not the peer. Its key has another
   fingerprint.": another node answers there, or the peer has a new identity
   because its data directory was lost.
 - "the other node does not accept this node, which is not paired with it or
   no longer is": the pairing was ended on the other node.
 - "the other end closed the connection without answering": on a path of the
-  tier `off`, the other node is not paired with this one. In any tier, the two
-  hold different pair secrets after a pairing that was cut off, or their
-  clocks are more than ten minutes apart, in which case the other node's log
-  says so. Pair them again, or set the clock.
+  tier `off`, the other node is not paired with this one, or the address is
+  the other node's `-listen`, which takes TLS only. The message names that
+  second cause on such a path. In any tier, the two hold different pair
+  secrets after a pairing that was cut off, or their clocks are more than ten
+  minutes apart, in which case the other node's log says so. Pair them again,
+  or set the clock.
 
 A node without a path to its peer cannot check, and says `this node has no path to
 ... and can only be reached by it`. Check from the other side.

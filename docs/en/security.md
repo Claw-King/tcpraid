@@ -97,6 +97,16 @@ and shows that in the status of its rule. When your node cannot connect to a
 destination, the peer is told the error of the system, which names the
 destination it asked for and nothing else.
 
+A peer's rule may name its destination by a host name, which your node then
+looks up for it. The allow list is applied to the addresses of the name, with
+the port of the rule. Your node answers with the first address the list lets
+through, and with no address at all when the list holds none of them. Without
+an allow list the peer learns the first address of any name it asks for,
+which is in line with what it may reach anyway. Your node does not pass on
+the error of its resolver, so the peer does not learn which servers your
+network asks. It looks up at most 32 names at a time and gives each lookup 5
+seconds.
+
 The allow list does not apply to a path test (`tcpraid peers test`), because
 the test data ends inside your node and reaches no address. A peer can make
 your node receive such data whenever it likes. Your node bounds it without
@@ -107,7 +117,9 @@ Ending a pairing (`tcpraid peers remove NAME`, or "End the pairing") resets
 the sessions with that peer in both directions and refuses its connections
 from then on. The other node is not told and still lists this one. Rules that
 name the removed peer stay. A node that is paired later under the same name
-takes them over, so remove or change them if that is not wanted.
+takes them over, so remove or change them if that is not wanted. The command
+lists those rules, and `tcpraid peers remove NAME -with-rules` removes them
+together with the peer.
 
 ## The data directory
 
@@ -147,6 +159,9 @@ directory up like a private key, and do not share it between two nodes.**
   count.
 - The password is never stored. A generated one is printed once, in the log
   of the first start.
+- A node that needs no web page can be started with `-no-ui`. Its pages and
+  the login then answer `404`, no password exists, and only the token gives
+  access to the API.
 
 ## Listeners and unauthenticated connections
 

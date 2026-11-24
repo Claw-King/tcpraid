@@ -117,17 +117,17 @@ func TestRulesCommands(t *testing.T) {
 		t.Fatalf("a transparent rule on a node with -transparent: %q", out)
 	}
 	for what, args := range map[string][]string{
-		"-peer is missing":             {"rules", "add", "x", "-data", dirB, "-listen", "127.0.0.1:1", "-dest", "192.0.2.1:1"},
-		"no peer is called":            {"rules", "add", "x", "-data", dirB, "-peer", "nobody", "-listen", "127.0.0.1:1", "-dest", "192.0.2.1:1"},
-		"host names are not supported": {"rules", "add", "x", "-data", dirB, "-peer", "alpha", "-listen", "127.0.0.1:1", "-dest", "nas.example.net:1"},
-		"same length":                  {"rules", "add", "x", "-data", dirB, "-peer", "alpha", "-listen", "127.0.0.1:1-2", "-dest", "192.0.2.1:1"},
-		"not both":                     {"rules", "add", "x", "-data", dirB, "-peer", "alpha", "-listen", "127.0.0.1:1", "-dest", "192.0.2.1:1", "-match", "192.0.2.0/24"},
-		"already takes":                {"rules", "add", "x", "-data", dirB, "-peer", "alpha", "-listen", in, "-dest", "192.0.2.1:1"},
-		"no rule is called":            {"rules", "enable", "nope", "-data", dirB},
-		"not found":                    {"rules", "remove", "nope", "-data", dirB},
-		"takes 1 argument(s)":          {"rules", "add", "-data", dirB, "-peer", "alpha"},
-		"unknown command":              {"rules", "frobnicate", "-data", dirB},
-		"flag provided but no":         {"rules", "add", "x", "-data", dirB, "-nonsense"},
+		"-peer is missing":     {"rules", "add", "x", "-data", dirB, "-listen", "127.0.0.1:1", "-dest", "192.0.2.1:1"},
+		"no peer is called":    {"rules", "add", "x", "-data", dirB, "-peer", "nobody", "-listen", "127.0.0.1:1", "-dest", "192.0.2.1:1"},
+		"cannot be used":       {"rules", "add", "x", "-data", dirB, "-peer", "alpha", "-listen", "127.0.0.1:1", "-dest", "nas..example.net:1"},
+		"same length":          {"rules", "add", "x", "-data", dirB, "-peer", "alpha", "-listen", "127.0.0.1:1-2", "-dest", "192.0.2.1:1"},
+		"not both":             {"rules", "add", "x", "-data", dirB, "-peer", "alpha", "-listen", "127.0.0.1:1", "-dest", "192.0.2.1:1", "-match", "192.0.2.0/24"},
+		"already takes":        {"rules", "add", "x", "-data", dirB, "-peer", "alpha", "-listen", in, "-dest", "192.0.2.1:1"},
+		"no rule is called":    {"rules", "enable", "nope", "-data", dirB},
+		"not found":            {"rules", "remove", "nope", "-data", dirB},
+		"takes 1 argument(s)":  {"rules", "add", "-data", dirB, "-peer", "alpha"},
+		"unknown command":      {"rules", "frobnicate", "-data", dirB},
+		"flag provided but no": {"rules", "add", "x", "-data", dirB, "-nonsense"},
 	} {
 		code, _, _, stderr := call(args...)
 		if code == 0 || !strings.Contains(stderr, what) {

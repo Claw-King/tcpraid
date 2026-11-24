@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/Claw-King/tcpraid/internal/api"
 	"github.com/Claw-King/tcpraid/internal/node"
 )
 
@@ -103,5 +105,69 @@ func TestUIPassword(t *testing.T) {
 	}
 	if _, err := uiPassword(dir, filepath.Join(dir, "missing")); err == nil {
 		t.Error("a missing password file was accepted")
+	}
+}
+
+// A node started with -no-ui has no web interface: its pages and the login answer 404,
+// no password is made, stored or logged, the log does not point at a page, and the API
+// with its token works as before.
+func TestRunWithoutWebInterface(t *testing.T) {
+	t.Setenv(uiPasswordEnv, "a password that must not be used")
+	var logged lockedBuffer
+	old := log.Writer()
+	log.SetOutput(&logged)
+	defer log.SetOutput(old)
+
+	dir := t.TempDir()
+	startNodeWith(t, runOptions{dataDir: dir, name: "alpha", noUI: true})
+	addr := waitAddr(t, dir)
+	get := func(method, path string, token bool) int {
+		t.Helper()
+		req, err := http.NewRequest(method, "http://"+addr+path, strings.NewReader(`{"password":"a password that must not be used"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if token {
+			tok, err := node.ReadToken(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, c := range [][2]string{{"GET", "/"}, {"GET", "/index.html"}, {"GET", "/app.js"}, {"POST", api.PathLogin}} {
+		if code := get(c[0], c[1], false); code != 404 {
+			t.Errorf("%s %s on a node without web interface: %d, want 404", c[0], c[1], code)
+		}
+	}
+	if code := get("GET", api.PathStatus, false); code != 401 {
+		t.Errorf("the status without the token: %d, want 401", code)
+	}
+	if code := get("GET", api.PathStatus, true); code != 200 {
+		t.Errorf("the status with the token: %d, want 200", code)
+	}
+	if out := must(t, "status", "-data", dir); !strings.Contains(out, "alpha") {
+		t.Errorf("tcpraid status: %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, node.UIPasswordFile)); !os.IsNotExist(err) {
+		t.Errorf("a password file in the data directory of a node without web interface: %v", err)
+	}
+	if out := logged.String(); strings.Contains(out, "web interface") || strings.Contains(out, "password") {
+		t.Errorf("the log of a node without web interface speaks of one:\n%s", out)
+	}
+
+	// the switch and a password file together are refused before anything starts
+	_, code, done, stderr := runFlagsOf("-data", "/x", "-no-ui", "-ui-password-file", "/y")
+	if !done || code != 2 || !strings.Contains(stderr, "-no-ui") {
+		t.Errorf("-no-ui with -ui-password-file: done=%v code=%d stderr=%q", done, code, stderr)
+	}
+	if o, _, done, _ := runFlagsOf("-data", "/x", "-no-ui"); done || !o.noUI {
+		t.Errorf("-no-ui alone: done=%v noUI=%v", done, o.noUI)
 	}
 }

@@ -70,7 +70,7 @@ func (d *Dialer) Dial(ctx context.Context, peer node.Peer, path node.Path) (net.
 	conn.SetDeadline(time.Now().Add(HandshakeTimeout))
 	if err := tc.HandshakeContext(ctx); err != nil {
 		conn.Close()
-		return nil, closedInHandshake(err)
+		return nil, handshakeFailed(err, path)
 	}
 	conn.SetDeadline(time.Time{})
 	if got := tc.ConnectionState().NegotiatedProtocol; got != cfg.NextProtos[0] {
@@ -158,7 +158,24 @@ func (d *Dialer) Check(ctx context.Context, peer node.Peer, path node.Path) erro
 		// what a TLS server answers when it refuses the client's certificate
 		return fmt.Errorf("the other node does not accept this node, which is not paired with it or no longer is (%w)", err)
 	}
+	if errors.Is(err, errNoAnswer) && path.Security == node.SecurityOff {
+		// a TLS listener closes a connection that does not begin with a TLS handshake
+		return fmt.Errorf("%w On this path, whose security is off, the address may also be the other node's -listen, which takes TLS only, so that the security tiers of the two ends do not match. Give the path the address of the other node's -listen-plain, or set the path's security to tls.", err)
+	}
 	return err
+}
+
+// handshakeFailed says what the error of a TLS handshake on path means, where that can
+// be told.
+func handshakeFailed(err error, path node.Path) error {
+	// the alert of a TLS listener that knows none of the protocol names it was offered
+	if strings.Contains(err.Error(), "no application protocol") {
+		if path.Security == node.SecurityOwnCert {
+			return fmt.Errorf("the security tiers of the two ends do not match. This path is of the owncert tier, and the listener at %s has no certificate of its operator to show. Start the other node with -cert and -key, or set the path's security to tls. (%w)", path.Addr, err)
+		}
+		return fmt.Errorf("the listener at %s speaks TLS and is not the listener of a tcpraid node (%w)", path.Addr, err)
+	}
+	return closedInHandshake(err)
 }
 
 // closedInHandshake adds, to the error of a handshake that the other end cut off, what
@@ -166,7 +183,7 @@ func (d *Dialer) Check(ctx context.Context, peer node.Peer, path node.Path) erro
 // when it has too many of them.
 func closedInHandshake(err error) error {
 	if errors.Is(err, io.EOF) || pair.IsReset(err) {
-		return fmt.Errorf("%w. The other node closed the connection during the handshake and may be busy. Try again.", err)
+		return fmt.Errorf("%w. The other node closed the connection during the handshake and may be busy. Try again. If it happens every time, the address may be the other node's -listen-plain, which takes paths whose security is off, so that the security tiers of the two ends do not match.", err)
 	}
 	return err
 }

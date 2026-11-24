@@ -8,12 +8,14 @@
 # the password of the web interface, and the ports for forwarding rules.
 services:
   tcpraid:
-    image: ghcr.io/claw-king/tcpraid:0.3.0
+    image: ghcr.io/claw-king/tcpraid:0.4.0
     container_name: tcpraid
-    # A new node takes its name from the host name at its first start. Give each node
-    # a name of its own here (for example nas-a and nas-b) before you start it, or
-    # rename it in the web interface (Settings) before you pair it: the other node
-    # keeps the name this one had when the two were paired.
+    # A new node takes its name from the host name at its first start and adds four
+    # random characters, for example tcpraid-k3x9, so two nodes made from this file
+    # do not get the same name. For a name you recognise, set the host name here (for
+    # example nas-a and nas-b) before the first start, or rename the node in the web
+    # interface (Settings) before you pair it: the other node keeps the name this
+    # one had when the two were paired.
     hostname: tcpraid
     restart: unless-stopped
     environment:
@@ -36,6 +38,13 @@ services:
       # use a port from this range, with the listen address 0.0.0.0. To change the
       # range, change both sides of the mapping to the same ports.
       - "50000-50010:50000-50010"
+      # UDP feedback from the other node (optional, off by default). To use it,
+      # uncomment the next line and the "command:" line marked "UDP feedback" below,
+      # then tell the other node where to send it:
+      #   tcpraid peers set NAME -udp-dial THIS-HOST:8446
+      # - "8446:8446/udp"
+    # UDP feedback: the image's own command line with -udp-listen added.
+    # command: ["run", "-data", "/data", "-api", "0.0.0.0:9850", "-listen", "0.0.0.0:9851", "-udp-listen", "0.0.0.0:8446"]
     # The other way to give the node its ports: share the host's network. Remove the
     # whole "ports:" section above and uncomment the next line. Rules can then listen
     # on any free port of the host, and nothing has to be mapped; in exchange the
@@ -45,3 +54,5 @@ services:
     # name the address the web interface should listen on.
     # network_mode: host
     # command: ["run", "-data", "/data", "-api", "127.0.0.1:9850", "-listen", "0.0.0.0:9851"]
+    # (With the host's network, UDP feedback needs no mapping: add "-udp-listen",
+    # "0.0.0.0:8446" to this command line.)

@@ -132,7 +132,7 @@ func runFlags(args []string, stderr io.Writer) (o runOptions, code int, done boo
 	fs.SetOutput(stderr)
 	dataDir := fs.String("data", defaultDataDir, "data directory (created if missing)")
 	apiAddr := fs.String("api", defaultAPIAddr, "listen address of the local API")
-	name := fs.String("name", "", "name of this node (default: the name it already has, or the host name at the first start)")
+	name := fs.String("name", "", "name of this node (default: the name it already has, or at the first start the host name with four random characters after it)")
 	fs.StringVar(&o.listen, "listen", "", "listen address for other nodes, TLS (empty: this node can join others, but not be joined)")
 	fs.StringVar(&o.listenPlain, "listen-plain", "", "listen address for peers without TLS, for paths that are already encrypted (empty: off)")
 	fs.StringVar(&o.certFile, "cert", "", "certificate (PEM) shown to peers that use the owncert tier (needs -key and -listen)")
@@ -140,6 +140,7 @@ func runFlags(args []string, stderr io.Writer) (o runOptions, code int, done boo
 	fs.Var(&o.advertise, "advertise", "HOST:PORT at which other nodes reach -listen, put into pairing codes (may be given more than once)")
 	fs.StringVar(&o.transparent, "transparent", "", "listen address for connections that an nftables or iptables redirect rule of the host sends to this node, to be routed by transparent rules (empty: off)")
 	fs.StringVar(&o.udpListen, "udp-listen", "", "listen address (UDP) for feedback from peers that are told to send it here (empty: off)")
+	fs.BoolVar(&o.noUI, "no-ui", false, "switch the web interface off: its pages and the login answer 404, and the local API with its token stays")
 	fs.StringVar(&o.uiPasswordFile, "ui-password-file", "", "file with the password of the web interface (default: the environment variable "+uiPasswordEnv+", or else a password made at the first start and logged once)")
 	transport := defaultTransport()
 	transport.flags(fs)
@@ -173,6 +174,7 @@ type runOptions struct {
 	advertise              stringList
 	transparent, udpListen string
 	uiPasswordFile         string
+	noUI                   bool              // no web interface
 	transport              *transportOptions // nil: the defaults
 	stats                  time.Duration     // how often the totals are logged; 0: never
 }
@@ -192,6 +194,9 @@ func (o *runOptions) check() error {
 	}
 	if o.stats < 0 {
 		return errors.New("-stats must not be negative (0: off)")
+	}
+	if o.noUI && o.uiPasswordFile != "" {
+		return errors.New("-no-ui and -ui-password-file do not go together, because a web interface that is switched off has no password")
 	}
 	if o.transparent != "" && !engine.TransparentSupported {
 		return errors.New("-transparent is only available on Linux, because it needs the host to redirect connections to the node")
@@ -271,12 +276,15 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 		ln    net.Listener
 		serve func(context.Context, net.Listener) error
 	}
-	passwordHash, err := uiPassword(n.Dir, o.uiPasswordFile)
-	if err != nil {
-		return err
+	// Without a web interface no password is made, read or stored: the environment
+	// variable is ignored, and a hash that an earlier start stored is left as it is.
+	ui := &api.UI{Files: web.Files, Off: o.noUI}
+	if !o.noUI {
+		if ui.PasswordHash, err = uiPassword(n.Dir, o.uiPasswordFile); err != nil {
+			return err
+		}
 	}
-	apiSrv := api.New(api.Config{Version: version, Token: n.Token, Node: svc, Engine: e, Rules: rules,
-		UI: &api.UI{PasswordHash: passwordHash, Files: web.Files}})
+	apiSrv := api.New(api.Config{Version: version, Token: n.Token, Node: svc, Engine: e, Rules: rules, UI: ui})
 	listeners := []*listener{{flag: "-api", addr: o.apiAddr, serve: apiSrv.Serve}}
 	if o.listen != "" {
 		listeners = append(listeners, &listener{flag: "-listen", addr: o.listen, serve: lsrv.ServeTLS})
@@ -322,7 +330,7 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 
 	// where the web page is, as something to type into a browser: the line above says
 	// only "api=", and a person who starts a node for the first time looks for this
-	if a, ok := listeners[0].ln.Addr().(*net.TCPAddr); ok {
+	if a, ok := listeners[0].ln.Addr().(*net.TCPAddr); ok && !o.noUI {
 		host := a.IP.String()
 		if a.IP.IsUnspecified() {
 			host = "127.0.0.1" // every address of this machine: its own is the one sure to work
@@ -330,7 +338,11 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 		log.Printf("web interface: open http://%s in a browser on this machine", net.JoinHostPort(host, strconv.Itoa(a.Port)))
 	}
 	if a, ok := listeners[0].ln.Addr().(*net.TCPAddr); ok && !a.IP.IsLoopback() {
-		log.Printf("the web interface and the API at %s are plain HTTP and reachable from other hosts. Use them on a network you trust, or put a reverse proxy with TLS in front.", a)
+		if o.noUI {
+			log.Printf("the API at %s is plain HTTP and reachable from other hosts. Use it on a network you trust, or put a reverse proxy with TLS in front.", a)
+		} else {
+			log.Printf("the web interface and the API at %s are plain HTTP and reachable from other hosts. Use them on a network you trust, or put a reverse proxy with TLS in front.", a)
+		}
 	}
 	// One listener that fails stops the others; the first error is the node's.
 	ctx, cancel := context.WithCancel(ctx)

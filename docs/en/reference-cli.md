@@ -4,7 +4,7 @@
 tcpraid run     [flags]                       start a node
 tcpraid status  [-json]                       the node on this host
 tcpraid pair    create | list | revoke ID | join [CODE]
-tcpraid peers   [list] | show NAME | check NAME | remove NAME
+tcpraid peers   [list] | show NAME | check NAME | remove NAME [-with-rules]
 tcpraid peers   test NAME [-seconds N] [-path PATH] [-json]
 tcpraid peers   set NAME [-allow LIST] [-udp-dial HOST:PORT]
 tcpraid peers   path set NAME PATH [flags] | path remove NAME PATH
@@ -38,7 +38,7 @@ after telling its peers and resetting the application connections it carries.
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.3.0 (wire protocol 1)
+version      0.4.0 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -91,7 +91,7 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.3.0, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.4.0, last heard 2026-01-15T10:00:05Z
 
 PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS
 default  tcp   nas-a.example.org:9851  -      tls       -       -    data   8
@@ -109,7 +109,20 @@ peer nas-b removed. The other node is not told and still lists this one.
   check.
 - `peers remove NAME` ends the pairing on this node. The sessions with that
   peer are reset, in both directions, and its connections are refused from
-  then on.
+  then on. The command then lists the rules that still name the peer. They
+  stay, and a node that is paired with this one under the same name later
+  takes them over. `-with-rules` removes them together with the peer.
+
+```
+$ tcpraid peers remove nas-a
+peer nas-a removed. The other node is not told and still lists this one.
+These rules still name nas-a: rsync, zfs
+A node that is paired with this one under the same name later takes them over. To prevent that, remove them with "tcpraid rules remove".
+
+$ tcpraid peers remove nas-a -with-rules
+peer nas-a removed. The other node is not told and still lists this one.
+The rules that named it were removed with it: rsync, zfs
+```
 
 ### peers test
 
@@ -186,6 +199,10 @@ A peer has at most 16 paths. A path's name is up to 32 bytes without spaces. A
 path that does not fit is refused and nothing changes. A proxy is shown
 without its user and password.
 
+The node changes that path in a single step. Two of these commands that
+run at the same time for two paths of one peer both take effect, and so does
+a `peers set` that runs beside them.
+
 ### peers set
 
 `peers set NAME [-allow LIST] [-udp-dial HOST:PORT]` changes two settings of
@@ -238,12 +255,15 @@ rule rsync removed. Connections it carries now run to their end.
 
 `rules add NAME -peer PEER` with either
 
-- `-listen IP:PORT[-PORT] -dest IP:PORT[-PORT]`: a fixed rule. The IP of
+- `-listen IP:PORT[-PORT] -dest HOST:PORT[-PORT]`: a fixed rule. The IP of
   `-listen` may be left out, as in `:9801`, which means every address. An
   IPv6 address goes in brackets. The two ranges have the same length, at most
-  1024 ports, and are mapped port by port. The destination is an IP address,
-  and host names are not supported. Two rules cannot listen on the same port of the same
-  address.
+  1024 ports, and are mapped port by port. Two rules cannot listen on the
+  same port of the same address. The destination takes an IP address or a
+  host name, as in `-dest nas.lan:873`. The destination is in the peer's
+  network, so the peer looks the name up, once for every connection, and the
+  connection goes to the first address that the peer's allow list for this
+  node lets through. Both nodes need version 0.4.0 or later for a host name.
 - `-match NETWORKS`: a transparent rule, for a node started with
   `-transparent`. The networks are in CIDR form with an optional port or
   range, separated by commas, as in
@@ -270,6 +290,11 @@ does not report it, and the rule then says to look at the peer's log. While
 a connection waits because the peer does not answer, the rule says what the
 attempts run into, without a time. The next connection of the rule clears
 the state.
+
+A rule whose destination is a host name also says when the name gave no
+address: the peer does not know the name, the peer is not connected, its
+allow list holds none of the name's addresses, or it runs a version that does
+not look names up.
 
 ## sessions
 
@@ -326,5 +351,5 @@ day, until you interrupt it. `-interval DURATION` sets another interval, from
 
 ```
 $ tcpraid version
-tcpraid 0.3.0 (wire protocol 1)
+tcpraid 0.4.0 (wire protocol 1)
 ```

@@ -8,22 +8,22 @@
 
 | 机器(`uname -m`) | 文件 |
 |---|---|
-| `x86_64` | `tcpraid-0.3.0-linux-amd64` |
-| `aarch64` | `tcpraid-0.3.0-linux-arm64` |
-| `armv7l` | `tcpraid-0.3.0-linux-armv7` |
-| | `tcpraid-0.3.0-SHA256SUMS` |
+| `x86_64` | `tcpraid-0.4.0-linux-amd64` |
+| `aarch64` | `tcpraid-0.4.0-linux-arm64` |
+| `armv7l` | `tcpraid-0.4.0-linux-armv7` |
+| | `tcpraid-0.4.0-SHA256SUMS` |
 
 把适合你机器的文件和校验文件下载到同一个目录，用校验文件核对二进制文件，然后安装：
 
 ```
-$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.3.0/tcpraid-0.3.0-linux-arm64
-$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.3.0/tcpraid-0.3.0-SHA256SUMS
-$ grep linux-arm64 tcpraid-0.3.0-SHA256SUMS | sha256sum -c
-tcpraid-0.3.0-linux-arm64: OK
-# install -m 0755 tcpraid-0.3.0-linux-arm64 /usr/local/bin/tcpraid
+$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.4.0/tcpraid-0.4.0-linux-arm64
+$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.4.0/tcpraid-0.4.0-SHA256SUMS
+$ grep linux-arm64 tcpraid-0.4.0-SHA256SUMS | sha256sum -c
+tcpraid-0.4.0-linux-arm64: OK
+# install -m 0755 tcpraid-0.4.0-linux-arm64 /usr/local/bin/tcpraid
 
 $ tcpraid version
-tcpraid 0.3.0 (wire protocol 1)
+tcpraid 0.4.0 (wire protocol 1)
 ```
 
 你下载的文件所在的一行如果不是 `OK`，说明下载到的不是发布的文件，不要运行它。
@@ -34,7 +34,7 @@ tcpraid 0.3.0 (wire protocol 1)
 go build -trimpath -o tcpraid ./cmd/tcpraid
 ```
 
-或者用 `deploy/build.sh 0.3.0` 构建全部发布用的二进制文件，脚本开头写了没装 Go 时怎么做。把适合你机器的文件复制到 `/usr/local/bin/tcpraid`。用上面那条普通的 `go build` 得到的二进制文件报告的是 `0.3.0-dev`，而构建脚本会把给它的版本号写进去。
+或者用 `deploy/build.sh 0.4.0` 构建全部发布用的二进制文件，脚本开头写了没装 Go 时怎么做。把适合你机器的文件复制到 `/usr/local/bin/tcpraid`。用上面那条普通的 `go build` 得到的二进制文件报告的是 `0.4.0-dev`，而构建脚本会把给它的版本号写进去。
 
 ## 在 macOS 和 Windows 上
 
@@ -42,31 +42,31 @@ go build -trimpath -o tcpraid ./cmd/tcpraid
 
 | 系统 | 文件 |
 |---|---|
-| macOS，Apple 芯片 | `tcpraid-0.3.0-macos-arm64` |
-| macOS，Intel | `tcpraid-0.3.0-macos-amd64` |
-| Windows，x64 | `tcpraid-0.3.0-windows-amd64.exe` |
-| Windows，ARM | `tcpraid-0.3.0-windows-arm64.exe` |
+| macOS，Apple 芯片 | `tcpraid-0.4.0-macos-arm64` |
+| macOS，Intel | `tcpraid-0.4.0-macos-amd64` |
+| Windows，x64 | `tcpraid-0.4.0-windows-amd64.exe` |
+| Windows，ARM | `tcpraid-0.4.0-windows-arm64.exe` |
 
 **核对下载到的文件。** 在 macOS 上，打开终端，进入放着这两个文件的目录：
 
 ```
-$ grep macos-arm64 tcpraid-0.3.0-SHA256SUMS | shasum -a 256 -c
-tcpraid-0.3.0-macos-arm64: OK
-$ chmod +x tcpraid-0.3.0-macos-arm64
-$ ./tcpraid-0.3.0-macos-arm64 version
+$ grep macos-arm64 tcpraid-0.4.0-SHA256SUMS | shasum -a 256 -c
+tcpraid-0.4.0-macos-arm64: OK
+$ chmod +x tcpraid-0.4.0-macos-arm64
+$ ./tcpraid-0.4.0-macos-arm64 version
 ```
 
 在 Windows 上，用 PowerShell，用眼睛比对两个值。除了字母大小写可以不同，它们必须相同：
 
 ```
-> (Get-FileHash .\tcpraid-0.3.0-windows-amd64.exe -Algorithm SHA256).Hash
-> Select-String windows-amd64 .\tcpraid-0.3.0-SHA256SUMS
-> .\tcpraid-0.3.0-windows-amd64.exe version
+> (Get-FileHash .\tcpraid-0.4.0-windows-amd64.exe -Algorithm SHA256).Hash
+> Select-String windows-amd64 .\tcpraid-0.4.0-SHA256SUMS
+> .\tcpraid-0.4.0-windows-amd64.exe version
 ```
 
 **这些二进制文件没有签名。** 第一次启动时，系统可能会拦下它，说无法确认这个程序的来源。如果你已经核对过 SHA-256 校验值，就按系统的提示或它的安全设置里提供的办法允许它运行。在我们知道的那一次里，用 `scp` 拷到 Mac 上、在终端里启动的二进制文件没有被拦下。用浏览器下载的文件，系统可能另作处理，那种情况没有试过。节点要接受别的机器连进来时(`-listen`，或者规则的监听端口)，系统还可能询问是否允许这个程序接受传入的连接。macOS 问了，按钮是 Deny 和 Allow。要允许，否则另一个节点连不上。
 
-**运行**在终端里进行。tcpraid 的各个命令和参数与 Linux 上相同，只是把 `tcpraid` 换成你下载的文件的名字，在 PowerShell 里写成 `.\tcpraid-0.3.0-windows-amd64.exe`。这份文档里围绕这些命令的 shell 写法是按 Linux 写的，我们没有在这两个系统上试过。不同的地方：
+**运行**在终端里进行。tcpraid 的各个命令和参数与 Linux 上相同，只是把 `tcpraid` 换成你下载的文件的名字，在 PowerShell 里写成 `.\tcpraid-0.4.0-windows-amd64.exe`。这份文档里围绕这些命令的 shell 写法是按 Linux 写的，我们没有在这两个系统上试过。不同的地方：
 
 - **数据目录。** 不带 `-data` 时，节点把数据放在当前用户的配置目录下名为 `tcpraid` 的目录里。macOS 上是 `~/Library/Application Support/tcpraid`，Windows 上是 `%AppData%\tcpraid`。向节点发请求的各个命令(`status`、`pair`、`peers`、`rules`、`sessions`)以同一个用户运行时，也去那里找。
 - **只在 Linux 上有的：** `-transparent` 和透明规则，`-maxrss`，`-stats` 那一行里的 `rss`(别的系统上显示为 `n/a`)，容器镜像，systemd 单元。在别的系统上，`tcpraid run` 启动时会拒绝 `-transparent` 和 `-maxrss`。
@@ -78,33 +78,46 @@ $ ./tcpraid-0.3.0-macos-arm64 version
 手动启动，先试一下：
 
 ```
-nas-a# tcpraid run -listen 0.0.0.0:9851 -advertise nas-a.example.org:9851
+nas-a# tcpraid run -name nas-a -listen 0.0.0.0:9851 -advertise nas-a.example.org:9851
 ... web interface: no password was set, so one was made. It is shown this once: okt7wgr47g3lt6f2
 ... web interface: to set your own, start the node with -ui-password-file FILE or the environment variable TCPRAID_UI_PASSWORD
-... node 0.3.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+... node 0.4.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
 ... transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
 ... web interface: open http://127.0.0.1:9850 in a browser on this machine
 ```
 
+- `-name` 是节点的名字，对端和对端的规则用它来指这个节点。不给的话，新节点的名字是主机名加上四个随机字符，例如 `nas-a-k3x9`。
 - `-listen` 是其他节点连接的地方。在能被另一个节点连到的节点上给出，另一个节点不需要。两个站点都没有公网地址的话，`connecting.md` 把让一个节点能被连到的几种办法逐一讲了。
 - `-advertise` 是另一个节点连它时要用的地址。它会被写进这个节点生成的配对码里。
 - 数据目录是 `/var/lib/tcpraid`，除非用 `-data` 另外指定。里面有节点的私钥，所以要保留好，像备份私钥那样备份它。
 - 网页界面和 API 在 `127.0.0.1:9850`，只有本机能访问。要从别的机器打开页面，加上 `-api ADDRESS:9850`。它是明文 HTTP，所以只能在你信任的网络上这样做。
 
-用 systemd 的话，`deploy/tcpraid-node.service` 就是为此准备的单元文件。把它复制到 `/etc/systemd/system/`，调整里面的命令行。在另一个节点要连过来的节点上，命令行里要加上 `-advertise HOST:9851`，因为 `tcpraid pair create` 会把这个地址写进配对码，没有的话每次都要给 `-addr`。然后执行 `systemctl enable --now tcpraid-node`。生成的密码在 `journalctl -u tcpraid-node` 里。
+用 systemd 的话，`deploy/tcpraid-node.service` 就是为此准备的单元文件。它让节点以一个专用的用户运行，没有 root 的权限：
+
+```
+# useradd --system --user-group --no-create-home --shell /usr/sbin/nologin tcpraid
+# cp deploy/tcpraid-node.service /etc/systemd/system/
+```
+
+然后调整单元文件里的命令行。加上 `-name NAME` 给节点起你想要的名字。在另一个节点要连过来的节点上，还要加上 `-advertise HOST:9851`，因为 `tcpraid pair create` 会把这个地址写进配对码，没有的话每次都要给 `-addr`。然后执行 `systemctl enable --now tcpraid-node`。生成的密码在 `journalctl -u tcpraid-node` 里。
+
+- systemd 会创建 `/var/lib/tcpraid`，并把它交给用户 `tcpraid`。
+- 命令行里提到的文件，比如 `-cert`、`-key`、`-ui-password-file` 指向的文件，要让这个用户能读。
+- 1024 以下的端口需要一项权限，单元文件里有两行是为它准备的，默认注释掉了。转发规则和透明规则不需要别的权限。
+- 如果节点以前是用这个单元文件的旧版本以 root 运行的，先停掉它，建好用户，换上新的单元文件，再启动。数据目录留在原处，systemd 会在这次启动时把它交给新用户。
 
 ```
 nas-a$ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.3.0 (wire protocol 1)
+version      0.4.0 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
 rules        0
 ```
 
-这些命令通过数据目录和同一台主机上的节点通信，所以要用能读这个目录的用户来执行(单元文件不改的话就是 root)。节点没有用默认目录时，加上 `-data DIR`。
+这些命令通过数据目录和同一台主机上的节点通信，所以要用能读这个目录的用户来执行(用这个单元文件时，就是 root 或用户 `tcpraid`)。节点没有用默认目录时，加上 `-data DIR`。
 
 ## 把两个节点配对
 

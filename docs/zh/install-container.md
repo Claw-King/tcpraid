@@ -6,14 +6,17 @@
 
 | | |
 |---|---|
-| 镜像 | `ghcr.io/claw-king/tcpraid:0.3.0`(也可以用 `deploy/Dockerfile` 自己构建) |
+| 镜像 | `ghcr.io/claw-king/tcpraid:0.4.0`(也可以用 `deploy/Dockerfile` 自己构建) |
 | 数据 | 挂载到 `/data` 的一个目录。里面有节点的私钥、它的对端和它的规则。保留好，像备份私钥那样备份它，绝不要让两个节点共用 |
 | 端口 9850 | 网页界面和本机 API。明文 HTTP：只在你信任的网络上开放 |
 | 端口 9851 | 其他节点连到这里。能被另一个节点连到的那个节点需要它；另一个节点开着也无妨 |
 | 端口 50000-50010 | 给转发规则用。在网页界面里建的规则必须监听你映射出来的端口之一，地址用 `0.0.0.0` |
+| 端口 8446，UDP | 可选：对端经 UDP 发来的回执。节点启动时带了 `-udp-listen` 才会用到 |
 | `TCPRAID_UI_PASSWORD` | 可选：网页界面的密码。不设的话，节点会生成一个，并在日志里显示一次 |
 
 `deploy/docker-compose.yml` 里这些都有，并带注释。给规则用的端口段只是默认值。要改的话，把映射两边改成相同的端口即可。文件里还给出了另一种做法，就是不映射端口，而是共用主机的网络。这样规则可以监听主机上任何空闲的端口。
+
+UDP 回执默认不启用。要用它，就在节点的命令行里加上 `-udp-listen 0.0.0.0:8446`，把 8446 端口按 UDP 映射出来，再在另一个节点上用 `tcpraid peers set NAME -udp-dial HOST:8446` 告诉它这个地址。compose 文件里这两行都有，默认注释掉了。
 
 **共用主机网络时，要写明网页界面在哪里监听。** 镜像启动节点时用的是 `-api 0.0.0.0:9850`，在端口映射后面这是对的。共用主机网络时，它会把网页界面和 API(明文 HTTP)开在主机的每一个地址上，包括朝向别的网络的地址，比如在路由器或网关上。这种情况下给容器写上它自己的命令，指明页面该开在哪个地址，可以只开在主机本机，也可以开在局域网的某一个地址：
 
@@ -31,7 +34,7 @@ $ docker compose up -d
 $ docker logs tcpraid
 ... web interface: no password was set, so one was made. It is shown this once: y7ygtkha76gshsnt
 ... web interface: to set your own, start the node with -ui-password-file FILE or the environment variable TCPRAID_UI_PASSWORD
-... node 0.3.0 name="nas-a" fingerprint=056f8829...e2e077d8 data=/data api=[::]:9850 listen=[::]:9851 listen-plain=off transparent=off udp-listen=off
+... node 0.4.0 name="nas-a" fingerprint=056f8829...e2e077d8 data=/data api=[::]:9850 listen=[::]:9851 listen-plain=off transparent=off udp-listen=off
 ... transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
 ... web interface: open http://127.0.0.1:9850 in a browser on this machine
 ... the web interface and the API at [::]:9850 are plain HTTP and reachable from other hosts. Use them on a network you trust, or put a reverse proxy with TLS in front.
@@ -39,7 +42,7 @@ $ docker logs tcpraid
 
 打开 `http://主机的地址:9850/`，用那个密码登录。
 
-**配对之前先给节点起名字。** 节点第一次启动时用容器的主机名作为自己的名字。compose 文件原样写的是 `tcpraid`，每台机器上都一样。给每个节点起一个自己的名字，可以在第一次启动之前改 compose 文件里的 `hostname:`，也可以启动之后在 设置 >“本节点的名字”里改。本页用的是 `nas-a` 和 `nas-b`。要在配对之前做，因为每个节点记下的是对端在那一刻的名字，规则靠这个名字指明对端，之后再改名传不到另一个节点。
+**配对之前先给节点起名字。** 节点第一次启动时用容器的主机名加上四个随机字符作为自己的名字。compose 文件不改的话，得到的是 `tcpraid-k3x9` 这样的名字，每台机器上都不一样。在 设置 >“本节点的名字”里给每个节点起一个认得出的名字。本页用的是 `nas-a` 和 `nas-b`。要在配对之前做，因为每个节点记下的是对端在那一刻的名字，规则靠这个名字指明对端，之后再改名传不到另一个节点。
 
 ## 把两个节点配对
 
@@ -88,7 +91,7 @@ tcpraid pair create: no address for the other node to connect to. Name one in th
 - 名字：随便起，例如 `rsync`。
 - 监听地址和端口：`0.0.0.0:50000`(你映射出来的一个端口)。
 - 对端：`nas-a`。
-- 对端那边的目的 IP 和端口：另一个站点的服务，按 `nas-a` 连它的方式写，例如 `192.0.2.10:873`。要写 IP 地址，因为不支持主机名。
+- 对端那边的目的地址和端口：另一个站点的服务，按 `nas-a` 连它的方式写，例如 `192.0.2.10:873`。也可以写主机名，例如 `nas.lan:873`，它由 `nas-a` 在每条连接到来时解析。
 
 或者：
 

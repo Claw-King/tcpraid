@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -490,7 +491,7 @@ func TestPathsReplyNamesNoAddress(t *testing.T) {
 	}
 	cc, _ := b.control(t)
 	hello := expect(t, cc, control.TypeHello)
-	if len(hello.Features) != 1 || hello.Features[0] != control.FeaturePathTest {
+	if !slices.Equal(hello.Features, []string{control.FeaturePathTest, control.FeatureResolve}) {
 		t.Errorf("the hello names the features %v", hello.Features)
 	}
 	if err := cc.Send(control.Message{Type: control.TypePaths, Request: 7}); err != nil {

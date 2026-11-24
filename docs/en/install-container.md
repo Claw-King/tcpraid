@@ -8,17 +8,23 @@ on a real NAS (see "Where each platform takes it").
 
 | | |
 |---|---|
-| Image | `ghcr.io/claw-king/tcpraid:0.3.0` (you can also build it yourself with `deploy/Dockerfile`) |
+| Image | `ghcr.io/claw-king/tcpraid:0.4.0` (you can also build it yourself with `deploy/Dockerfile`) |
 | Data | a directory mounted at `/data`. It holds the node's private key, its peers and its rules. Keep it, back it up like a private key, never share it between two nodes |
 | Port 9850 | the web page and the local API. Plain HTTP: publish it only on a network you trust |
 | Port 9851 | where other nodes connect. Needed on the node that the other one can reach; harmless on the other |
 | Ports 50000-50010 | for forwarding rules. A rule made in the web page must listen on one of the ports you publish, at the address `0.0.0.0` |
+| Port 8446, UDP | optional: feedback from the other node over UDP. Off unless the node is started with `-udp-listen` |
 | `TCPRAID_UI_PASSWORD` | optional: the password of the web page. Without it the node makes one and prints it once in its log |
 
 `deploy/docker-compose.yml` has all of this, with comments. The range for
 rules is only a default. To change it, set both sides of the mapping to the
 same ports. The file also shows the alternative of sharing the host's network
 instead of mapping ports. A rule can then listen on any free port of the host.
+
+UDP feedback is off by default. To use it, add `-udp-listen 0.0.0.0:8446` to the
+node's command line, publish port 8446 as UDP, and tell the other node the
+address with `tcpraid peers set NAME -udp-dial HOST:8446`. The compose file has
+both lines in it, commented out.
 
 **With the host's network, say where the web page listens.** The image starts
 the node with `-api 0.0.0.0:9850`, which is right behind a port mapping. On
@@ -43,7 +49,7 @@ $ docker compose up -d
 $ docker logs tcpraid
 ... web interface: no password was set, so one was made. It is shown this once: y7ygtkha76gshsnt
 ... web interface: to set your own, start the node with -ui-password-file FILE or the environment variable TCPRAID_UI_PASSWORD
-... node 0.3.0 name="nas-a" fingerprint=056f8829...e2e077d8 data=/data api=[::]:9850 listen=[::]:9851 listen-plain=off transparent=off udp-listen=off
+... node 0.4.0 name="nas-a" fingerprint=056f8829...e2e077d8 data=/data api=[::]:9850 listen=[::]:9851 listen-plain=off transparent=off udp-listen=off
 ... transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
 ... web interface: open http://127.0.0.1:9850 in a browser on this machine
 ... the web interface and the API at [::]:9850 are plain HTTP and reachable from other hosts. Use them on a network you trust, or put a reverse proxy with TLS in front.
@@ -51,14 +57,13 @@ $ docker logs tcpraid
 
 Open `http://ADDRESS-OF-THE-HOST:9850/` and log in with that password.
 
-**Name the node before you pair it.** A node takes its name from the
-container's host name at its first start. In the compose file as it comes that
-is `tcpraid`, the same on every machine. Give each node its own name, either
-by setting `hostname:` in the compose file before the first start, or
-afterwards in Settings > "Name of this node". This page uses `nas-a` and
-`nas-b`. Do it before pairing, because each node records the name its peer had
-at that moment, rules name the peer by it, and a later rename does not reach
-the other node.
+**Name the node before you pair it.** At its first start a node takes the
+container's host name and adds four random characters. With the compose file
+as it comes that gives a name like `tcpraid-k3x9`, different on every machine.
+Give each node a name you recognise in Settings > "Name of this node". This
+page uses `nas-a` and `nas-b`. Do it before pairing, because each node records
+the name its peer had at that moment, rules name the peer by it, and a later
+rename does not reach the other node.
 
 ## Pair the two nodes
 
@@ -119,9 +124,9 @@ go to Rules > "New rule":
 - Name: anything, for example `rsync`.
 - Listen address and port: `0.0.0.0:50000` (a port you published).
 - Peer: `nas-a`.
-- Destination IP and port at the peer: the service at the other site, as
-  `nas-a` reaches it, for example `192.0.2.10:873`. It must be an IP address,
-  because host names are not supported.
+- Destination address and port at the peer: the service at the other site, as
+  `nas-a` reaches it, for example `192.0.2.10:873`. A host name works too, as
+  in `nas.lan:873`. It is looked up by `nas-a`, for every connection.
 
 Or:
 

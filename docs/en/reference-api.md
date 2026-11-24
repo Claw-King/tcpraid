@@ -45,7 +45,7 @@ that ran out of time.
 ### GET /api/v1/status
 
 ```
-{"version":"0.3.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.4.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
  "sessions":2,"peers":1,"rules":2}
 ```
@@ -137,7 +137,7 @@ code. The answer is the new peer, as below.
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.3.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.4.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
 `online` means that a control connection with the peer is up. `version` and
@@ -157,7 +157,7 @@ peer.
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.3.0",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.4.0",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 
@@ -165,6 +165,34 @@ $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","u
 networks with an optional port or range, separated by commas. Empty means
 any. `udp_dial` is where this node sends UDP feedback for sessions with the
 peer. Empty means none.
+
+### PUT /api/v1/peers/{name}/paths/{path}, DELETE /api/v1/peers/{name}/paths/{path}
+
+Added in version 0.4.0. The `PUT` changes one path of a peer, or adds it if
+the peer has none of that name. Its body holds any of `addr`, `type`,
+`proxy`, `security`, `verify`, `pin`, `roles` and `subs`, and at least one.
+What the body does not name stays as it is. A new path needs `addr`, and
+what the body does not name is then `tcp`, `tls`, the role `data` and 8
+sub-connections. The answer is `{"created": ..., "peer": {...}}` with the
+peer as stored, and the status is `201` for a new path and `200` for a
+change.
+
+```
+$ curl -X PUT ... -d '{"subs":4}' http://127.0.0.1:9850/api/v1/peers/nas-a/paths/default
+{"created":false,"peer":{"name":"nas-a","fingerprint":"e5645f9b...7795ec86","addresses":["nas-a.example.org:9851"],
+ "paired_at":"2026-01-15T10:00:20Z",
+ "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":4}],
+ "allow":"","udp_dial":"","online":true,"version":"0.4.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
+```
+
+The `DELETE` removes the path and answers with the peer. A peer without that
+path is `404`.
+
+The node reads and writes the peer's paths in one step for each of these
+requests. Requests for two paths of a peer that arrive at the same time
+therefore both take effect. A `PUT` of the whole list
+(`PUT /api/v1/peers/{name}` with `paths`) cannot promise that, because the
+list it sends was read earlier.
 
 ### POST /api/v1/peers/{name}/check
 
@@ -210,6 +238,16 @@ test data competes with the transfers that run at the same time.
 ### DELETE /api/v1/peers/{name}
 
 Ends the pairing on this node and resets the sessions with the peer. `204`.
+The rules that name the peer stay.
+
+With the query `rules`, added in version 0.4.0, the answer is `200` and says
+which rules named the peer. `?rules=keep` leaves them, and `?rules=remove`
+removes them together with the peer:
+
+```
+$ curl -X DELETE ... 'http://127.0.0.1:9850/api/v1/peers/nas-a?rules=remove'
+{"peer":"nas-a","rules":["rsync","zfs"],"rules_removed":true}
+```
 
 ## Rules
 
@@ -241,7 +279,9 @@ connection of the rule clears both fields.
 ### POST /api/v1/rules
 
 Body `{"name", "peer", "listen", "destination"}` or `{"name", "peer",
-"match"}`, and optionally `"enabled": false`.
+"match"}`, and optionally `"enabled": false`. Since version 0.4.0 the
+destination may hold a host name in the place of the IP address, as in
+`"nas.lan:873"`. The peer looks it up for every connection.
 
 ```
 $ curl -X POST ... -d '{"name":"pg","peer":"nas-a","listen":"127.0.0.1:15432","destination":"192.0.2.10:5432"}' http://127.0.0.1:9850/api/v1/rules
@@ -255,7 +295,7 @@ A rule that cannot be stored:
 ```
 HTTP/1.1 400 Bad Request
 
-{"error":"invalid: rule \"bad\": destination \"example.org:80\": \"example.org\" is not an IP address (host names are not supported)"}
+{"error":"invalid: rule \"bad\": destination \"192.0.2:80\": \"192.0.2\" cannot be used: it is neither an IP address nor a host name, whose last part is never a number"}
 ```
 
 ### PUT /api/v1/rules/{name}
@@ -292,3 +332,6 @@ method but `GET` and `HEAD`, must also carry the header
 ### POST /api/v1/logout
 
 Ends the login. `204`.
+
+A node started with `-no-ui` has no web page. The login and the paths of the
+page's files answer `404` there, and a cookie authorizes nothing.

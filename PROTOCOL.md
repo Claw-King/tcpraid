@@ -261,9 +261,13 @@ field that the receiving end does not know is ignored.
 | `paths` | by an end that runs a path test | `request` | name the paths you hold to me |
 | `paths_reply` | in answer to a `paths` | `request`, `paths` (list of `name`, `subs`, `data`) | the paths, in their order, without addresses |
 | `test_end` | by an end that runs a path test | `session` (the id in hex) | I have ended this session of the test |
+| `resolve` | by an end that is about to carry a session | `request`, `host` (text), `port` (number) | which address does this host name stand for at your end? |
+| `resolve_reply` | in answer to a `resolve` | `request`, and either `addr` (an IP address as text) or `code` (`lookup`, `allow` or `busy`) with `reason` (text; optional) | the address, or why there is none |
 
-The last four types, and the fields `features`, `test_path` and `test_subs`,
-were added in version 0.3.0. Older versions ignore them.
+The types from `session_fail` to `test_end`, and the fields `features`,
+`test_path` and `test_subs`, were added in version 0.3.0. The types `resolve`
+and `resolve_reply` were added in version 0.4.0. Older versions ignore what
+they do not know.
 
 An end that receives nothing for 30 seconds takes the connection for dead. The
 end that dialed dials again after 1, 2, 4, then every 8 seconds.
@@ -322,6 +326,27 @@ path carries data (`data`). The asking node then sends `open` with
 many as the path has). The peer opens the control and repair sub-connections
 of all its paths as usual, and no data sub-connection on any other path. An
 `open` without `test_path`, or with 0, is the ordinary request.
+
+**A destination that is a host name.** The destination in the 69-byte header
+of a session is always an IP address. Since version 0.4.0 a rule may name its
+destination by a host name, and the node with the rule then asks the peer,
+in whose network the destination is, for the address before it creates the
+session. A node that answers such questions says so with the text `resolve`
+in the `features` of its `hello`, and none is sent to a peer that does not.
+The asking end sends `resolve` with a `request` number, the `host` name and
+the `port` the session will go to. The other end looks the name up with the
+resolver of its system and answers `resolve_reply` with the same `request`.
+`addr` is the first address of the name that the allow list it keeps for the
+asking node lets through with that port, or the first address when it keeps
+no list. With no such address it sends a `code` and no `addr`. The code is
+`lookup` when the name could not be looked up, `allow` when the allow list
+holds none of the name's addresses, which are then not named, and `busy`
+when the end looks up as many names as it does at a time (32). The asking
+end uses `addr` only if it is an IP address in text form, waits 10 seconds
+for the answer, and resets the application's connection when there is no
+address. The answering end gives a lookup 5 seconds. Nothing is kept from
+one connection to the next. The session that follows is checked against the
+allow list like any other, so a name gives a peer no way around the list.
 
 **A session whose sub-connections the exit end opens.** A node that has to
 carry a connection to a peer it holds no path to creates the session, picks a

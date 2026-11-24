@@ -170,6 +170,10 @@ func sendOpening(conn net.Conn, typ byte, fingerprint [sha256.Size]byte, pairSec
 	return o, key, nil
 }
 
+// errNoAnswer is the error of a check whose opening the other end answered by closing
+// the connection.
+var errNoAnswer = errors.New("the other end closed the connection without answering. Either the address is not a tcpraid listener, or the other node is not paired with this one, or their pair secrets differ. Pairing again fixes the last two.")
+
 // checkConn sends an opening of TypeCheck on conn and checks the answer: nil means the
 // other end holds pairSecret.
 func checkConn(conn net.Conn, fingerprint [sha256.Size]byte, pairSecret []byte) error {
@@ -182,7 +186,7 @@ func checkConn(conn net.Conn, fingerprint [sha256.Size]byte, pairSecret []byte) 
 	got := make([]byte, checkAnswerLen)
 	if _, err := io.ReadFull(conn, got); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			return errors.New("the other end closed the connection without answering. Either the address is not a tcpraid listener, or the other node is not paired with this one, or their pair secrets differ. Pairing again fixes the last two.")
+			return errNoAnswer
 		}
 		return err
 	}

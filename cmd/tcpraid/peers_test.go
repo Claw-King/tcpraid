@@ -4,11 +4,14 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -411,5 +414,92 @@ func TestRunWaitsForConnectionsAtShutdown(t *testing.T) {
 		}
 	case <-time.After(shutdownWait - time.Second):
 		t.Fatal("the node did not stop when the pairing connection was gone")
+	}
+}
+
+// "peers remove" names the rules that still name the peer and says what becomes of
+// them; with -with-rules they go with it.
+func TestPeersRemoveAndTheRules(t *testing.T) {
+	dirA, dirB := filepath.Join(t.TempDir(), "a"), filepath.Join(t.TempDir(), "b")
+	addrA := freeAddr(t)
+	startNodeWith(t, runOptions{dataDir: dirA, name: "alpha", listen: addrA, advertise: stringList{addrA}})
+	startNodeWith(t, runOptions{dataDir: dirB, name: "beta"})
+	pairAgain := func() {
+		t.Helper()
+		_, _, stdout, _ := call("pair", "create", "-data", dirA)
+		must(t, "pair", "join", strings.TrimSpace(stdout), "-data", dirB)
+	}
+	pairAgain()
+	must(t, "rules", "add", "zfs", "-data", dirB, "-peer", "alpha", "-listen", freeAddr(t), "-dest", "192.0.2.1:873")
+	must(t, "rules", "add", "ssh", "-data", dirB, "-peer", "alpha", "-listen", freeAddr(t), "-dest", "192.0.2.1:22")
+
+	out := must(t, "peers", "remove", "alpha", "-data", dirB)
+	if !strings.Contains(out, "peer alpha removed") || !strings.Contains(out, "These rules still name alpha: zfs, ssh") || !strings.Contains(out, "takes them over") {
+		t.Errorf("peers remove with two rules that name the peer printed:\n%s", out)
+	}
+	if rules := must(t, "rules", "-data", dirB); !strings.Contains(rules, "zfs") || !strings.Contains(rules, "ssh") {
+		t.Errorf("the rules after peers remove without -with-rules:\n%s", rules)
+	}
+
+	pairAgain()
+	out = must(t, "peers", "remove", "alpha", "-with-rules", "-data", dirB)
+	if !strings.Contains(out, "peer alpha removed") || !strings.Contains(out, "The rules that named it were removed with it: zfs, ssh") {
+		t.Errorf("peers remove -with-rules printed:\n%s", out)
+	}
+	if rules := must(t, "rules", "-data", dirB); strings.TrimSpace(rules) != "no rules" {
+		t.Errorf("the rules after peers remove -with-rules:\n%s", rules)
+	}
+
+	// a peer that no rule names: one line, as before
+	pairAgain()
+	if out := must(t, "peers", "remove", "alpha", "-data", dirB); strings.Count(strings.TrimSpace(out), "\n") != 0 {
+		t.Errorf("peers remove of a peer without rules printed:\n%s", out)
+	}
+}
+
+// Two "peers path set" for two paths of one peer, and a "peers set", that run at the
+// same time all take effect: none overwrites what another has just stored.
+func TestPathCommandsAtTheSameTime(t *testing.T) {
+	dirA, dirB := filepath.Join(t.TempDir(), "a"), filepath.Join(t.TempDir(), "b")
+	addrA := freeAddr(t)
+	startNodeWith(t, runOptions{dataDir: dirA, name: "alpha", listen: addrA, advertise: stringList{addrA}})
+	startNodeWith(t, runOptions{dataDir: dirB, name: "beta"})
+	_, _, stdout, _ := call("pair", "create", "-data", dirA)
+	must(t, "pair", "join", strings.TrimSpace(stdout), "-data", dirB)
+	must(t, "peers", "path", "set", "alpha", "side", "-addr", "192.0.2.9:9851", "-data", dirB)
+
+	for round := 1; round <= 30; round++ {
+		one, two := strconv.Itoa(1+round%60), strconv.Itoa(1+(round*7)%60)
+		allow := fmt.Sprintf("192.0.2.0/24:%d", 1000+round)
+		var wg sync.WaitGroup
+		for _, args := range [][]string{
+			{"peers", "path", "set", "alpha", "default", "-subs", one, "-data", dirB},
+			{"peers", "path", "set", "alpha", "side", "-subs", two, "-data", dirB},
+			{"peers", "set", "alpha", "-allow", allow, "-data", dirB},
+		} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if code, _, _, stderr := call(args...); code != 0 {
+					t.Errorf("round %d: tcpraid %s: code %d, %s", round, strings.Join(args, " "), code, stderr)
+				}
+			}()
+		}
+		wg.Wait()
+		var p api.Peer
+		if err := apiCall(dirB, "GET", peerPath("alpha"), nil, &p, shortCall); err != nil {
+			t.Fatal(err)
+		}
+		if len(p.Paths) != 2 || strconv.Itoa(p.Paths[0].Subs) != one || strconv.Itoa(p.Paths[1].Subs) != two || p.Allow != allow {
+			t.Fatalf("round %d: the peer is %+v, want subs %s and %s and allow %s", round, p, one, two, allow)
+		}
+	}
+
+	// a command that names nothing to change shows the path as it is
+	if out := must(t, "peers", "path", "set", "alpha", "side", "-data", dirB); !strings.Contains(out, "path side of alpha changed") {
+		t.Errorf("peers path set without a setting: %q", out)
+	}
+	if code, _, _, stderr := call("peers", "path", "set", "alpha", "third", "-data", dirB); code != 1 || !strings.Contains(stderr, "needs -addr") {
+		t.Errorf("a new path without anything: code %d, %q", code, stderr)
 	}
 }
