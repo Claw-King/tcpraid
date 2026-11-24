@@ -141,6 +141,31 @@ listed. For any other tool, use the check in the next section.
 
 ## How to see whether the connections are separate
 
+Start with a measurement. `tcpraid peers test` sends test data over each
+path, once with one sub-connection and once with all of them, and prints both
+speeds:
+
+```
+nas-a$ tcpraid peers test nas-b
+path test with nas-b: two runs of up to 10 seconds for each path
+PATH     SUB-CONNECTIONS  ONE ALONE  ALL TOGETHER  TIMES
+default  8                2.6 MB/s   19.8 MB/s     7.6
+default: 8 sub-connections together carried 7.6 times what one carried alone.
+```
+
+When all of them together carry little more than one alone, there are two
+explanations, and the test cannot tell which applies:
+
+- **One connection already fills the line.** Compare `ONE ALONE` with what
+  the line is known to carry. If the two are close, nothing is wrong. On
+  such a line a single connection does well, and tcpraid has little to add.
+- **Something on the path puts the connections into one.** `ONE ALONE` is
+  then well below what the line carries. Go through the table above for the
+  tool you use, and count the connections as described below.
+
+The test sends real data and runs only when you start it. `reference-cli.md`
+has its options.
+
 `tcpraid sessions` shows, under `SUBS`, how many connections the node holds
 for a session. That is what the node opened, not what crosses between the
 sites. To see more, count TCP connections while a transfer runs.

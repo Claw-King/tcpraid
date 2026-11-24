@@ -142,7 +142,32 @@ type SubOptions struct {
 	// Valid, if not nil, is asked once, at the moment a session is created, whether it
 	// may be (see Engine.AbortPeer).
 	Valid func() bool
+	// Sink, if not nil, gives the local end of a session whose destination is
+	// SinkIP:SinkPort: nothing is dialed for it and the allow list is not asked, because
+	// the session reaches nothing outside this process. Sink returns the connection, or
+	// nil and why not. Without Sink such a session fails like one whose destination
+	// cannot be reached.
+	Sink func() (net.Conn, string)
+	// DialFailed, if not nil, is told when a session could not be connected to its
+	// destination, before the other end is: code is DialRefused or DialError.
+	DialFailed func(id [16]byte, code, reason string)
 }
+
+// The codes DialFailed gives.
+const (
+	DialRefused = "allow" // the destination is not in the allow list
+	DialError   = "dial"  // connecting to the destination failed; the reason is the system's error
+)
+
+// SinkPort and SinkIP are the destination of a session that ends inside the other end
+// (SubOptions.Sink). No application connection can have it: port 0 is not a port.
+const SinkPort = 0
+
+// SinkIP is the unspecified IPv4 address.
+var SinkIP = net.IPv4zero
+
+// isSink reports whether ip:port is the destination of SubOptions.Sink.
+func isSink(ip net.IP, port int) bool { return port == SinkPort && ip.IsUnspecified() }
 
 // RunServer accepts sub-connections on Config.Listen and connects each session to its
 // destination. It returns only when the allow list is invalid or it cannot listen.
@@ -261,11 +286,16 @@ func (e *Engine) serveSub(c net.Conn, opt SubOptions, r *Route, join *session) b
 		refuse(c, stRefused)
 		return false
 	}
-	s := e.newSessionFor(h.id, nil, false, net.JoinHostPort(h.dstIP.String(), strconv.Itoa(h.dstPort)), ks, Owner{Peer: opt.Peer})
+	sink := opt.Sink != nil && isSink(h.dstIP, h.dstPort)
+	s := e.newSessionFor(h.id, nil, false, net.JoinHostPort(h.dstIP.String(), strconv.Itoa(h.dstPort)), ks, Owner{Peer: opt.Peer, Test: sink})
+	// the session is listed from the moment it exists (SessionList), so what a listing
+	// reads is set under the session's lock
+	s.mu.Lock()
 	if pb := int(h.windowMB) << 20; pb > 0 {
 		s.peerBudget = min(s.peerBudget, pb)
 	}
 	s.everUp = true
+	s.mu.Unlock()
 	e.sess[h.id] = s
 	e.smu.Unlock()
 	s.udpSetup(ks, opt.UDPDial)
@@ -273,17 +303,37 @@ func (e *Engine) serveSub(c net.Conn, opt SubOptions, r *Route, join *session) b
 	added := ok(s)
 	// dial outside the server lock: a slow destination must not hold up others
 	go func() {
+		failed := func(code, why string) {
+			if opt.DialFailed != nil {
+				opt.DialFailed(h.id, code, why)
+			}
+			s.dialFail(why)
+		}
+		if sink {
+			d, why := opt.Sink()
+			if d == nil {
+				failed(DialError, why)
+				return
+			}
+			if !s.setLocal(d) {
+				d.Close()
+				return
+			}
+			go s.pumpLocal()
+			go s.deliverLocal()
+			return
+		}
 		if !opt.Allow.Allows(h.dstIP, h.dstPort) {
 			name := opt.AllowName
 			if name == "" {
 				name = "-allow"
 			}
-			s.dialFail("not in " + name)
+			failed(DialRefused, "not in "+name)
 			return
 		}
 		d, err := net.DialTimeout("tcp", s.dstAddr, 10*time.Second)
 		if err != nil {
-			s.dialFail(err.Error())
+			failed(DialError, err.Error())
 			return
 		}
 		// from here on, a process that dies resets the destination

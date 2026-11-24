@@ -5,10 +5,11 @@ tcpraid run     [flags]                       start a node
 tcpraid status  [-json]                       the node on this host
 tcpraid pair    create | list | revoke ID | join [CODE]
 tcpraid peers   [list] | show NAME | check NAME | remove NAME
+tcpraid peers   test NAME [-seconds N] [-path PATH] [-json]
 tcpraid peers   set NAME [-allow LIST] [-udp-dial HOST:PORT]
 tcpraid peers   path set NAME PATH [flags] | path remove NAME PATH
 tcpraid rules   [list] | add NAME [flags] | remove NAME | enable NAME | disable NAME
-tcpraid sessions [-json]                      what the node carries right now
+tcpraid sessions [-json] [-watch]             what the node carries right now
 tcpraid version
 ```
 
@@ -37,7 +38,7 @@ after telling its peers and resetting the application connections it carries.
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.2.0 (wire protocol 1)
+version      0.3.0 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -90,7 +91,7 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.2.0, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.3.0, last heard 2026-01-15T10:00:05Z
 
 PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS
 default  tcp   nas-a.example.org:9851  -      tls       -       -    data   8
@@ -109,6 +110,49 @@ peer nas-b removed. The other node is not told and still lists this one.
 - `peers remove NAME` ends the pairing on this node. The sessions with that
   peer are reset, in both directions, and its connections are refused from
   then on.
+
+### peers test
+
+```
+$ tcpraid peers test nas-a
+path test with nas-a: two runs of up to 10 seconds for each path
+PATH     SUB-CONNECTIONS  ONE ALONE  ALL TOGETHER  TIMES
+default  8                2.6 MB/s   19.8 MB/s     7.6
+default: 8 sub-connections together carried 7.6 times what one carried alone.
+```
+
+`peers test NAME` measures what the sub-connections add on each path that
+carries data. The node sends test data to the peer, which discards it. Each
+path gets two runs, the first with one data sub-connection and the second
+with all the path has. The rates are what the peer reported as received,
+averaged over the second half of each run, so the start of a connection does
+not count.
+
+- `-seconds N` sets how long each run lasts, from 1 to 60. The default is 10.
+  A run also ends after 1 GiB. On a line with a long delay, a longer run
+  gives a steadier number.
+- `-path PATH` tests only the path of that name.
+- `-json` prints the answer of `POST /api/v1/peers/NAME/test` instead
+  (`reference-api.md`).
+
+The test runs only when you start it, and it sends real data, which competes
+with the transfers that run at the same time. Data goes from the node where
+you run the command to the peer. To measure the other direction, run the
+command on the other node. A node without a path to the peer can run it too.
+The peer then opens the sub-connections, and the table lists the peer's
+paths.
+
+When all sub-connections together carry less than 1.5 times what one
+carries, the command says so:
+
+```
+default: 8 sub-connections together carried little more than one alone. Either one connection already fills this line, or something on the path puts the connections into one. "Connecting two sites" in the documentation (docs/en/connecting.md) says how to tell them apart.
+```
+
+The command cannot tell these two cases apart. `connecting.md` describes how
+to do that. The command exits with status 1 when a path could not be
+measured, and when the test cannot start. A test needs version 0.3.0 or
+later on both nodes, and a node runs one test at a time.
 
 ### peers path
 
@@ -211,14 +255,28 @@ rule's name is up to 64 bytes without spaces.
 `STATE` is `listening`, `disabled`, or `FAILED:` with the reason the rule
 could not listen. In that case `rules add` exits with status 1, and the rule
 is stored and tried again whenever the rules change. After "last connection:" comes what
-went wrong with the last connection the rule could not carry.
+went wrong with the last connection the rule could not carry, and how long
+ago:
+
+```
+$ tcpraid rules
+NAME   TAKES         PEER   DESTINATION     SESSIONS  STATE
+rsync  0.0.0.0:9801  nas-a  192.0.2.10:873  0         listening, last connection: peer "nas-a" could not connect to 192.0.2.10:873: connect: connection refused (12s ago)
+```
+
+When the peer could not connect to the destination, or its allow list does
+not hold the destination, the peer reports why and the rule shows it. A peer of a version before 0.3.0
+does not report it, and the rule then says to look at the peer's log. While
+a connection waits because the peer does not answer, the rule says what the
+attempts run into, without a time. The next connection of the rule clears
+the state.
 
 ## sessions
 
 ```
 $ tcpraid sessions
-ID      ROLE    RULE   PEER   DESTINATION     AGE  SENT      RECEIVED  AVERAGE    NOW        SENT AGAIN  SUBS
-4a5411  client  rsync  nas-a  192.0.2.10:873  6s   320.0 MB  0 B       53.3 MB/s  30.0 MB/s  0.0%        8
+ID      ROLE    RULE   PEER   DESTINATION     AGE  SENT      RECEIVED  AVERAGE    NOW        SENT AGAIN  SUBS  NOT SENT YET  IN FLIGHT  STATE
+4a5411  client  rsync  nas-a  192.0.2.10:873  6s   320.0 MB  0 B       53.3 MB/s  30.0 MB/s  0.0%        8     96.0 MB       28.0 MB    ok
 ```
 
 One line for each application connection the node carries right now, or
@@ -234,11 +292,32 @@ One line for each application connection the node carries right now, or
 | `AVERAGE`, `NOW` | speed of both directions together: since the session began, and over the last second |
 | `SENT AGAIN` | data queued to be sent again, as a share of the data sent |
 | `SUBS` | live sub-connections |
+| `NOT SENT YET` | data read from the application that still waits for a sub-connection. A value that stays large means the application delivers faster than the line carries |
+| `IN FLIGHT` | data that was sent and that the peer has not yet reported as received |
+| `STATE` | `ok`, `connecting` while the peer has not answered on any sub-connection, or how long the session has waited for the peer |
 
 `SENT` counts what has gone out to the peer. Some of it may still be on its
 way, so it runs ahead of what the far end shows as `RECEIVED`. The command
 cannot say how long a transfer still takes, because tcpraid does not know how
 much the application is going to send.
+
+When the line between the two nodes is down, the session is kept for the
+grace time (`-grace`, 15 minutes by default) and goes on when the line is
+back. `STATE` then shows how long nothing has arrived from the peer and how
+much of the grace time is left:
+
+```
+ID      ROLE    RULE   PEER   DESTINATION     AGE    SENT     RECEIVED  AVERAGE   NOW       SENT AGAIN  SUBS  NOT SENT YET  IN FLIGHT  STATE
+4a5411  client  rsync  nas-a  192.0.2.10:873  5m12s  2.10 GB  0 B       6.9 MB/s  0.0 MB/s  1.0%        0     104.0 MB      24.0 MB    waiting for the peer for 3m12s, gives up in 11m48s
+```
+
+When the time is up, the session ends and the application's connection is
+reset. The session of a path test shows `(path test)` under `RULE` and
+`DESTINATION`.
+
+`-watch` prints the table again every 2 seconds, each time under the time of
+day, until you interrupt it. `-interval DURATION` sets another interval, from
+`1s` to `1h`.
 
 `-json` prints the answer of `GET /api/v1/sessions` instead, taken once
 (`reference-api.md`).
@@ -247,5 +326,5 @@ much the application is going to send.
 
 ```
 $ tcpraid version
-tcpraid 0.2.0 (wire protocol 1)
+tcpraid 0.3.0 (wire protocol 1)
 ```

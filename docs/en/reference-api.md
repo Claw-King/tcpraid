@@ -32,8 +32,9 @@ instead (see "Login" at the end). The API is plain HTTP.
 
 Errors are JSON, `{"error": "..."}`. The status is `400` for a request that
 cannot be right, `404` for a path or a name that does not exist, `405` for a
-method the path does not have, `502` for a pairing that the other node did
-not complete and `504` for one that ran out of time.
+method the path does not have, `409` for a path test that cannot start now,
+`502` for a pairing that the other node did not complete and `504` for one
+that ran out of time.
 
 ## Node
 
@@ -44,7 +45,7 @@ not complete and `504` for one that ran out of time.
 ### GET /api/v1/status
 
 ```
-{"version":"0.2.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.3.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
  "sessions":2,"peers":1,"rules":2}
 ```
@@ -67,8 +68,9 @@ application's connection, and that node also names the `rule`. It is
 
 ```
 [{"id":"4fce0d73c066738a655b88c7741c2405","destination":"192.0.2.10:7000","role":"client",
-  "started":"2026-01-15T10:00:31.329910062Z","tx_bytes":314572800,"rx_bytes":0,"unacked_bytes":0,
-  "resent_bytes":0,"subs":8,"peer":"nas-a","rule":"rsync"}]
+  "started":"2026-01-15T10:00:31.329910062Z","tx_bytes":314572800,"rx_bytes":0,"unacked_bytes":130023424,
+  "resent_bytes":0,"subs":8,"peer":"nas-a","rule":"rsync","unsent_bytes":100663296,
+  "inflight_bytes":29360128,"up":true,"silent_ms":41,"grace_left_ms":899959}]
 ```
 
 `tx_bytes` and `rx_bytes` are stream bytes sent and received. `unacked_bytes`
@@ -76,6 +78,17 @@ is what was read from the application and the other end has not yet reported
 received, whether it has been sent already or still waits to be sent.
 `resent_bytes` counts the bytes queued for sending again, and `subs` is the
 number of live sub-connections.
+
+The fields after `rule` were added in version 0.3.0:
+
+| Field | Meaning |
+|---|---|
+| `unsent_bytes` | the part of `unacked_bytes` that was never sent yet and waits for a sub-connection. A large value means the application delivers faster than the line carries |
+| `inflight_bytes` | the rest of `unacked_bytes`, which was sent at least once and is not reported received |
+| `up` | the peer has answered on a sub-connection at least once. `false` on a session that is still connecting |
+| `silent_ms` | how long ago anything arrived from the peer. While a session is connected this stays under about a second, because the two nodes report to each other at least that often |
+| `grace_left_ms` | how much longer the session is kept if nothing arrives. It is the grace time (`-grace`) minus `silent_ms`. At zero the session ends and the application's connection is reset |
+| `test` | present and `true` on the session of a path test (`POST /api/v1/peers/{name}/test`). Such a session has no rule, and its destination reads `0.0.0.0:0` |
 
 ### GET /metrics
 
@@ -124,7 +137,7 @@ code. The answer is the new peer, as below.
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.2.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.3.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
 `online` means that a control connection with the peer is up. `version` and
@@ -144,7 +157,7 @@ peer.
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.2.0",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.3.0",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 
@@ -163,6 +176,37 @@ Tries every path to the peer.
 
 A path that fails has `"ok": false` and an `"error"`.
 
+### POST /api/v1/peers/{name}/test
+
+Runs a path test. The node sends test data to the peer, which discards it,
+and measures each path that carries data twice, first with one data
+sub-connection and then with all the path has. The request is answered when
+the test is over, which takes two runs for each path. The test ends early if
+the caller closes the connection.
+
+Body `{"seconds": N, "path": "NAME"}`. Both are optional. `seconds` is how
+long each run lasts, 1 to 60, and 10 if absent. A run also ends after 1 GiB.
+`path` limits the test to one path.
+
+```
+$ curl -X POST ... -d '{"seconds":10}' http://127.0.0.1:9850/api/v1/peers/nas-a/test
+{"peer":"nas-a","seconds":10,"peer_dials":false,"paths":[{"name":"default","subs":8,
+  "one_bytes_per_second":2726297.6,"all_bytes_per_second":20761804.8,"little_gain":false}]}
+```
+
+| Field | Meaning |
+|---|---|
+| `peer_dials` | `true` when this node has no path to the peer. The paths listed are then the ones the peer holds to this node, and the peer opened the sub-connections |
+| `subs` | the number of data sub-connections the path has |
+| `one_bytes_per_second`, `all_bytes_per_second` | what the peer reported as received, averaged over the second half of each run. The second is 0 when the path has one sub-connection |
+| `little_gain` | `true` when all sub-connections together carried less than 1.5 times what one carried |
+| `error` | present when the path could not be measured. The two rates are 0 then |
+
+A node runs one test at a time. A test that cannot start is answered with
+`409` and the reason, for example that another test is running, that the
+peer is not connected, or that the peer runs a version before 0.3.0. The
+test data competes with the transfers that run at the same time.
+
 ### DELETE /api/v1/peers/{name}
 
 Ends the pairing on this node and resets the sessions with the peer. `204`.
@@ -180,7 +224,19 @@ Ends the pairing on this node and resets the sessions with the peer. `204`.
 
 A transparent rule has `match` in the place of `listen` and `destination`.
 `error` is present when the rule does not listen, or when its last connection
-could not be carried.
+could not be carried. `error_at`, added in version 0.3.0, is when that
+happened:
+
+```
+{"name":"rsync","listen":"0.0.0.0:9801","destination":"192.0.2.10:7000","peer":"nas-a",
+ "enabled":true,"listening":true,"sessions":0,
+ "error":"peer \"nas-a\" could not connect to 192.0.2.10:7000: connect: connection refused",
+ "error_at":"2026-01-15T10:02:11.740399432Z"}
+```
+
+`error_at` is absent when `error` describes a state that holds now, such as
+a rule whose connection is still waiting for the peer to answer. The next
+connection of the rule clears both fields.
 
 ### POST /api/v1/rules
 

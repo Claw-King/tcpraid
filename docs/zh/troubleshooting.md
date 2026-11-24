@@ -4,7 +4,7 @@
 
 ## 应用连不上，或者一连上就被断开
 
-规则承载不了某条连接时，会重置它并记下原因：
+规则承载不了某条连接时，会重置它，并记下原因和时间。所以连接失败时，先在规则所在的节点上看 `tcpraid rules`：
 
 ```
 nas-a$ tcpraid rules
@@ -21,12 +21,33 @@ taken  0.0.0.0:9700  nas-a  192.0.2.10:873  0         FAILED: listening on 0.0.0
 | `STATE` 是 `FAILED`，后面带原因 | 这条规则没能监听：端口被占用，或者不被允许。其他规则照常运行。任何规则有改动时，节点会再试一次 |
 | "this node has no path to peer ... and the peer is not connected" | 对端离线，而本节点没法拨过去。启动对端，检查它通往本节点的路径 |
 | 在这一切之前就被拒绝连接(connection refused) | 那个端口上没有东西在监听。在容器里：规则的端口映射出来了吗？规则是不是监听在 `0.0.0.0` 上？ |
-| 连接被接受，随即被重置 | 远端节点连不到目的地，或者对端的允许列表里不包含它。远端节点的日志会说明是哪一种：`dial ADDRESS: ... connection refused`，或者 `dial ADDRESS: not in the allow list of the peer`；本节点的日志里是 `server could not reach ADDRESS` |
+| "peer ... could not connect to ADDRESS: connect: connection refused"(或者系统给出的别的错误) | 远端节点去连目的地，没连上。那里没有东西在监听，或者从远端节点看过去这个地址不对 |
+| "peer ... refused the destination ADDRESS, which is not in the allow list it keeps for this node" | 远端节点给本节点设的允许列表里没有这个目的地。在远端节点上用 `tcpraid peers set` 改 |
+| "peer ... could not connect to ADDRESS. Its log says why." | 还是上面两种情况，但远端节点的版本早于 0.3.0，不会把原因报回来。它的日志里有 `dial ADDRESS: ... connection refused`，或者 `dial ADDRESS: not in the allow list of the peer` |
 | 15 秒后被重置，规则在没有路径的节点上 | 已经请对端连过来，但什么都没到：对端已经连不到本节点的监听了 |
-| 30 秒后被重置，而且规则的状态里没有原因 | 子连接一条都没建起来。原因之一：另一个节点上已经解除了配对。这时 `tcpraid peers check NAME` 会说 "the other node does not accept this node, which is not paired with it or no longer is"，另一个节点的日志里有 "refused a connection from ...: not a peer of this node" 这样的行。重新配对 |
+| "peer ... does not answer on the connections this node opens"，30 秒后变成 "peer ... answered on none of the connections within 30 seconds" | 子连接一条都没建起来，后面的文字说明那些尝试碰到了什么。原因之一：另一个节点上已经解除了配对。这时规则会说 "the other node does not accept this node, which is not paired with it or no longer is"，另一个节点的日志里有 "refused a connection from ...: not a peer of this node" 这样的行。重新配对 |
+| "the connections to peer ... cannot be opened"，后面带一个错误 | 本节点根本连不上对端的监听。用 `tcpraid peers check NAME` 逐条试路径 |
+| "nothing arrived from peer ... for the whole grace time" | 两个节点之间的线路断开的时间超过了 `-grace`。见下一节 |
 | "peer ... was restarted while it carried a connection of this rule, and the connection was reset" | 另一个节点作为新的进程回来了(它被重启、被杀掉，或者内存耗尽)，本节点把旧进程承载着的那条连接重置了。重新开始传输即可。如果反复出现，去看另一个节点的日志和它的内存上限(`-maxrss`、它所在容器的上限) |
 
 目的地是**从远端节点看过去的**地址。远端节点跑在容器里时，`127.0.0.1` 是容器，不是 NAS。
+
+## 传输不动了
+
+`tcpraid sessions` 会告诉你会话是不是在等线路：
+
+```
+ID      ROLE    RULE   PEER   DESTINATION     AGE    SENT     RECEIVED  AVERAGE   NOW       SENT AGAIN  SUBS  NOT SENT YET  IN FLIGHT  STATE
+4a5411  client  rsync  nas-a  192.0.2.10:873  5m12s  2.10 GB  0 B       6.9 MB/s  0.0 MB/s  1.0%        0     104.0 MB      24.0 MB    waiting for the peer for 3m12s, gives up in 11m48s
+```
+
+| `STATE` | 含义 |
+|---|---|
+| `ok`，而 `NOW` 是零 | 两个节点之间还在通话，只是没有数据在走。应用没有在发，或者目的地没有在读 |
+| `waiting for the peer for ..., gives up in ...` | 已经这么久没有从对端收到任何东西。线路断了，或者对端停了。会话会保持着，线路恢复后接着传。保持时间用完时，应用的连接被重置 |
+| `connecting` | 对端还没有在任何子连接上应答。`tcpraid rules` 会说明那些尝试碰到了什么 |
+
+`tcpraid sessions -watch` 每 2 秒打印一次表格。要扛过更长的断线，需要把两个节点的 `-grace` 都设长一些(见 `reference-files.md`)。
 
 ## 对端离线
 
@@ -58,7 +79,7 @@ default  nas-a.example.org:9851 (tls): ok
 
 ## 能用，但没有变快
 
-- 先在不用 tcpraid 的情况下测线路，用 `iperf3` 分别跑一条流和八条流。如果八条合起来并不明显比一条快，tcpraid 就没有什么可以提升的。
+- 用 `tcpraid peers test NAME` 测一下子连接带来了多少(见 `reference-cli.md`)。它在每条路径上发测试数据，一次只用一条子连接，一次用全部。如果全部合起来并不明显比一条快，tcpraid 在这条路径上就没有什么可以提升的。要么一条连接已经占满了线路，要么路径上有东西把这几条连接合进了一条，`connecting.md` 讲了怎么分辨。用 `iperf3` 分别跑一条流和八条流，可以在不用 tcpraid 的情况下测同一件事。
 - 在“会话”页、用 `tcpraid sessions` 或 `GET /api/v1/sessions` 看会话。`subs` 应该等于各条路径的连接数之和(默认 8)，`resent_bytes` 应该只占 `tx_bytes` 的一小部分，命令里的 `SENT AGAIN` 一列显示的就是这个比例。重发的字节很多，说明路径在丢包或者卡顿。这时有帮助的是第二条承担 `repair` 和 `control`(网页上勾“补发”和“回执”)的路径，或者 UDP 回执(见 `concepts.md`)。
 - 应用和它的节点之间、远端节点和目的地之间这两段的速度同样算数，因为 tcpraid 快不过其中较慢的一段，也快不过应用本身。
 - 会话结束时，两个节点各自会为它记两行日志：字节数、重发的块数、被换掉的子连接数、卡住的时间。用 `-timeline` 启动的节点在会话进行中也会记同一类数字。下一节解释这些数字，以及怎样从中看出要不要改 `-window` 或 `-hol`(`reference-files.md`)。

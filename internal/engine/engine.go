@@ -190,10 +190,46 @@ func NewKeys(material []byte) Keys {
 
 // Owner says whom a session belongs to. Peer names the other end of the pair, Rule
 // what made this end carry the connection; both are empty where there is one pair only.
+// Test marks a session that carries test data from one end into the other and no
+// application connection (SubOptions.Sink).
 type Owner struct {
 	Peer string
 	Rule string
+	Test bool
 }
+
+// End says how a session ended.
+type End struct {
+	ID [16]byte
+	// Why is the reason as the log has it: "done" and its variants for a clean end,
+	// otherwise what cut the session short (see the constants below for the ones that
+	// callers tell apart).
+	Why string
+	// Clean: the stream ended completely in both directions. Otherwise the application
+	// connection was reset.
+	Clean bool
+	// Up: the other end answered on a sub-connection at least once.
+	Up bool
+	// NoReply is how the last sub-connection that the other end never answered ended:
+	// the error of reading its answer. Empty when every one was answered.
+	NoReply string
+}
+
+// Reasons in End.Why that a caller can tell apart.
+const (
+	// WhyNoAnswer: no sub-connection was answered by the other end within 30 seconds.
+	WhyNoAnswer = "no answer from the server in 30 s"
+	// WhyGrace: nothing arrived from the other end for the grace time.
+	WhyGrace = "grace expired"
+	// WhyUnreachable starts the reason of a session whose other end could not connect
+	// it to its destination; the destination follows.
+	WhyUnreachable = "server could not reach "
+	// WhyRefused: the other end takes no more sessions.
+	WhyRefused = "server refused the session"
+	// WhyNoSession: the other end answered a sub-connection that it does not hold the
+	// session. It ended there, for a reason this end was not told on that connection.
+	WhyNoSession = "peer has no such session"
+)
 
 // SetPSK derives the MAC and UDP keys from a pre-shared key (16 bytes or more). An empty
 // key means no authentication. Call it before RunClient or RunServer.
@@ -343,13 +379,62 @@ func (e *Engine) AbortPeerBefore(peer string, t time.Time, why string) []Owner {
 	return e.abortPeer(peer, t, why)
 }
 
+// AbortOwner ends the sessions that this end carries (Route.Carry, NewReverse) and that
+// belong to exactly owner, the way AbortPeer ends a peer's: for a caller that carries a
+// connection of its own making and is done with it. why is the reason the log gives. It
+// returns how many sessions that were.
+func (e *Engine) AbortOwner(owner Owner, why string) int {
+	return len(e.abortWhere(func(s *session) bool { return s.isClient && s.owner == owner }, why))
+}
+
+// Unreachable ends the session with the given id that this end carries for the peer, as
+// a session ends whose other end reports on a sub-connection that it could not connect
+// it to its destination: for a caller that the other end told so by another way. The
+// report on the sub-connection can be lost when the other end closes the connection
+// right after it. It returns whether there was such a session.
+func (e *Engine) Unreachable(peer string, id [16]byte) bool {
+	var found *session
+	e.smu.Lock()
+	e.registry.Range(func(k, _ any) bool {
+		if s := k.(*session); s.isClient && s.id == id && s.owner.Peer == peer {
+			found = s
+			return false
+		}
+		return true
+	})
+	e.smu.Unlock()
+	if found == nil {
+		return false
+	}
+	go found.shutdown(WhyUnreachable+found.dstAddr, true)
+	return true
+}
+
+// EndTest ends the session with the given id that this end takes for the peer, if it
+// carries test data into this end (SubOptions.Sink): for a caller that the other end,
+// which carries the session, told that it has ended it. The word on a sub-connection
+// can be lost when the other end closes the connections right after it. It returns
+// whether there was such a session.
+func (e *Engine) EndTest(peer string, id [16]byte) bool {
+	return len(e.abortWhere(func(s *session) bool {
+		return !s.isClient && s.id == id && s.owner.Peer == peer && s.owner.Test
+	}, "the other end ended the test")) > 0
+}
+
 // abortPeer resets the sessions of the peer; with a t that is not zero, only those that
 // began before t.
 func (e *Engine) abortPeer(peer string, t time.Time, why string) []Owner {
+	return e.abortWhere(func(s *session) bool {
+		return s.owner.Peer == peer && (t.IsZero() || s.started.Before(t))
+	}, why)
+}
+
+// abortWhere resets the sessions that match and returns their owners.
+func (e *Engine) abortWhere(match func(*session) bool, why string) []Owner {
 	var mine []*session
 	e.smu.Lock()
 	e.registry.Range(func(k, _ any) bool {
-		if s := k.(*session); s.owner.Peer == peer && (t.IsZero() || s.started.Before(t)) {
+		if s := k.(*session); match(s) {
 			mine = append(mine, s)
 		}
 		return true

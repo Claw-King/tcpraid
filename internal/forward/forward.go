@@ -15,6 +15,10 @@
 // holds none, it asks the peer, over the control connection of the two nodes, to open
 // the sub-connections from its end (control.go). A rule whose peer can be reached
 // neither way resets its connections and says why in its status.
+//
+// A rule's status also says what went wrong with the last connection it could not
+// carry, and when (status.go): the reasons this node knows itself, and the one the peer
+// reports when it could not connect the session to its destination.
 package forward
 
 import (
@@ -26,6 +30,7 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"strconv"
 	"sync"
 	"time"
 
@@ -58,18 +63,29 @@ type Runtime struct {
 
 	mu          sync.Mutex
 	ctx         context.Context
-	running     map[string]*runningRule      // fixed rules that listen, by name
-	problems    map[string]string            // rule name -> why it does not listen, or what went wrong last
-	peers       map[string]*peerState        // by peer name
-	ctl         map[string]*peerControl      // control connections, by peer name
-	reverse     map[reverseKey]*reverseEntry // sessions whose sub-connections a peer was asked to open
-	transparent bool                         // ServeTransparent runs
-	times       times                        // set before Start, read after
+	running     map[string]*runningRule        // fixed rules that listen, by name
+	problems    map[string]problem             // rule name -> why it does not listen, or what went wrong last
+	seq         uint64                         // the number of the last connection or event a problem can be about
+	logged      map[string]string              // rule name -> the failure logged last, so that a repeated one is logged once
+	dialErr     map[string]dialTrouble         // peer name -> the last dial of a sub-connection that failed
+	details     map[failKey]failDetail         // what peers said about sessions that have not ended here yet
+	recent      map[failKey]recentEnd          // sessions that ended here before their peer said why
+	testing     bool                           // a path test runs
+	sinks       int                            // sessions of path tests that end in this node
+	pathsAsked  map[reverseKey]chan []pathSpec // requests for a peer's paths that wait for the answer
+	peers       map[string]*peerState          // by peer name
+	ctl         map[string]*peerControl        // control connections, by peer name
+	reverse     map[reverseKey]*reverseEntry   // sessions whose sub-connections a peer was asked to open
+	transparent bool                           // ServeTransparent runs
+	times       times                          // set before Start, read after
 	// instance is the number this process says in every hello: picked at Start, so it
 	// is another one after a restart of the node. Empty: none is said (tests set
 	// noInstance before Start to be a version that has none).
 	instance   string
 	noInstance bool
+	// noFeatures: the hello names no features (tests set it before Start to be a
+	// version before 0.3.0).
+	noFeatures bool
 }
 
 // runningRule is a fixed rule with its listeners.
@@ -95,8 +111,10 @@ type RuleStatus struct {
 	// listeners; a transparent rule is enabled and the node has a transparent listener).
 	Listening bool
 	// Error says why the rule does not listen, or what went wrong with the last
-	// connection it could not carry; empty when there is nothing to report.
-	Error string
+	// connection it could not carry; empty when there is nothing to report. ErrorAt is
+	// when that happened; zero where Error is a state and not an event.
+	Error   string
+	ErrorAt time.Time
 	// Sessions is the number of live sessions the rule carries.
 	Sessions int
 }
@@ -121,7 +139,12 @@ func (rt *Runtime) Start(ctx context.Context) {
 		}
 	}
 	rt.running = map[string]*runningRule{}
-	rt.problems = map[string]string{}
+	rt.problems = map[string]problem{}
+	rt.logged = map[string]string{}
+	rt.dialErr = map[string]dialTrouble{}
+	rt.details = map[failKey]failDetail{}
+	rt.recent = map[failKey]recentEnd{}
+	rt.pathsAsked = map[reverseKey]chan []pathSpec{}
 	rt.peers = map[string]*peerState{}
 	rt.ctl = map[string]*peerControl{}
 	rt.reverse = map[reverseKey]*reverseEntry{}
@@ -175,6 +198,11 @@ func (rt *Runtime) Apply() {
 			delete(rt.problems, name)
 		}
 	}
+	for name := range rt.logged {
+		if !known[name] {
+			delete(rt.logged, name)
+		}
+	}
 	for _, r := range rules { // in the order of the list, so that the log reads in order
 		if _, ok := want[r.Name]; !ok {
 			continue
@@ -184,7 +212,7 @@ func (rt *Runtime) Apply() {
 		}
 		rr, err := rt.listen(r)
 		if err != nil {
-			rt.problems[r.Name] = err.Error()
+			rt.problems[r.Name] = problem{text: err.Error()}
 			rt.logf("rule %q does not listen: %v", r.Name, err)
 			continue
 		}
@@ -289,36 +317,21 @@ func reset(c net.Conn) {
 // carry takes one application connection of a rule to ip:port at the rule's peer. It
 // returns when the session has ended.
 func (rt *Runtime) carry(r node.Rule, c net.Conn, ip net.IP, port int) {
+	a := rt.begin(r.Name)
 	if peer, ok := rt.Node.Peer(r.Peer); ok && len(peer.Paths) == 0 {
 		// no way to dial the peer: it is asked to dial
-		rt.carryReverse(r, peer, c, ip, port)
+		rt.carryReverse(a, r, peer, c, ip, port)
 		return
 	}
 	ps, err := rt.peerFor(r.Peer)
 	if err != nil {
-		rt.problem(r.Name, err.Error())
+		a.fail(err.Error())
 		reset(c)
 		return
 	}
-	rt.problem(r.Name, "")
-	ps.route.Carry(c, ip, port, engine.Owner{Peer: r.Peer, Rule: r.Name}, ps.valid)
-}
-
-// problem records what went wrong with the last connection of a rule ("" clears it).
-func (rt *Runtime) problem(rule, what string) {
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	if rt.problems == nil {
-		return
+	if end, ok := ps.route.Carry(c, ip, port, engine.Owner{Peer: r.Peer, Rule: r.Name}, ps.valid); ok {
+		rt.ended(a, r.Peer, net.JoinHostPort(ip.String(), strconv.Itoa(port)), end)
 	}
-	if what == "" {
-		delete(rt.problems, rule)
-		return
-	}
-	if rt.problems[rule] != what {
-		rt.logf("rule %q: %s", rule, what)
-	}
-	rt.problems[rule] = what
 }
 
 // peerFor returns the state for carrying connections to the peer called name, made
@@ -383,7 +396,9 @@ func (rt *Runtime) groups(ps *peerState, peer node.Peer) []engine.DialGroup {
 	var gs []engine.DialGroup
 	for i, path := range peer.Paths {
 		dial := func() (net.Conn, error) {
-			return ps.dial(func(ctx context.Context) (net.Conn, error) { return rt.Dialer.Open(ctx, peer, path) })
+			conn, err := ps.dial(func(ctx context.Context) (net.Conn, error) { return rt.Dialer.Open(ctx, peer, path) })
+			rt.dialed(ps, peer.Name, err)
+			return conn, err
 		}
 		for _, role := range path.Roles {
 			g := engine.DialGroup{Path: uint8(i), Name: path.Name, Want: path.Subs, Dial: dial}
@@ -430,12 +445,14 @@ func (rt *Runtime) HandleSub(peer node.Peer, conn net.Conn) {
 		return
 	}
 	go rt.Engine.ServeSub(conn, engine.SubOptions{
-		Keys:      keys,
-		Peer:      peer.Name,
-		Allow:     allow,
-		AllowName: "the allow list of the peer",
-		UDPDial:   peer.UDPDial,
-		Valid:     rt.validFor(peer),
+		Keys:       keys,
+		Peer:       peer.Name,
+		Allow:      allow,
+		AllowName:  "the allow list of the peer",
+		UDPDial:    peer.UDPDial,
+		Valid:      rt.validFor(peer),
+		Sink:       rt.sink,
+		DialFailed: rt.tellFailure(peer.Name),
 	})
 }
 
@@ -450,6 +467,7 @@ func (rt *Runtime) PeerRemoved(name string) {
 		delete(rt.peers, name)
 	}
 	rt.dropControlLocked(name)
+	delete(rt.dialErr, name)
 	rt.mu.Unlock()
 	if n := rt.Engine.AbortPeer(name); n > 0 {
 		rt.logf("peer %q removed: %d sessions reset", name, n)
@@ -459,9 +477,15 @@ func (rt *Runtime) PeerRemoved(name string) {
 // Rules returns the node's rules, in their order, each with its status.
 func (rt *Runtime) Rules() []RuleStatus {
 	sessions := map[string]int{}
+	// rules with a session that the peer has not answered on any sub-connection yet,
+	// and how the last sub-connection it did not answer ended, if one has
+	waiting := map[string]string{}
 	for _, si := range rt.Engine.SessionList() {
 		if si.Client && si.Rule != "" {
 			sessions[si.Rule]++
+			if !si.Up && waiting[si.Rule] == "" {
+				waiting[si.Rule] = noReply(si.NoReply)
+			}
 		}
 	}
 	rules := rt.Node.Rules()
@@ -469,17 +493,27 @@ func (rt *Runtime) Rules() []RuleStatus {
 	defer rt.mu.Unlock()
 	out := make([]RuleStatus, 0, len(rules))
 	for _, r := range rules {
-		st := RuleStatus{Rule: r, Sessions: sessions[r.Name], Error: rt.problems[r.Name]}
+		p := rt.problems[r.Name]
+		st := RuleStatus{Rule: r, Sessions: sessions[r.Name], Error: p.text, ErrorAt: p.at}
 		switch {
 		case !r.Enabled:
-			st.Error = ""
+			st.Error, st.ErrorAt = "", time.Time{}
 		case r.Transparent():
 			st.Listening = rt.transparent
 			if !rt.transparent {
-				st.Error = "the node has no transparent listener. Start it with \"tcpraid run -transparent ADDR\"."
+				st.Error, st.ErrorAt = "the node has no transparent listener. Start it with \"tcpraid run -transparent ADDR\".", time.Time{}
 			}
 		default:
 			_, st.Listening = rt.running[r.Name]
+		}
+		// a connection of the rule waits for its first sub-connection, and this node
+		// knows what the attempts run into: said while it lasts
+		if why, waits := waiting[r.Name]; waits && r.Enabled && st.Error == "" {
+			if d, ok := rt.dialErr[r.Peer]; ok && time.Since(d.at) < dialTroubleAge {
+				st.Error = fmt.Sprintf("the connections to peer %q cannot be opened: %s", r.Peer, d.text)
+			} else if why != "" {
+				st.Error = fmt.Sprintf("peer %q does not answer on the connections this node opens: %s", r.Peer, why)
+			}
 		}
 		out = append(out, st)
 	}

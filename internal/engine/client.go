@@ -88,11 +88,12 @@ func (e *Engine) RunClient(groups []DialGroup) error {
 // unless the stream ended completely in both directions. owner says whom the session
 // belongs to. valid, if not nil, is asked once, at the moment the session is created,
 // whether it may be (see Engine.AbortPeer); a session that may not be is reset at once.
-func (r *Route) Carry(c net.Conn, ip net.IP, port int, owner Owner, valid func() bool) {
+// The return value says how the session ended, and ok is false when none was created.
+func (r *Route) Carry(c net.Conn, ip net.IP, port int, owner Owner, valid func() bool) (end End, ok bool) {
 	e, ks := r.e, r.ks
 	s := e.begin(c, ip, port, ks, r.udpDial, owner, valid)
 	if s == nil {
-		return
+		return End{}, false
 	}
 	id := s.id
 	redial := r.redialer(s, func(g DialGroup) func() {
@@ -125,6 +126,7 @@ func (r *Route) Carry(c net.Conn, ip net.IP, port int, owner Owner, valid func()
 	go s.pumpLocal()
 	go s.deliverLocal()
 	s.monitor(redial)
+	return s.end(), true
 }
 
 // begin creates the session that carries the application connection c to ip:port, or
@@ -303,10 +305,12 @@ func (rv *Reverse) Up() bool {
 // connection is reset.
 func (rv *Reverse) Abort(why string) { rv.s.abort(why) }
 
-// Run carries the session and returns when it has ended. The application connection is
-// closed then: with a reset unless the stream ended completely in both directions.
-func (rv *Reverse) Run() {
+// Run carries the session and returns, when it has ended, how it ended. The application
+// connection is closed then: with a reset unless the stream ended completely in both
+// directions.
+func (rv *Reverse) Run() End {
 	go rv.s.pumpLocal()
 	go rv.s.deliverLocal()
 	rv.s.monitor(nil)
+	return rv.s.end()
 }

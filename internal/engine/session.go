@@ -132,6 +132,8 @@ type session struct {
 	closed    bool
 	everUp    bool
 	cleanEnd  bool
+	endWhy    string // why the session ended, as shutdown was told
+	noReply   string // how the last sub-connection that the other end never answered ended
 	lastPeer  time.Time
 	nextIdx   uint16
 	lastKick  time.Time
@@ -485,6 +487,14 @@ func (s *session) reader(sb *sub, awaitReply bool) {
 		var rp [replyLen]byte
 		sb.c.SetReadDeadline(time.Now().Add(30 * time.Second))
 		if _, err := io.ReadFull(r, rp[:]); err != nil || string(rp[0:4]) != magic {
+			// kept for whoever asks why the session does not come up (SessionInfo.NoReply)
+			why := "the answer was not one of tcpraid"
+			if err != nil {
+				why = err.Error()
+			}
+			s.mu.Lock()
+			s.noReply = why
+			s.mu.Unlock()
 			s.killSub(sb, "no reply", kLost)
 			return
 		}
@@ -563,7 +573,7 @@ func (s *session) reader(sb *sub, awaitReply bool) {
 			s.shutdown("peer aborted", true)
 			return
 		case fDialFail:
-			s.shutdown("server could not reach "+s.dstAddr, true)
+			s.shutdown(WhyUnreachable+s.dstAddr, true)
 			return
 		default:
 			err = fmt.Errorf("bad frame type %d", h[0])
@@ -589,10 +599,10 @@ func (s *session) onRefused(sb *sub, st byte) {
 		s.killSub(sb, "peer finished", kLost)
 	case st == stRefused:
 		s.killSub(sb, "server refused (session limit)", kLost)
-		s.shutdown("server refused the session", true)
+		s.shutdown(WhyRefused, true)
 	default:
 		s.killSub(sb, fmt.Sprintf("server status %d", st), kLost)
-		s.shutdown("peer has no such session", true)
+		s.shutdown(WhyNoSession, true)
 	}
 }
 
@@ -1480,7 +1490,7 @@ func (s *session) monitor(redial func()) {
 		}
 		finish := allDone && (s.peerAllDone || len(live) == 0) && time.Since(finAt) > 200*time.Millisecond
 		gone := s.peerGone && s.rxDone
-		zero := time.Since(s.lastPeer) > s.e.cfg.Grace
+		zero := time.Since(s.lastPeer) > s.grace()
 		// a new session the server never answered (wrong key, wrong address, server down):
 		// tell the application now rather than after -grace
 		neverUp := s.isClient && !s.everUp && time.Since(s.started) > 30*time.Second
@@ -1520,10 +1530,10 @@ func (s *session) monitor(redial func()) {
 			s.shutdown("done (peer silent after the end)", false)
 			return
 		case zero:
-			s.shutdown("grace expired", true)
+			s.shutdown(WhyGrace, true)
 			return
 		case neverUp:
-			s.shutdown("no answer from the server in 30 s", true)
+			s.shutdown(WhyNoAnswer, true)
 			return
 		}
 		if redial != nil && !allDone && !s.peerGone {
@@ -1639,6 +1649,7 @@ func (s *session) shutdown(why string, abort bool) {
 	}
 	s.closed = true
 	s.cleanEnd = !abort
+	s.endWhy = why
 	subs := s.subs
 	s.e.globalB.Add(-int64(s.unackedB))
 	s.unackedB = 0
@@ -1696,6 +1707,28 @@ func (s *session) shutdown(why string, abort bool) {
 		" | gap repairs %d (retries %d) ms p50/p95/max: peer wait %s, queued %s, to release %s | snapshots truncated %d%s",
 		s.id[:3], st.pumpWin.Seconds(), b.String(), st.died[kLost], st.died[kSilent], st.died[kWrite], st.died[kSlow],
 		st.fbGapMax.Seconds(), st.fbGaps, len(st.repDone), st.repRetry, ms(st.repAge), ms(st.repWait), ms(st.repDone), st.truncSnaps, udpDiag)
+}
+
+// testGrace is the grace time of a session that carries test data (Owner.Test), once
+// the other end has answered: nothing is lost with it, so it does not wait long for an
+// other end that has gone silent. It is longer than a single connection on a bad line
+// can stall and still recover.
+const testGrace = 30 * time.Second
+
+// grace is how long the session lasts while nothing arrives from the other end (lock
+// held).
+func (s *session) grace() time.Duration {
+	if s.owner.Test && s.everUp {
+		return min(s.e.cfg.Grace, testGrace)
+	}
+	return s.e.cfg.Grace
+}
+
+// end says how the session ended. Call it after monitor has returned.
+func (s *session) end() End {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return End{ID: s.id, Why: s.endWhy, Clean: s.cleanEnd, Up: s.everUp, NoReply: s.noReply}
 }
 
 func (s *session) setLocal(c net.Conn) bool {

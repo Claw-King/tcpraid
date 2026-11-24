@@ -326,8 +326,16 @@ func TestSessionsListsEngineSessions(t *testing.T) {
 	}
 	var raw []map[string]any
 	json.Unmarshal(do(api, "GET", PathSessions, api.cfg.Token).Body.Bytes(), &raw)
-	if got, want := keys(raw[0]), "destination id resent_bytes role rx_bytes started subs tx_bytes unacked_bytes"; got != want {
+	// the first nine are the fields of 0.1.1, which stay as they are; "test" is there
+	// only for the session of a path test
+	if got, want := keys(raw[0]), "destination grace_left_ms id inflight_bytes resent_bytes role rx_bytes silent_ms started subs tx_bytes unacked_bytes unsent_bytes up"; got != want {
 		t.Errorf("session fields %q, want %q", got, want)
+	}
+	if !c.Up || !s.Up || c.SilentMs < 0 || c.SilentMs > 5000 || c.GraceLeftMs <= 0 {
+		t.Errorf("state of a session that carries data: client %+v, server %+v", c, s)
+	}
+	if c.UnsentBytes+c.InflightBytes != c.UnackedBytes {
+		t.Errorf("unsent %d and in flight %d do not add up to unacked %d", c.UnsentBytes, c.InflightBytes, c.UnackedBytes)
 	}
 }
 

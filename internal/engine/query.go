@@ -17,21 +17,44 @@ type SessionInfo struct {
 	Started     time.Time // when this end created the session
 	Peer        string    // the other end of the pair the session belongs to (Owner.Peer)
 	Rule        string    // what made this end carry the connection (Owner.Rule)
+	Test        bool      // the session carries test data and no application connection (Owner.Test)
 
 	TxBytes      int64 // stream bytes sent; a chunk sent again is not counted again
 	RxBytes      int64 // stream bytes received in DATA frames, duplicates included
 	UnackedBytes int64 // read from the application and not yet reported received by the peer: sent, or still queued
 	ResentBytes  int64 // stream bytes queued for sending again (a chunk counts each time)
 	Subs         int   // live sub-connections, data and control
+
+	// UnsentBytes is the part of UnackedBytes that was never sent yet: read from the
+	// application and still waiting for a sub-connection. The rest was sent at least
+	// once and is not reported received.
+	UnsentBytes int64
+	// Up: the other end has answered on a sub-connection at least once. NoReply is how
+	// the last sub-connection that it never answered ended (the error of reading its
+	// answer); empty when every one was answered.
+	Up      bool
+	NoReply string
+	// Silent is how long ago the last frame from the other end arrived (for a session
+	// that never had one: how long ago it was created). GraceLeft is how much longer
+	// the session lasts if the silence goes on; it ends with a reset at zero.
+	Silent, GraceLeft time.Duration
 }
 
 // SessionList returns the live sessions, oldest first.
 func (e *Engine) SessionList() []SessionInfo {
 	list := []SessionInfo{}
+	now := time.Now()
 	e.registry.Range(func(k, _ any) bool {
 		s := k.(*session)
 		s.mu.Lock()
 		data, ctrl := s.counts()
+		var unsent int64 // as in the timeline line
+		for _, q := range s.newQ {
+			if c := s.chunks[q]; c != nil {
+				unsent += int64(len(c.data))
+			}
+		}
+		silent := max(now.Sub(s.lastPeer), 0)
 		list = append(list, SessionInfo{
 			ID:           s.id,
 			Destination:  s.dstAddr,
@@ -39,11 +62,17 @@ func (e *Engine) SessionList() []SessionInfo {
 			Started:      s.started,
 			Peer:         s.owner.Peer,
 			Rule:         s.owner.Rule,
+			Test:         s.owner.Test,
 			TxBytes:      s.st.txB,
 			RxBytes:      s.st.rxB,
 			UnackedBytes: int64(s.unackedB),
 			ResentBytes:  s.st.resentB,
 			Subs:         data + ctrl,
+			UnsentBytes:  unsent,
+			Up:           s.everUp,
+			NoReply:      s.noReply,
+			Silent:       silent,
+			GraceLeft:    max(s.grace()-silent, 0),
 		})
 		s.mu.Unlock()
 		return true

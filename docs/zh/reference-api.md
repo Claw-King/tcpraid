@@ -23,7 +23,7 @@ Www-Authenticate: Bearer
 
 已经登录网页界面的浏览器改由它的 cookie 授权(见文末的“登录”)。API 是明文 HTTP。
 
-错误以 JSON 返回，形式是 `{"error": "..."}`。状态码 `400` 表示请求本身不对，`404` 表示路径或名字不存在，`405` 表示这个路径没有这种方法，`502` 表示另一个节点没有完成配对，`504` 表示配对超时。
+错误以 JSON 返回，形式是 `{"error": "..."}`。状态码 `400` 表示请求本身不对，`404` 表示路径或名字不存在，`405` 表示这个路径没有这种方法，`409` 表示路径测试现在不能开始，`502` 表示另一个节点没有完成配对，`504` 表示配对超时。
 
 ## 节点
 
@@ -34,7 +34,7 @@ Www-Authenticate: Bearer
 ### GET /api/v1/status
 
 ```
-{"version":"0.2.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.3.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
  "sessions":2,"peers":1,"rules":2}
 ```
@@ -54,11 +54,23 @@ $ curl -X PUT ... -d '{"name":"nas-a"}' http://127.0.0.1:9850/api/v1/node
 
 ```
 [{"id":"4fce0d73c066738a655b88c7741c2405","destination":"192.0.2.10:7000","role":"client",
-  "started":"2026-01-15T10:00:31.329910062Z","tx_bytes":314572800,"rx_bytes":0,"unacked_bytes":0,
-  "resent_bytes":0,"subs":8,"peer":"nas-a","rule":"rsync"}]
+  "started":"2026-01-15T10:00:31.329910062Z","tx_bytes":314572800,"rx_bytes":0,"unacked_bytes":130023424,
+  "resent_bytes":0,"subs":8,"peer":"nas-a","rule":"rsync","unsent_bytes":100663296,
+  "inflight_bytes":29360128,"up":true,"silent_ms":41,"grace_left_ms":899959}]
 ```
 
 `tx_bytes` 和 `rx_bytes` 是已发送和已接收的流字节数。`unacked_bytes` 是已从应用读进来、另一端还没有报告收到的部分，不管它是已经发出去了还是还在等着发。`resent_bytes` 统计排队等待重发的字节数，`subs` 是存活的子连接数。
+
+`rule` 之后的字段是 0.3.0 版新增的：
+
+| 字段 | 含义 |
+|---|---|
+| `unsent_bytes` | `unacked_bytes` 里还从没发出去过、在等子连接的部分。这个数一直很大，说明应用给数据的速度比线路能带的快 |
+| `inflight_bytes` | `unacked_bytes` 的其余部分，至少发过一次，对端还没有报告收到 |
+| `up` | 对端至少在一条子连接上应答过。还在建立连接的会话是 `false` |
+| `silent_ms` | 上一次从对端收到东西是多久以前。会话连着的时候，它保持在一秒左右以内，因为两个节点至少每秒互相报告一次 |
+| `grace_left_ms` | 如果一直收不到东西，会话还会保留多久。它等于保持时间(`-grace`)减去 `silent_ms`。到零时会话结束，应用的连接被重置 |
+| `test` | 路径测试(`POST /api/v1/peers/{name}/test`)的会话上才有，值是 `true`。这种会话没有规则，目的地显示为 `0.0.0.0:0` |
 
 ### GET /metrics
 
@@ -103,7 +115,7 @@ Cache-Control: no-store
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.2.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.3.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
 `online` 表示和这个对端之间有一条控制连接连着。`version` 和 `last_message` 在收到过对端的消息之后才出现。加入到本节点的对端，在这里没有 `addresses`，也没有 `paths`。配对密钥绝不会出现在回答里，显示代理时不带它的用户名和密码。
@@ -115,7 +127,7 @@ Cache-Control: no-store
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.2.0",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.3.0",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 
@@ -130,6 +142,28 @@ $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","u
 ```
 
 不通的路径是 `"ok": false`，并带一个 `"error"`。
+
+### POST /api/v1/peers/{name}/test
+
+运行一次路径测试。节点向对端发送测试数据，对端收到后丢弃。每条承载数据的路径测两次，先只用一条数据子连接，再用这条路径配置的全部条数。测试结束后才返回回答，每条路径要跑两轮。调用方断开连接时，测试提前结束。
+
+请求体是 `{"seconds": N, "path": "NAME"}`，两项都可以不给。`seconds` 是每一轮持续多久，取 1 到 60，不给时是 10。一轮发满 1 GiB 也会结束。`path` 把测试限定在一条路径上。
+
+```
+$ curl -X POST ... -d '{"seconds":10}' http://127.0.0.1:9850/api/v1/peers/nas-a/test
+{"peer":"nas-a","seconds":10,"peer_dials":false,"paths":[{"name":"default","subs":8,
+  "one_bytes_per_second":2726297.6,"all_bytes_per_second":20761804.8,"little_gain":false}]}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `peer_dials` | 本节点没有通往对端的路径时是 `true`。这时列出的是对端通往本节点的路径，子连接由对端打开 |
+| `subs` | 这条路径配置的数据子连接数 |
+| `one_bytes_per_second`、`all_bytes_per_second` | 对端报告收到的速度，取每一轮后一半时间的平均。路径只有一条子连接时，第二个数是 0 |
+| `little_gain` | 全部子连接合起来的速度不到一条的 1.5 倍时是 `true` |
+| `error` | 这条路径没能测出来时才有，这时两个速度都是 0 |
+
+一个节点同一时间只跑一次测试。测试不能开始时，回答是 `409` 加上原因，例如已有一次测试在跑、对端没有连上，或者对端的版本早于 0.3.0。测试数据会和同时在跑的传输争用线路。
 
 ### DELETE /api/v1/peers/{name}
 
@@ -146,7 +180,16 @@ $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","u
   "enabled":true,"listening":true,"sessions":1}]
 ```
 
-透明规则用 `match` 代替 `listen` 和 `destination`。规则没有在监听，或者它最近一条连接没能被承载时，会出现 `error`。
+透明规则用 `match` 代替 `listen` 和 `destination`。规则没有在监听，或者它最近一条连接没能被承载时，会出现 `error`。0.3.0 版新增的 `error_at` 是这件事发生的时间：
+
+```
+{"name":"rsync","listen":"0.0.0.0:9801","destination":"192.0.2.10:7000","peer":"nas-a",
+ "enabled":true,"listening":true,"sessions":0,
+ "error":"peer \"nas-a\" could not connect to 192.0.2.10:7000: connect: connection refused",
+ "error_at":"2026-01-15T10:02:11.740399432Z"}
+```
+
+`error` 说的是眼下的状态而不是一件已经发生的事时，没有 `error_at`，例如规则的一条连接还在等对端应答。这条规则的下一条连接到来时，两个字段都会清掉。
 
 ### POST /api/v1/rules
 

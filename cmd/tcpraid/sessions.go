@@ -2,10 +2,11 @@ package main
 
 // The sessions command: what the node on this host is carrying right now.
 //
-//	tcpraid sessions [-json]
+//	tcpraid sessions [-json] [-watch [-interval DURATION]]
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -20,14 +21,29 @@ import (
 // command works out their current speed.
 var sessionsInterval = time.Second
 
+// watchRounds is how many tables "sessions -watch" prints before it ends; 0: it goes on
+// until it is interrupted. Tests set it.
+var watchRounds = 0
+
+// silentAfter is how long nothing must have arrived from the peer before the state of
+// a session says that it waits. The two ends report to each other at least once a
+// second while a session is connected.
+const silentAfter = 5 * time.Second
+
 func cmdSessions(args []string, stdout, stderr io.Writer) int {
-	var asJSON bool
+	var asJSON, watch bool
+	interval := 2 * time.Second
 	return command{
 		name: "sessions",
 		flags: func(fs *flag.FlagSet) {
 			fs.BoolVar(&asJSON, "json", false, "print the sessions as the API returns them (JSON), without the current speed")
+			fs.BoolVar(&watch, "watch", false, "print the table again every -interval until interrupted")
+			fs.DurationVar(&interval, "interval", interval, "with -watch: the time between two tables (1s to 1h)")
 		},
 		run: func(dataDir string, _ []string, stdout, _ io.Writer) error {
+			if asJSON && watch {
+				return errors.New("-json and -watch do not go together. Give one of them.")
+			}
 			if asJSON {
 				var raw json.RawMessage
 				if err := apiCall(dataDir, http.MethodGet, api.PathSessions, nil, &raw, shortCall); err != nil {
@@ -39,6 +55,29 @@ func cmdSessions(args []string, stdout, stderr io.Writer) int {
 			var before, after []api.Session
 			if err := apiCall(dataDir, http.MethodGet, api.PathSessions, nil, &before, shortCall); err != nil {
 				return err
+			}
+			if watch {
+				if interval < time.Second || interval > time.Hour {
+					return errors.New("-interval is out of range. Give 1s to 1h.")
+				}
+				at := time.Now()
+				for round := 1; ; round++ {
+					time.Sleep(interval)
+					if err := apiCall(dataDir, http.MethodGet, api.PathSessions, nil, &after, shortCall); err != nil {
+						return err
+					}
+					now := time.Now()
+					fmt.Fprintf(stdout, "%s\n", now.Format("15:04:05"))
+					if err := printSessions(stdout, before, after, now.Sub(at), now); err != nil {
+						return err
+					}
+					if round == watchRounds {
+						return nil
+					}
+					fmt.Fprintln(stdout)
+					// a fresh slice: decoding into the old one would write over before
+					before, after, at = after, nil, now
+				}
 			}
 			if len(before) == 0 {
 				fmt.Fprintln(stdout, "no sessions")
@@ -53,6 +92,21 @@ func cmdSessions(args []string, stdout, stderr io.Writer) int {
 			return printSessions(stdout, before, after, now.Sub(at), now)
 		},
 	}.execute(args, stdout, stderr)
+}
+
+// sessionState says in a few words how a session is doing: whether the peer has
+// answered at all, and whether anything arrives from it. A session from which nothing
+// arrives is kept for the grace time and reset then.
+func sessionState(s api.Session) string {
+	silent := time.Duration(s.SilentMs) * time.Millisecond
+	left := (time.Duration(s.GraceLeftMs) * time.Millisecond).Truncate(time.Second)
+	switch {
+	case !s.Up:
+		return "connecting"
+	case silent >= silentAfter:
+		return fmt.Sprintf("waiting for the peer for %v, gives up in %v", silent.Truncate(time.Second), left)
+	}
+	return "ok"
 }
 
 // printSessions writes one line for each session of after. before is the same list
@@ -73,7 +127,7 @@ func printSessions(w io.Writer, before, after []api.Session, apart time.Duration
 		return s
 	}
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tROLE\tRULE\tPEER\tDESTINATION\tAGE\tSENT\tRECEIVED\tAVERAGE\tNOW\tSENT AGAIN\tSUBS")
+	fmt.Fprintln(tw, "ID\tROLE\tRULE\tPEER\tDESTINATION\tAGE\tSENT\tRECEIVED\tAVERAGE\tNOW\tSENT AGAIN\tSUBS\tNOT SENT YET\tIN FLIGHT\tSTATE")
 	for _, s := range after {
 		id := s.ID
 		if len(id) > 6 {
@@ -90,8 +144,14 @@ func printSessions(w io.Writer, before, after []api.Session, apart time.Duration
 		if s.TxBytes > 0 {
 			again = fmt.Sprintf("%.1f%%", 100*float64(s.ResentBytes)/float64(s.TxBytes))
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%v\t%s\t%s\t%s\t%s\t%s\t%d\n", id, s.Role, dash(s.Rule), dash(s.Peer), s.Destination,
-			age.Truncate(time.Second), size(s.TxBytes), size(s.RxBytes), average, current, again, s.Subs)
+		rule, dest := dash(s.Rule), s.Destination
+		if s.Test {
+			// a path test: it has no rule, and its data ends inside the other node
+			rule, dest = "(path test)", "(path test)"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%v\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n", id, s.Role, rule, dash(s.Peer), dest,
+			age.Truncate(time.Second), size(s.TxBytes), size(s.RxBytes), average, current, again, s.Subs,
+			size(s.UnsentBytes), size(s.InflightBytes), sessionState(s))
 	}
 	return tw.Flush()
 }

@@ -36,7 +36,7 @@ Without a PSK all MAC fields are zero and are not checked. UDP needs a PSK.
 | 5 | 1 | flags: bit 0 new session, bit 1 control sub, bit 2 repair sub |
 | 6 | 16 | session id (random, chosen by the client) |
 | 22 | 16 | destination IP (IPv4-mapped for IPv4) |
-| 38 | 2 | destination port |
+| 38 | 2 | destination port (0 with the address 0.0.0.0: the session of a path test, see "Between paired nodes") |
 | 40 | 1 | path index (client's numbering) |
 | 41 | 2 | sub index (unique within the session) |
 | 43 | 2 | client window in MB |
@@ -252,11 +252,18 @@ field that the receiving end does not know is ignored.
 
 | `type` | Sent | Fields | Meaning |
 |---|---|---|---|
-| `hello` | by both ends, first | `name`, `version`, `protocols` (list of numbers; this document is 1), `instance` (text; optional) | who is there |
+| `hello` | by both ends, first | `name`, `version`, `protocols` (list of numbers; this document is 1), `instance` (text; optional), `features` (list of text; optional) | who is there |
 | `ping` | by both ends, every 10 s | `seq` | the connection is alive |
 | `pong` | in answer to a `ping` | `seq` | |
-| `open` | by the end that carries a session | `request` (number, not zero), `session` (the id in hex) | open the sub-connections of this session from your end |
+| `open` | by the end that carries a session | `request` (number, not zero), `session` (the id in hex), `test_path` and `test_subs` (numbers; optional) | open the sub-connections of this session from your end |
 | `open_fail` | in answer to an `open` | `request`, `reason` (text) | it cannot be done |
+| `session_fail` | by the exit end of a session | `session` (the id in hex), `code` (`allow` or `dial`), `reason` (text) | the session could not be connected to its destination, and why |
+| `paths` | by an end that runs a path test | `request` | name the paths you hold to me |
+| `paths_reply` | in answer to a `paths` | `request`, `paths` (list of `name`, `subs`, `data`) | the paths, in their order, without addresses |
+| `test_end` | by an end that runs a path test | `session` (the id in hex) | I have ended this session of the test |
+
+The last four types, and the fields `features`, `test_path` and `test_subs`,
+were added in version 0.3.0. Older versions ignore them.
 
 An end that receives nothing for 30 seconds takes the connection for dead. The
 end that dialed dials again after 1, 2, 4, then every 8 seconds.
@@ -272,6 +279,49 @@ after that message is left to the ordinary rules. Nothing is reset on the
 first `instance` an end receives from a peer, on the same one again, on the
 one before the current one (a late message of the old process), or on a
 `hello` without `instance` (versions before 0.1.2 send none and ignore it).
+
+**Why a session could not be connected.** The exit end of a session tells the
+client end in the transport that it could not connect the session to its
+destination (frame DIALFAIL), without a reason. Since version 0.3.0 it also
+sends `session_fail` on a control connection first, if one is up. `code` is
+`allow` when the destination is not in the allow list that the exit end keeps
+for the other node, and `dial` when connecting failed, in which case `reason`
+is the error of the system. The text is for a person to read, and the
+receiving end shows at most 200 bytes of it with everything but printable
+ASCII replaced. An end that receives `session_fail` for a session it carries
+with that peer ends the session as it does on DIALFAIL. This matters because
+the frame can be lost when the exit end closes its connections right after
+it. A `session_fail` that names a session the receiving end does not carry
+with that peer changes nothing.
+
+**Path test.** Since version 0.3.0 a node can measure a path by sending data
+that the other node discards. A node that takes part says so with the text
+`path-test` in the `features` of its `hello`, and no test is started with a
+peer that does not. The session of a test is an ordinary session whose
+destination in the 69-byte header is the IPv4 address 0.0.0.0 and port 0.
+The exit end connects such a session to nothing. It reads the data and
+throws it away, and it does not consult the allow list, because the session
+reaches nothing outside the node. The exit end bounds every such session by
+itself. It takes 4 of them at a time, and ends one after 90 seconds or after
+1 GiB of data. A node that does not know this destination treats it like any
+other and fails to connect it. The node that runs the test ends each of its
+sessions with ABORT and also sends `test_end` on a control connection,
+because the frame is often lost behind test data that is still on its way.
+The exit end ends a session of a test that the peer names in a `test_end`.
+A session of a test that the other end has answered ends when nothing
+arrives for 30 seconds, without waiting for the grace time.
+
+A test measures one path at a time, first with one data sub-connection and
+then with all the path has. The dialing node knows its own paths. A node
+that holds no path asks the peer with `paths`. The peer
+answers with `paths_reply`, which lists for each path it holds to the asking
+node the `name`, the number of data sub-connections `subs`, and whether the
+path carries data (`data`). The asking node then sends `open` with
+`test_path`, the position of the path in that list counted from 1, and
+`test_subs`, the number of data sub-connections to keep on it (0 means as
+many as the path has). The peer opens the control and repair sub-connections
+of all its paths as usual, and no data sub-connection on any other path. An
+`open` without `test_path`, or with 0, is the ordinary request.
 
 **A session whose sub-connections the exit end opens.** A node that has to
 carry a connection to a peer it holds no path to creates the session, picks a

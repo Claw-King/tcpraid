@@ -92,7 +92,16 @@ tcpraid peers set nas-b -allow 192.0.2.10/32:873,192.0.2.10/32:50000-50010
 `PUT /api/v1/peers/NAME`, described in `reference-api.md`.
 
 A connection to anything else is refused, and the application at the other
-end sees a reset.
+end sees a reset. The peer is told that its allow list entry was the reason,
+and shows that in the status of its rule. When your node cannot connect to a
+destination, the peer is told the error of the system, which names the
+destination it asked for and nothing else.
+
+The allow list does not apply to a path test (`tcpraid peers test`), because
+the test data ends inside your node and reaches no address. A peer can make
+your node receive such data whenever it likes. Your node bounds it without
+relying on the peer: four test sessions at a time, each ended after 90
+seconds or 1 GiB.
 
 Ending a pairing (`tcpraid peers remove NAME`, or "End the pairing") resets
 the sessions with that peer in both directions and refuses its connections

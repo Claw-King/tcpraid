@@ -11,6 +11,7 @@ package main
 //	tcpraid peers show NAME
 //	tcpraid peers remove NAME
 //	tcpraid peers check NAME
+//	tcpraid peers test NAME [-seconds N] [-path PATH] [-json]
 //	tcpraid peers set NAME [-allow LIST] [-udp-dial HOST:PORT]
 //	tcpraid peers path set NAME PATH [-addr A] [-type T] [-proxy P] [-security S] [-verify V] [-pin F] [-roles R,...] [-subs N]
 //	tcpraid peers path remove NAME PATH
@@ -35,6 +36,7 @@ import (
 	"time"
 
 	"github.com/Claw-King/tcpraid/internal/api"
+	"github.com/Claw-King/tcpraid/internal/forward"
 	"github.com/Claw-King/tcpraid/internal/link"
 	"github.com/Claw-King/tcpraid/internal/node"
 	"github.com/Claw-King/tcpraid/internal/pair"
@@ -192,6 +194,48 @@ func dispatch(group, def string, names []string, cmds map[string]command, args [
 		return 2
 	}
 	return c.execute(args, stdout, stderr)
+}
+
+// printPeerTest writes the result of a path test: a table of the rates, then one
+// sentence for each path. It returns an error when a path could not be measured.
+func printPeerTest(w io.Writer, res api.PeerTest) error {
+	if res.PeerDials {
+		fmt.Fprintf(w, "This node has no path to %s. The paths below are the ones %s holds to this node.\n", res.Peer, res.Peer)
+	}
+	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "PATH\tSUB-CONNECTIONS\tONE ALONE\tALL TOGETHER\tTIMES")
+	rate := func(v float64) string { return fmt.Sprintf("%.1f MB/s", v/(1<<20)) }
+	failed := 0
+	for _, p := range res.Paths {
+		switch {
+		case p.Error != "":
+			failed++
+			fmt.Fprintf(tw, "%s\t%d\t-\t-\t-\n", p.Name, p.Subs)
+		case p.Subs < 2:
+			fmt.Fprintf(tw, "%s\t%d\t%s\t-\t-\n", p.Name, p.Subs, rate(p.One))
+		default:
+			fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%.1f\n", p.Name, p.Subs, rate(p.One), rate(p.All), p.All/p.One)
+		}
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	for _, p := range res.Paths {
+		switch {
+		case p.Error != "":
+			fmt.Fprintf(w, "%s: not measured. %s\n", p.Name, p.Error)
+		case p.Subs < 2:
+			fmt.Fprintf(w, "%s: the path has one sub-connection, so there is nothing to compare.\n", p.Name)
+		case p.LittleGain:
+			fmt.Fprintf(w, "%s: %d sub-connections together carried little more than one alone. Either one connection already fills this line, or something on the path puts the connections into one. \"Connecting two sites\" in the documentation (docs/en/connecting.md) says how to tell them apart.\n", p.Name, p.Subs)
+		default:
+			fmt.Fprintf(w, "%s: %d sub-connections together carried %.1f times what one carried alone.\n", p.Name, p.Subs, p.All/p.One)
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d of %d path(s) could not be measured", failed, len(res.Paths))
+	}
+	return nil
 }
 
 const (
@@ -464,7 +508,38 @@ func cmdPeers(args []string, stdout, stderr io.Writer) int {
 	}
 	var set *flag.FlagSet
 	var allow, udpDial string
-	return dispatch("peers", "list", []string{"list", "show", "remove", "check", "set", "path"}, map[string]command{
+	var test api.PeerTestRequest
+	var testJSON bool
+	return dispatch("peers", "list", []string{"list", "show", "remove", "check", "test", "set", "path"}, map[string]command{
+		"test": {
+			name: "peers test", usage: "NAME", nargs: 1,
+			flags: func(fs *flag.FlagSet) {
+				fs.IntVar(&test.Seconds, "seconds", forward.TestDefaultSeconds, fmt.Sprintf("how long each run sends test data (1 to %d)", forward.TestMaxSeconds))
+				fs.StringVar(&test.Path, "path", "", "test only the path of this name (\"\": every path that carries data)")
+				fs.BoolVar(&testJSON, "json", false, "print the result as the API returns it (JSON)")
+			},
+			run: func(dataDir string, args []string, stdout, stderr io.Writer) error {
+				if test.Seconds < 1 || test.Seconds > forward.TestMaxSeconds {
+					return fmt.Errorf("-seconds is out of range. Give 1 to %d.", forward.TestMaxSeconds)
+				}
+				// two runs for each path, and no peer has more than node.MaxPaths paths
+				wait := time.Duration(2*test.Seconds*node.MaxPaths)*time.Second + longCall
+				fmt.Fprintf(stderr, "path test with %s: two runs of up to %d seconds for each path\n", args[0], test.Seconds)
+				if testJSON {
+					var raw json.RawMessage
+					if err := apiCall(dataDir, http.MethodPost, peerPath(args[0])+"/test", test, &raw, wait); err != nil {
+						return err
+					}
+					_, err := fmt.Fprintf(stdout, "%s\n", raw)
+					return err
+				}
+				var res api.PeerTest
+				if err := apiCall(dataDir, http.MethodPost, peerPath(args[0])+"/test", test, &res, wait); err != nil {
+					return err
+				}
+				return printPeerTest(stdout, res)
+			},
+		},
 		"set": {
 			name: "peers set", usage: "NAME", nargs: 1,
 			flags: func(fs *flag.FlagSet) {

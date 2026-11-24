@@ -12,11 +12,21 @@
 // an object with a "type"; a type that the receiving end does not know is to be ignored,
 // and so are fields it does not know.
 //
-//	hello      both ways, once, first    name, version, protocols, instance
-//	ping       both ways                 seq
-//	pong       the answer to a ping      seq
-//	open       to the end with the path  request, session
-//	open_fail  the answer when it fails  request, reason
+//	hello         both ways, once, first       name, version, protocols, instance, features
+//	ping          both ways                    seq
+//	pong          the answer to a ping         seq
+//	open          to the end with the path     request, session, test_path, test_subs
+//	open_fail     the answer when it fails     request, reason
+//	session_fail  to the end that carries      session, code, reason
+//	paths         to the end with the paths    request
+//	paths_reply   the answer                   request, paths
+//	test_end      to the end with the sink     session
+//
+// session_fail tells the end that carries a session why the other end could not connect
+// it to its destination. paths asks an end for the names and sizes of the paths it holds
+// to the asking end, for a path test that the asking end runs (FeaturePathTest); an open
+// with test_path asks for the sub-connections of such a test, and test_end says that
+// the asking end has ended one of the test's sessions.
 //
 // A message longer than MaxMessage, or one whose MAC is wrong, ends the connection.
 package control
@@ -59,7 +69,32 @@ const (
 	TypePong     = "pong"
 	TypeOpen     = "open"
 	TypeOpenFail = "open_fail"
+	// since 0.3.0
+	TypeSessionFail = "session_fail"
+	TypePaths       = "paths"
+	TypePathsReply  = "paths_reply"
+	TypeTestEnd     = "test_end"
 )
+
+// FeaturePathTest in a hello says that the sending node takes the sessions of a path
+// test and answers what such a test asks over the control connection (paths, and open
+// with test_path).
+const FeaturePathTest = "path-test"
+
+// The codes of a session_fail.
+const (
+	CodeAllow = "allow" // the destination is not in the allow list kept for the other node
+	CodeDial  = "dial"  // connecting to the destination failed; the reason is the system's error
+)
+
+// PathInfo is one path in a paths_reply: what the holder of the path calls it, how many
+// data sub-connections it keeps on it, and whether it carries data at all. It names no
+// address.
+type PathInfo struct {
+	Name string `json:"name"`
+	Subs int    `json:"subs"`
+	Data bool   `json:"data"`
+}
 
 // Message is one message. Which fields count depends on Type.
 type Message struct {
@@ -71,14 +106,27 @@ type Message struct {
 	// hello: a number the sending process picked at its start, as text. It differs
 	// from one run of a node to the next; absent from versions before 0.1.2
 	Instance string `json:"instance,omitempty"`
+	// hello: what the sending node can do beyond the first version of this format
+	// (FeaturePathTest); absent from versions before 0.3.0
+	Features []string `json:"features,omitempty"`
 	// ping, pong
 	Seq uint64 `json:"seq,omitempty"`
 	// open, open_fail: the number the asking end gave its request
 	Request uint64 `json:"request,omitempty"`
-	// open: the id of the session, in hex (for the logs of the two ends to match)
+	// open: the id of the session, in hex (for the logs of the two ends to match).
+	// session_fail, test_end: the session the message is about
 	Session string `json:"session,omitempty"`
-	// open_fail: why, for a person to read
+	// open_fail, session_fail: why, for a person to read
 	Reason string `json:"reason,omitempty"`
+	// open, for a path test: the path to dial, counted from 1 in the order of the
+	// paths_reply (0: not a test, every path), and how many data sub-connections to
+	// keep on it (0: as many as the path has)
+	TestPath int `json:"test_path,omitempty"`
+	TestSubs int `json:"test_subs,omitempty"`
+	// session_fail: CodeAllow or CodeDial
+	Code string `json:"code,omitempty"`
+	// paths_reply: the paths the sending node holds to the node that asked
+	Paths []PathInfo `json:"paths,omitempty"`
 }
 
 // ErrTooLong is the error of a message that is longer than MaxMessage.

@@ -22,6 +22,12 @@ func TestSessionList(t *testing.T) {
 	gone.dead, ctrl.ctrl = true, true
 	srv.subs = []*sub{live, gone, ctrl}
 	srv.st.txB, srv.st.rxB, srv.unackedB = 300, 200, 100
+	// of the 100 bytes the peer has not reported, 60 were never sent: two chunks in
+	// the queue of new ones (one of the three queued was sent since and is gone from it)
+	srv.chunks = map[uint64]*chunk{7: {data: make([]byte, 40)}, 8: {data: make([]byte, 25)}, 9: {data: make([]byte, 35)}}
+	srv.newQ = []uint64{8, 9, 10}
+	srv.everUp = true
+	srv.lastPeer = time.Now().Add(-10 * time.Second)
 	cli := e.newSession([16]byte{0x01}, nil, true, "[2001:db8::10]:22", keys{})
 	cli.started = srv.started.Add(time.Second)
 
@@ -29,10 +35,26 @@ func TestSessionList(t *testing.T) {
 	if len(l) != 2 {
 		t.Fatalf("%d sessions listed, want 2", len(l))
 	}
+	// the two times move with the clock: checked apart, then taken out of the comparison
+	if s := l[0].Silent; s < 10*time.Second || s > 20*time.Second {
+		t.Errorf("silent for %v, want a little over 10 s", s)
+	}
+	if sum := l[0].Silent + l[0].GraceLeft; sum != e.cfg.Grace {
+		t.Errorf("silence and what is left of the grace time add up to %v, want the grace time %v", sum, e.cfg.Grace)
+	}
+	l[0].Silent, l[0].GraceLeft = 0, 0
 	want := SessionInfo{ID: [16]byte{0xa1, 2}, Destination: "192.0.2.10:873", Started: srv.started,
-		TxBytes: 300, RxBytes: 200, UnackedBytes: 100, Subs: 2}
+		TxBytes: 300, RxBytes: 200, UnackedBytes: 100, Subs: 2, UnsentBytes: 60, Up: true}
 	if l[0] != want {
 		t.Errorf("oldest session:\n got %+v\nwant %+v", l[0], want)
+	}
+	if l[1].Up || l[1].UnsentBytes != 0 || l[1].Test {
+		t.Errorf("a session nothing has happened to: %+v", l[1])
+	}
+	// silent for longer than the grace time: nothing is left, and nothing negative
+	srv.lastPeer = time.Now().Add(-e.cfg.Grace - time.Minute)
+	if l = e.SessionList(); l[0].GraceLeft != 0 {
+		t.Errorf("past the grace time, %v is left", l[0].GraceLeft)
 	}
 	if !l[1].Client || l[1].Destination != "[2001:db8::10]:22" || l[1].Subs != 0 || l[1].ID != [16]byte{0x01} {
 		t.Errorf("newer session: %+v", l[1])

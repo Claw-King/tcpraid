@@ -26,6 +26,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -92,6 +93,7 @@ type peerControl struct {
 	cancel  context.CancelFunc
 	conns   []*ctlConn // the control connections that are up
 	dialing bool       // dialControl runs
+	greeted bool       // a hello of the peer has arrived
 	version string
 	last    time.Time
 	serving int // sessions this node serves because the peer asked (see MaxOpenRequests)
@@ -101,6 +103,8 @@ type peerControl struct {
 	// connection whose hello said instance: the process was alive then.
 	instance, previous string
 	lastOf             time.Time
+	// features is what the peer's last hello said it can do (control.FeaturePathTest).
+	features []string
 }
 
 type ctlConn struct {
@@ -135,11 +139,18 @@ type reverseKey struct {
 	request uint64
 }
 
-// reverseEntry is a session this node carries whose sub-connections a peer opens.
+// reverseEntry is a session this node carries whose sub-connections a peer opens. fail
+// is told why, when the peer answers that it cannot open them.
 type reverseEntry struct {
 	rv   *engine.Reverse
-	rule string
+	fail func(text string)
 }
+
+// features are what this node says it can do in every hello.
+var features = []string{control.FeaturePathTest}
+
+// maxFeatures bounds what is kept of the features a peer names.
+const maxFeatures = 16
 
 // controlLocked returns the control state of the peer called name, made if need be
 // (rt.mu held).
@@ -283,7 +294,11 @@ func (rt *Runtime) runControl(peer node.Peer, conn net.Conn) {
 // serveControl says hello, pings, and handles the messages of cc until it fails; it
 // returns why. done is closed by the caller when it has returned.
 func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}) error {
-	if err := cc.Send(control.Message{Type: control.TypeHello, Name: rt.Node.Name(), Version: rt.Version, Protocols: []int{control.Protocol}, Instance: rt.instance}); err != nil {
+	hello := control.Message{Type: control.TypeHello, Name: rt.Node.Name(), Version: rt.Version, Protocols: []int{control.Protocol}, Instance: rt.instance}
+	if !rt.noFeatures {
+		hello.Features = features
+	}
+	if err := cc.Send(hello); err != nil {
 		return err
 	}
 	go func() {
@@ -311,7 +326,12 @@ func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}
 		pc.last = now
 		var oldUntil time.Time
 		if m.Type == control.TypeHello {
+			pc.greeted = true
 			pc.version = printable(m.Version, 64)
+			pc.features = nil
+			for _, f := range m.Features[:min(len(m.Features), maxFeatures)] {
+				pc.features = append(pc.features, printable(f, 32))
+			}
 			oldUntil = pc.hello(cc, printable(m.Instance, 64))
 		}
 		if cc.instance != "" && cc.instance == pc.instance {
@@ -330,6 +350,16 @@ func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}
 			rt.serveOpen(pc, cc, m)
 		case control.TypeOpenFail:
 			rt.openFailed(cc.peer, m)
+		case control.TypeSessionFail:
+			rt.sessionFailed(cc.peer, m)
+		case control.TypePaths:
+			rt.servePaths(cc, m)
+		case control.TypePathsReply:
+			rt.pathsAnswered(cc.peer, m)
+		case control.TypeTestEnd:
+			if id, err := hex.DecodeString(m.Session); err == nil && len(id) == 16 {
+				rt.Engine.EndTest(cc.peer, [16]byte(id))
+			}
 		}
 		// hello and pong need nothing more; a type this version does not know is ignored
 	}
@@ -349,7 +379,7 @@ func (rt *Runtime) peerRestarted(name string, oldUntil time.Time) {
 	for _, o := range owners {
 		if o.Rule != "" && !told[o.Rule] {
 			told[o.Rule] = true
-			rt.problem(o.Rule, fmt.Sprintf("peer %q was restarted while it carried a connection of this rule, and the connection was reset", name))
+			rt.note(o.Rule, fmt.Sprintf("peer %q was restarted while it carried a connection of this rule, and the connection was reset", name))
 		}
 	}
 }
@@ -401,54 +431,65 @@ func (rt *Runtime) dropControlLocked(name string) {
 // carryReverse takes one application connection of a rule to ip:port at a peer that
 // this node has no path to: it asks the peer to open the sub-connections. It returns
 // when the session has ended.
-func (rt *Runtime) carryReverse(r node.Rule, peer node.Peer, c net.Conn, ip net.IP, port int) {
+func (rt *Runtime) carryReverse(a *attempt, r node.Rule, peer node.Peer, c net.Conn, ip net.IP, port int) {
 	cc := rt.liveControl(peer.Name)
 	if cc == nil {
-		rt.problem(r.Name, fmt.Sprintf("this node has no path to peer %q, and the peer, which would open the connections, is not connected to this node. Start the peer, or add a path with \"tcpraid peers path set\".", peer.Name))
+		a.fail(fmt.Sprintf("this node has no path to peer %q, and the peer, which would open the connections, is not connected to this node. Start the peer, or add a path with \"tcpraid peers path set\".", peer.Name))
 		reset(c)
 		return
 	}
 	keys, err := pairKeys(peer)
 	if err != nil {
-		rt.problem(r.Name, err.Error())
+		a.fail(err.Error())
 		reset(c)
 		return
 	}
+	end, ok := rt.runReverse(cc, peer, keys, c, ip, port, engine.Owner{Peer: peer.Name, Rule: r.Name}, control.Message{}, a.fail)
+	if ok {
+		rt.ended(a, peer.Name, net.JoinHostPort(ip.String(), strconv.Itoa(port)), end)
+	}
+}
+
+// runReverse carries c to ip:port at a peer that this node cannot dial, as one session
+// whose sub-connections the peer is asked to open over cc, and returns when the session
+// has ended. ask holds what the request says beyond its number and the session. fail is
+// told why the peer did not open them, if it did not. ok is false when no session was
+// created (c is reset then).
+func (rt *Runtime) runReverse(cc *ctlConn, peer node.Peer, keys engine.Keys, c net.Conn, ip net.IP, port int, owner engine.Owner,
+	ask control.Message, fail func(text string)) (end engine.End, ok bool) {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		reset(c)
-		return
+		return end, false
 	}
 	key := reverseKey{peer.Name, binary.BigEndian.Uint64(b[:])}
-	rv := rt.Engine.NewReverse(c, ip, port, keys, peer.UDPDial, engine.Owner{Peer: peer.Name, Rule: r.Name}, rt.validFor(peer))
+	rv := rt.Engine.NewReverse(c, ip, port, keys, peer.UDPDial, owner, rt.validFor(peer))
 	if rv == nil {
-		return // refused and reset: the session limit, or the node is stopping
+		return end, false // refused and reset: the session limit, or the node is stopping
 	}
 	rt.mu.Lock()
-	rt.reverse[key] = &reverseEntry{rv: rv, rule: r.Name}
+	rt.reverse[key] = &reverseEntry{rv: rv, fail: fail}
 	rt.mu.Unlock()
 	defer func() {
 		rt.mu.Lock()
 		delete(rt.reverse, key)
 		rt.mu.Unlock()
 	}()
-	// cleared before the request goes out: the answer may be a refusal, and its reason
-	// must not be wiped by a clear that comes after it
-	rt.problem(r.Name, "")
 	id := rv.ID()
-	if err := cc.Send(control.Message{Type: control.TypeOpen, Request: key.request, Session: hex.EncodeToString(id[:])}); err != nil {
-		rt.problem(r.Name, fmt.Sprintf("peer %q could not be asked to open the connections: %v", peer.Name, err))
+	ask.Type, ask.Request, ask.Session = control.TypeOpen, key.request, hex.EncodeToString(id[:])
+	if err := cc.Send(ask); err != nil {
+		fail(fmt.Sprintf("peer %q could not be asked to open the connections: %v", peer.Name, err))
 		rv.Abort("the request for sub-connections could not be sent")
-		return
+		return rv.Run(), true
 	}
 	late := time.AfterFunc(rt.times.wait, func() {
 		if !rv.Up() {
-			rt.problem(r.Name, fmt.Sprintf("peer %q was asked to open the connections and none arrived within %v", peer.Name, rt.times.wait))
+			fail(fmt.Sprintf("peer %q was asked to open the connections and none arrived within %v", peer.Name, rt.times.wait))
 			rv.Abort("no sub-connection arrived")
 		}
 	})
 	defer late.Stop()
-	rv.Run()
+	return rv.Run(), true
 }
 
 // HandleReverse takes a connection that a peer opened because this node asked it to
@@ -475,7 +516,7 @@ func (rt *Runtime) openFailed(peerName string, m control.Message) {
 	if ent == nil {
 		return
 	}
-	rt.problem(ent.rule, fmt.Sprintf("peer %q could not open the connections: %s", peerName, printable(m.Reason, 200)))
+	ent.fail(fmt.Sprintf("peer %q could not open the connections: %s", peerName, printable(m.Reason, maxReason)))
 	go ent.rv.Abort("the other end could not open sub-connections")
 }
 
@@ -517,6 +558,13 @@ func (rt *Runtime) serveOpen(pc *peerControl, cc *ctlConn, m control.Message) {
 			return
 		}
 		groups := rt.reverseGroups(ps, peer, m.Request)
+		if m.TestPath != 0 {
+			// a path test of the peer: one path, with as many data sub-connections as it asks for
+			if groups = testGroups(groups, m.TestPath-1, m.TestSubs); groups == nil {
+				fail("it has no such path for data")
+				return
+			}
+		}
 		first := 0
 		for i, g := range groups {
 			if !g.Ctrl && !g.Repair {
@@ -531,10 +579,12 @@ func (rt *Runtime) serveOpen(pc *peerControl, cc *ctlConn, m control.Message) {
 			return
 		}
 		rt.Engine.NewRoute(groups, keys, peer.UDPDial).ServeReverse(conn, engine.SubOptions{
-			Peer:      peer.Name,
-			Allow:     allow,
-			AllowName: "the allow list of the peer",
-			Valid:     ps.valid,
+			Peer:       peer.Name,
+			Allow:      allow,
+			AllowName:  "the allow list of the peer",
+			Valid:      ps.valid,
+			Sink:       rt.sink,
+			DialFailed: rt.tellFailure(peer.Name),
 		})
 	}()
 }

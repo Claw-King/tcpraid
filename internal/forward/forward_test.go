@@ -86,6 +86,10 @@ func (l *logBuffer) String() string {
 
 var bg = context.Background()
 
+// testWindow, when it is not zero, is the send window of the nodes that start: a test
+// that fills the window sets it, so that it does not fill 128 MB.
+var testWindow int
+
 func startNode(t *testing.T, name string, configure ...func(*Runtime)) *testNode {
 	t.Helper()
 	return startNodeIn(t, filepath.Join(t.TempDir(), "data"), name, configure...)
@@ -100,7 +104,11 @@ func startNodeIn(t *testing.T, dir, name string, configure ...func(*Runtime)) *t
 		t.Fatal(err)
 	}
 	logs := &logBuffer{}
-	tn := &testNode{n: n, logs: logs, e: engine.New(engine.DefaultConfig()), dir: dir}
+	cfg := engine.DefaultConfig()
+	if testWindow > 0 {
+		cfg.Window = testWindow
+	}
+	tn := &testNode{n: n, logs: logs, e: engine.New(cfg), dir: dir}
 	d := &link.Dialer{Identity: n.Identity}
 	tn.rt = &Runtime{Node: n, Engine: tn.e, Dialer: d, Version: "test-" + name, Logf: logs.logf}
 	tn.svc = &link.Service{Node: n, Dialer: d, Logf: logs.logf, PeerRemoved: tn.rt.PeerRemoved}

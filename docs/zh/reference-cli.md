@@ -5,10 +5,11 @@ tcpraid run     [flags]                       start a node
 tcpraid status  [-json]                       the node on this host
 tcpraid pair    create | list | revoke ID | join [CODE]
 tcpraid peers   [list] | show NAME | check NAME | remove NAME
+tcpraid peers   test NAME [-seconds N] [-path PATH] [-json]
 tcpraid peers   set NAME [-allow LIST] [-udp-dial HOST:PORT]
 tcpraid peers   path set NAME PATH [flags] | path remove NAME PATH
 tcpraid rules   [list] | add NAME [flags] | remove NAME | enable NAME | disable NAME
-tcpraid sessions [-json]                      what the node carries right now
+tcpraid sessions [-json] [-watch]             what the node carries right now
 tcpraid version
 ```
 
@@ -26,7 +27,7 @@ tcpraid version
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.2.0 (wire protocol 1)
+version      0.3.0 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -75,7 +76,7 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.2.0, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.3.0, last heard 2026-01-15T10:00:05Z
 
 PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS
 default  tcp   nas-a.example.org:9851  -      tls       -       -    data   8
@@ -89,6 +90,32 @@ peer nas-b removed. The other node is not told and still lists this one.
 
 - `peers check NAME` 在每条路径上按该路径的档位打开一条连接，并让另一个节点证明它持有这个配对。有路径不通时以状态 1 退出。没有通往对端路径的节点没有可检查的。
 - `peers remove NAME` 在本节点上解除配对。和这个对端之间两个方向上的会话都被重置，它的连接从此被拒绝。
+
+### peers test
+
+```
+$ tcpraid peers test nas-a
+path test with nas-a: two runs of up to 10 seconds for each path
+PATH     SUB-CONNECTIONS  ONE ALONE  ALL TOGETHER  TIMES
+default  8                2.6 MB/s   19.8 MB/s     7.6
+default: 8 sub-connections together carried 7.6 times what one carried alone.
+```
+
+`peers test NAME` 测出子连接在每条承载数据的路径上带来了多少。节点向对端发送测试数据，对端收到后丢弃。每条路径跑两轮，第一轮只用一条数据子连接，第二轮用这条路径配置的全部条数。速度按对端报告收到的数据算，取每一轮后一半时间的平均，所以连接刚起步的那一段不计入。
+
+- `-seconds N` 设定每一轮持续多久，取 1 到 60，默认 10。一轮发满 1 GiB 也会结束。在延迟很大的线路上，跑得久一些，数字更稳。
+- `-path PATH` 只测这个名字的路径。
+- `-json` 改为打印 `POST /api/v1/peers/NAME/test` 的回答(见 `reference-api.md`)。
+
+这项测试只在你运行它的时候进行，发的是真实的数据，会和同时在跑的传输争用线路。数据从运行命令的节点发往对端。要测另一个方向，就在另一个节点上运行这条命令。没有通往对端路径的节点也能运行它，这时由对端打开子连接，表里列的是对端的路径。
+
+全部子连接合起来的速度不到一条的 1.5 倍时，命令会这样说：
+
+```
+default: 8 sub-connections together carried little more than one alone. Either one connection already fills this line, or something on the path puts the connections into one. "Connecting two sites" in the documentation (docs/en/connecting.md) says how to tell them apart.
+```
+
+这句话的意思是，几条子连接合起来并不比一条多多少。要么一条连接已经占满了这条线路，要么路径上有东西把这几条连接合进了一条。命令分辨不出是哪一种，`connecting.md` 讲了怎么分辨。有路径没能测出来，或者测试不能开始时，命令以状态 1 退出。测试要求两个节点都是 0.3.0 或更新的版本，一个节点同一时间只跑一次测试。
 
 ### peers path
 
@@ -171,14 +198,22 @@ rule rsync removed. Connections it carries now run to their end.
 
 `-disabled` 把规则以停用状态保存。一个节点最多有 256 条规则，规则的名字最长 64 字节，不能有空格。
 
-`STATE` 是 `listening`、`disabled`，或者 `FAILED:` 加上规则没能监听的原因。这时 `rules add` 以状态 1 退出，规则已经保存，规则有变动时会再试。"last connection:" 后面是这条规则最近一条没能承载的连接出了什么问题。
+`STATE` 是 `listening`、`disabled`，或者 `FAILED:` 加上规则没能监听的原因。这时 `rules add` 以状态 1 退出，规则已经保存，规则有变动时会再试。"last connection:" 后面是这条规则最近一条没能承载的连接出了什么问题，以及那是多久以前：
+
+```
+$ tcpraid rules
+NAME   TAKES         PEER   DESTINATION     SESSIONS  STATE
+rsync  0.0.0.0:9801  nas-a  192.0.2.10:873  0         listening, last connection: peer "nas-a" could not connect to 192.0.2.10:873: connect: connection refused (12s ago)
+```
+
+对端连不上目的地，或者对端的允许列表里没有这个目的地时，对端会把原因报回来，规则把它显示出来。0.3.0 之前的对端不会报，这时规则会让你去看对端的日志。连接因为对端不应答而等着的时候，规则会说明那些尝试碰到了什么，这种情况不带时间。这条规则的下一条连接到来时，上一条留下的内容会被清掉。
 
 ## sessions
 
 ```
 $ tcpraid sessions
-ID      ROLE    RULE   PEER   DESTINATION     AGE  SENT      RECEIVED  AVERAGE    NOW        SENT AGAIN  SUBS
-4a5411  client  rsync  nas-a  192.0.2.10:873  6s   320.0 MB  0 B       53.3 MB/s  30.0 MB/s  0.0%        8
+ID      ROLE    RULE   PEER   DESTINATION     AGE  SENT      RECEIVED  AVERAGE    NOW        SENT AGAIN  SUBS  NOT SENT YET  IN FLIGHT  STATE
+4a5411  client  rsync  nas-a  192.0.2.10:873  6s   320.0 MB  0 B       53.3 MB/s  30.0 MB/s  0.0%        8     96.0 MB       28.0 MB    ok
 ```
 
 节点此刻承载的每一条应用连接一行，没有时显示 `no sessions`。这条命令会隔一秒看两次，以便算出速度。
@@ -193,8 +228,22 @@ ID      ROLE    RULE   PEER   DESTINATION     AGE  SENT      RECEIVED  AVERAGE  
 | `AVERAGE`、`NOW` | 两个方向合计的速度：从会话开始算起的，和最近一秒的 |
 | `SENT AGAIN` | 被排进重发队列的数据，占已发数据的比例 |
 | `SUBS` | 存活的子连接数 |
+| `NOT SENT YET` | 已从应用读进来、还在等子连接的数据。这个数一直很大，说明应用给数据的速度比线路能带的快 |
+| `IN FLIGHT` | 已经发出、对端还没有报告收到的数据 |
+| `STATE` | `ok`；对端还没有在任何子连接上应答时是 `connecting`；或者会话已经等了对端多久 |
 
 `SENT` 算的是已经发往对端的数据。其中一部分可能还在路上，所以它会比另一端显示的 `RECEIVED` 多。这条命令说不出一次传输还要多久，因为 tcpraid 不知道应用总共要发多少。
+
+两个节点之间的线路断了的时候，会话会保持一段时间(`-grace`，默认 15 分钟)，线路恢复后接着传。这时 `STATE` 显示已经多久没有从对端收到东西，以及保持时间还剩多少：
+
+```
+ID      ROLE    RULE   PEER   DESTINATION     AGE    SENT     RECEIVED  AVERAGE   NOW       SENT AGAIN  SUBS  NOT SENT YET  IN FLIGHT  STATE
+4a5411  client  rsync  nas-a  192.0.2.10:873  5m12s  2.10 GB  0 B       6.9 MB/s  0.0 MB/s  1.0%        0     104.0 MB      24.0 MB    waiting for the peer for 3m12s, gives up in 11m48s
+```
+
+时间到了，会话结束，应用的连接被重置。路径测试的会话在 `RULE` 和 `DESTINATION` 两栏显示 `(path test)`。
+
+`-watch` 每 2 秒把表格再打印一次，每次上面带一行当时的时间，直到你中断它。`-interval DURATION` 可以换一个间隔，从 `1s` 到 `1h`。
 
 `-json` 改为打印 `GET /api/v1/sessions` 的回答，只取一次(见 `reference-api.md`)。
 
@@ -202,5 +251,5 @@ ID      ROLE    RULE   PEER   DESTINATION     AGE  SENT      RECEIVED  AVERAGE  
 
 ```
 $ tcpraid version
-tcpraid 0.2.0 (wire protocol 1)
+tcpraid 0.3.0 (wire protocol 1)
 ```

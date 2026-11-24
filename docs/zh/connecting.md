@@ -82,6 +82,23 @@ nas-a$ tcpraid peers path set nas-b default -addr vps.example.org:19851
 
 ## 怎么看出连接是不是各自独立
 
+先测一下。`tcpraid peers test` 在每条路径上发测试数据，一次只用一条子连接，一次用全部，然后把两个速度都打印出来：
+
+```
+nas-a$ tcpraid peers test nas-b
+path test with nas-b: two runs of up to 10 seconds for each path
+PATH     SUB-CONNECTIONS  ONE ALONE  ALL TOGETHER  TIMES
+default  8                2.6 MB/s   19.8 MB/s     7.6
+default: 8 sub-connections together carried 7.6 times what one carried alone.
+```
+
+全部合起来并不比一条多多少的时候，有两种解释，这项测试分辨不出是哪一种：
+
+- **一条连接已经占满了线路。** 把 `ONE ALONE` 和你知道的这条线路的速度比一比。两者接近，就没有出问题。在这样的线路上，单条连接本来就跑得好，tcpraid 没有多少可以加的。
+- **路径上有东西把这几条连接合进了一条。** 这时 `ONE ALONE` 明显低于线路的速度。对照上面的表查你用的工具，再按下面的办法数一数连接。
+
+这项测试发的是真实的数据，只在你运行它的时候进行。它的参数见 `reference-cli.md`。
+
 `tcpraid sessions` 在 `SUBS` 一栏显示节点为一个会话持有几条连接。那是节点开出去的数量，不是在两个站点之间实际走的数量。想看得更多，就在传输进行中数 TCP 连接。
 
 在监听节点上：

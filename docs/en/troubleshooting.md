@@ -6,7 +6,9 @@ the **peer's state** (Peers page, or `tcpraid peers`), and the **node's log**
 
 ## The application cannot connect, or is cut off at once
 
-A rule that cannot carry a connection resets it and keeps the reason:
+A rule that cannot carry a connection resets it and keeps the reason, with
+the time. So when a connection fails, look first at `tcpraid rules` on the
+node with the rule:
 
 ```
 nas-a$ tcpraid rules
@@ -23,13 +25,35 @@ taken  0.0.0.0:9700  nas-a  192.0.2.10:873  0         FAILED: listening on 0.0.0
 | `STATE` is `FAILED` with a reason | the rule could not listen: the port is taken, or not allowed. The other rules run. It is tried again when the rules change |
 | "this node has no path to peer ... and the peer is not connected" | the peer is offline, and this node cannot dial it. Start the peer, check its path to this node |
 | connection refused before any of this | nothing listens on that port. In a container: is the rule's port published, and does the rule listen on `0.0.0.0`? |
-| the connection is accepted and reset at once | the far node could not reach the destination, or the peer's allow list does not include it. The far node's log says which: `dial ADDRESS: ... connection refused`, or `dial ADDRESS: not in the allow list of the peer`; this node's log says `server could not reach ADDRESS` |
+| "peer ... could not connect to ADDRESS: connect: connection refused" (or another error of the system) | the far node tried the destination and failed. Nothing listens there, or the address is wrong as the far node sees it |
+| "peer ... refused the destination ADDRESS, which is not in the allow list it keeps for this node" | the far node's allow list for this node does not hold the destination. Change it on the far node with `tcpraid peers set` |
+| "peer ... could not connect to ADDRESS. Its log says why." | the same two cases, with a far node of a version before 0.3.0, which does not report the reason. Its log has `dial ADDRESS: ... connection refused`, or `dial ADDRESS: not in the allow list of the peer` |
 | reset after 15 seconds, rule on the node without a path | the peer was asked to connect and nothing arrived: the peer can no longer reach this node's listener |
-| reset after 30 seconds, and the rule's status shows no reason | none of the sub-connections came up. One cause: the pairing was ended on the other node. `tcpraid peers check NAME` then says "the other node does not accept this node, which is not paired with it or no longer is", and the other node's log has lines "refused a connection from ...: not a peer of this node". Pair again |
+| "peer ... does not answer on the connections this node opens", and after 30 seconds "peer ... answered on none of the connections within 30 seconds" | none of the sub-connections came up, and the text after it says what the attempts ran into. One cause: the pairing was ended on the other node. The rule then says "the other node does not accept this node, which is not paired with it or no longer is", and the other node's log has lines "refused a connection from ...: not a peer of this node". Pair again |
+| "the connections to peer ... cannot be opened" with an error | this node cannot connect to the peer's listener at all. `tcpraid peers check NAME` tries each path |
+| "nothing arrived from peer ... for the whole grace time" | the line between the two nodes was down for longer than `-grace`. See the next section |
 | "peer ... was restarted while it carried a connection of this rule, and the connection was reset" | the other node came back as a new process (it was restarted, killed, or ran out of memory) and this node reset the connection the old process had been carrying. Start the transfer again. If it keeps happening, look at the other node's log and at its memory limits (`-maxrss`, the limit of its container) |
 
 A destination is an address **as the far node sees it**. With the far node in
 a container, `127.0.0.1` is the container, not the NAS.
+
+## A transfer has stopped moving
+
+`tcpraid sessions` says whether the session is waiting for the line:
+
+```
+ID      ROLE    RULE   PEER   DESTINATION     AGE    SENT     RECEIVED  AVERAGE   NOW       SENT AGAIN  SUBS  NOT SENT YET  IN FLIGHT  STATE
+4a5411  client  rsync  nas-a  192.0.2.10:873  5m12s  2.10 GB  0 B       6.9 MB/s  0.0 MB/s  1.0%        0     104.0 MB      24.0 MB    waiting for the peer for 3m12s, gives up in 11m48s
+```
+
+| `STATE` | What it means |
+|---|---|
+| `ok`, and `NOW` is zero | the two nodes still talk to each other, and no data moves. The application is not sending, or the destination is not reading |
+| `waiting for the peer for ..., gives up in ...` | nothing has arrived from the peer for that long. The line is down, or the peer has stopped. The session is kept and goes on when the line is back. When the grace time is over, the application's connection is reset |
+| `connecting` | the peer has not answered on any sub-connection yet. `tcpraid rules` says what the attempts run into |
+
+`tcpraid sessions -watch` prints the table every 2 seconds. A longer outage
+needs a longer `-grace` on both nodes (`reference-files.md`).
 
 ## The peer is offline
 
@@ -82,9 +106,13 @@ A node without a path to its peer cannot check, and says `this node has no path 
 
 ## It works but it is not faster
 
-- Measure the path first without tcpraid, using `iperf3` with one stream and
-  with eight. If eight together are not clearly faster than one, there is nothing
-  for tcpraid to gain.
+- Measure what the sub-connections add with `tcpraid peers test NAME`
+  (`reference-cli.md`). It sends test data over each path, once with one
+  sub-connection and once with all of them. If all together are not clearly
+  faster than one, there is nothing for tcpraid to gain on that path. Either
+  one connection already fills the line, or something on the path puts the
+  connections into one, and `connecting.md` says how to tell them apart.
+  `iperf3` with one stream and with eight measures the same without tcpraid.
 - Look at the session on the Sessions page, with `tcpraid sessions`, or with
   `GET /api/v1/sessions`. `subs` should be the number of connections of the
   paths (8 by default), and `resent_bytes` should be a small share of

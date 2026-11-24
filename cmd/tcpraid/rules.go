@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"text/tabwriter"
+	"time"
 
 	"github.com/Claw-King/tcpraid/internal/api"
 )
@@ -23,12 +24,27 @@ func ruleState(r api.Rule) string {
 		return "disabled"
 	case r.Error != "" && !r.Listening:
 		return "FAILED: " + r.Error
+	case r.Error != "" && r.ErrorAt != nil:
+		return "listening, last connection: " + r.Error + " (" + ago(time.Since(*r.ErrorAt)) + ")"
 	case r.Error != "":
 		return "listening, last connection: " + r.Error
 	case r.Listening:
 		return "listening"
 	}
 	return "not listening"
+}
+
+// ago writes how long ago something happened, to the unit that matters.
+func ago(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", max(int(d/time.Second), 0))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d/time.Minute))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh%dm ago", int(d/time.Hour), int(d%time.Hour/time.Minute))
+	}
+	return fmt.Sprintf("%dd ago", int(d/(24*time.Hour)))
 }
 
 // setRuleEnabled switches the rule called name on or off: it reads the rule and puts it

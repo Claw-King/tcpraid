@@ -28,7 +28,8 @@ It helps when all of these hold:
   job.
 - On your path, several parallel TCP connections together are clearly faster
   or steadier than one. A quick test is to run `iperf3`, a network speed test
-  tool, with one stream and then with eight.
+  tool, with one stream and then with eight. Once two nodes are paired,
+  `tcpraid peers test` measures the same over the nodes' own paths.
 - You can run tcpraid at both ends.
 
 It adds, on top of the speed:
@@ -79,6 +80,13 @@ that arrive on this port go to that address at the other site".
 
 Only one of the two nodes has to be reachable from the other. Everything can
 be done in the node's web page or with the `tcpraid` command.
+
+When something goes wrong, the node says where to look. `tcpraid rules`
+shows why the last connection of a rule failed, with the reason the other
+node gave. `tcpraid sessions` shows whether a transfer is moving or waiting
+for the line, and for how long it will wait. `tcpraid peers test` measures
+what several connections carry compared with one on your line. The path test
+exists only as a command and in the API, not in the web page.
 
 ## Five-minute start
 

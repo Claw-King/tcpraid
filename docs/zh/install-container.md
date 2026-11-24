@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| 镜像 | `ghcr.io/claw-king/tcpraid:0.2.0`(也可以用 `deploy/Dockerfile` 自己构建) |
+| 镜像 | `ghcr.io/claw-king/tcpraid:0.3.0`(也可以用 `deploy/Dockerfile` 自己构建) |
 | 数据 | 挂载到 `/data` 的一个目录。里面有节点的私钥、它的对端和它的规则。保留好，像备份私钥那样备份它，绝不要让两个节点共用 |
 | 端口 9850 | 网页界面和本机 API。明文 HTTP：只在你信任的网络上开放 |
 | 端口 9851 | 其他节点连到这里。能被另一个节点连到的那个节点需要它；另一个节点开着也无妨 |
@@ -31,7 +31,7 @@ $ docker compose up -d
 $ docker logs tcpraid
 ... web interface: no password was set, so one was made. It is shown this once: y7ygtkha76gshsnt
 ... web interface: to set your own, start the node with -ui-password-file FILE or the environment variable TCPRAID_UI_PASSWORD
-... node 0.2.0 name="nas-a" fingerprint=056f8829...e2e077d8 data=/data api=[::]:9850 listen=[::]:9851 listen-plain=off transparent=off udp-listen=off
+... node 0.3.0 name="nas-a" fingerprint=056f8829...e2e077d8 data=/data api=[::]:9850 listen=[::]:9851 listen-plain=off transparent=off udp-listen=off
 ... transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
 ... web interface: open http://127.0.0.1:9850 in a browser on this machine
 ... the web interface and the API at [::]:9850 are plain HTTP and reachable from other hosts. Use them on a network you trust, or put a reverse proxy with TLS in front.

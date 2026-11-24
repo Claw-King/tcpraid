@@ -15,6 +15,7 @@
 //	PUT    /api/v1/peers/{name}           change a peer's paths, allow list, UDP address (PeerUpdate -> Peer)
 //	DELETE /api/v1/peers/{name}           end the pairing with a peer and reset its sessions
 //	POST   /api/v1/peers/{name}/check     try every path to a peer (PeerCheck)
+//	POST   /api/v1/peers/{name}/test      send test data to a peer and measure the paths (PeerTestRequest -> PeerTest)
 //	GET    /api/v1/rules                  the forwarding rules with their status (a list of Rule)
 //	POST   /api/v1/rules                  make a rule (RuleSpec -> Rule)
 //	PUT    /api/v1/rules/{name}           replace a rule (RuleSpec -> Rule)
@@ -102,6 +103,7 @@ type Rules interface {
 	ReplaceRule(name string, r node.Rule) error
 	RemoveRule(name string) error
 	PeerStatus(name string) forward.PeerStatus
+	TestPeer(ctx context.Context, name string, opt forward.TestOptions) (forward.TestResult, error)
 }
 
 // Config is what a Server serves.
@@ -148,6 +150,18 @@ type Session struct {
 	Subs         int       `json:"subs"`           // live sub-connections
 	Peer         string    `json:"peer,omitempty"` // the peer at the other end
 	Rule         string    `json:"rule,omitempty"` // role client: the rule that carries the connection
+	// Since 0.3.0. unacked_bytes is the sum of the next two: read from the application
+	// and never sent yet, and sent but not yet reported received by the peer.
+	UnsentBytes   int64 `json:"unsent_bytes"`
+	InflightBytes int64 `json:"inflight_bytes"`
+	// Up: the peer has answered on a sub-connection at least once.
+	Up bool `json:"up"`
+	// SilentMs is how long ago anything arrived from the peer. GraceLeftMs is how much
+	// longer the session lasts if nothing arrives; at zero it is reset.
+	SilentMs    int64 `json:"silent_ms"`
+	GraceLeftMs int64 `json:"grace_left_ms"`
+	// Test: the session carries the data of a path test, not an application connection.
+	Test bool `json:"test,omitempty"`
 }
 
 // PairingCodeRequest is the body of POST /api/v1/pairing-codes. Both fields are
@@ -237,6 +251,9 @@ type Rule struct {
 	Listening   bool   `json:"listening"`       // connections for the rule are being taken
 	Error       string `json:"error,omitempty"` // why not, or what went wrong with the last connection
 	Sessions    int    `json:"sessions"`        // live sessions the rule carries
+	// ErrorAt is when what Error says happened (since 0.3.0); absent where Error is a
+	// state that holds now and not an event.
+	ErrorAt *time.Time `json:"error_at,omitempty"`
 }
 
 // PeerCheck is the answer of POST /api/v1/peers/{name}/check.
@@ -252,6 +269,37 @@ type PathCheck struct {
 	Security string `json:"security"`
 	OK       bool   `json:"ok"`
 	Error    string `json:"error,omitempty"`
+}
+
+// PeerTestRequest is the body of POST /api/v1/peers/{name}/test. Both fields are
+// optional: Seconds is how long each run lasts (1 to 60; absent or 0: 10), Path names
+// the one path to test (absent or empty: every path that carries data).
+type PeerTestRequest struct {
+	Seconds int    `json:"seconds"`
+	Path    string `json:"path"`
+}
+
+// PeerTest is the answer of POST /api/v1/peers/{name}/test.
+type PeerTest struct {
+	Peer    string `json:"peer"`
+	Seconds int    `json:"seconds"` // how long each run lasted at most
+	// PeerDials: this node has no path to the peer, and the paths are the ones the peer
+	// holds to this node.
+	PeerDials bool       `json:"peer_dials"`
+	Paths     []PathTest `json:"paths"`
+}
+
+// PathTest is the outcome of a path test for one path: the bytes a second that the
+// peer reported as received with one data sub-connection, and with all the path has
+// (0 when it has one). LittleGain says that all of them carried less than 1.5 times
+// what one carried. With Error, the path could not be measured.
+type PathTest struct {
+	Name       string  `json:"name"`
+	Subs       int     `json:"subs"`
+	One        float64 `json:"one_bytes_per_second"`
+	All        float64 `json:"all_bytes_per_second"`
+	LittleGain bool    `json:"little_gain"`
+	Error      string  `json:"error,omitempty"`
 }
 
 // route is one method on one path. A segment of the form {name} matches any one segment
@@ -297,6 +345,7 @@ func New(cfg Config) *Server {
 		add(http.MethodPost, PathRules, s.addRule)
 		add(http.MethodPut, PathRules+"/{name}", s.putRule)
 		add(http.MethodDelete, PathRules+"/{name}", s.removeRule)
+		add(http.MethodPost, PathPeers+"/{name}/test", s.testPeer)
 	}
 	return s
 }
@@ -448,6 +497,13 @@ func (s *Server) sessions(w http.ResponseWriter, _ *http.Request, _ map[string]s
 			Subs:         si.Subs,
 			Peer:         si.Peer,
 			Rule:         si.Rule,
+
+			UnsentBytes:   si.UnsentBytes,
+			InflightBytes: si.UnackedBytes - si.UnsentBytes,
+			Up:            si.Up,
+			SilentMs:      si.Silent.Milliseconds(),
+			GraceLeftMs:   si.GraceLeft.Milliseconds(),
+			Test:          si.Test,
 		})
 	}
 	writeJSON(w, http.StatusOK, list)
@@ -509,9 +565,11 @@ func readBody(w http.ResponseWriter, r *http.Request, v any) bool {
 
 // fail answers a request with the error of an operation: what the caller got wrong is
 // 400, what does not exist 404, a pairing that ran out of time 504, one that the other
-// node did not complete 502, anything else 500.
+// node did not complete 502, a path test that cannot start now 409, anything else 500.
 func fail(w http.ResponseWriter, err error, remote bool) {
 	switch {
+	case errors.Is(err, forward.ErrTestRefused):
+		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, link.ErrInvalid), errors.Is(err, node.ErrInvalid):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, node.ErrNotFound):
@@ -648,10 +706,37 @@ func (s *Server) checkPeer(w http.ResponseWriter, r *http.Request, arg map[strin
 	writeJSON(w, http.StatusOK, out)
 }
 
+// testPeer runs a path test. The answer comes when the test is over: two runs for each
+// path, each as long as the request says. A caller that goes away ends the test.
+func (s *Server) testPeer(w http.ResponseWriter, r *http.Request, arg map[string]string) {
+	var req PeerTestRequest
+	if !readBody(w, r, &req) {
+		return
+	}
+	res, err := s.cfg.Rules.TestPeer(r.Context(), arg["name"], forward.TestOptions{Seconds: req.Seconds, Path: req.Path})
+	if err != nil {
+		if r.Context().Err() != nil {
+			return // the caller is gone
+		}
+		fail(w, err, false)
+		return
+	}
+	out := PeerTest{Peer: res.Peer, Seconds: res.Seconds, PeerDials: res.PeerDials, Paths: []PathTest{}}
+	for _, p := range res.Paths {
+		out.Paths = append(out.Paths, PathTest{Name: p.Name, Subs: p.Subs, One: p.One, All: p.All, LittleGain: p.LittleGain, Error: p.Error})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func apiRule(st forward.RuleStatus) Rule {
 	r := st.Rule
-	return Rule{Name: r.Name, Listen: r.Listen, Destination: r.Destination, Match: r.Match, Peer: r.Peer, Enabled: r.Enabled,
+	out := Rule{Name: r.Name, Listen: r.Listen, Destination: r.Destination, Match: r.Match, Peer: r.Peer, Enabled: r.Enabled,
 		Listening: st.Listening, Error: st.Error, Sessions: st.Sessions}
+	if st.Error != "" && !st.ErrorAt.IsZero() {
+		at := st.ErrorAt.UTC()
+		out.ErrorAt = &at
+	}
+	return out
 }
 
 func (s *Server) listRules(w http.ResponseWriter, _ *http.Request, _ map[string]string) {
