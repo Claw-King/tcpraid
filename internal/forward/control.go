@@ -692,7 +692,7 @@ func (rt *Runtime) runReverse(cc *ctlConn, peer node.Peer, keys engine.Keys, c n
 		return end, false
 	}
 	key := reverseKey{peer.Name, binary.BigEndian.Uint64(b[:])}
-	rv := rt.Engine.NewReverse(c, ip, port, keys, peer.UDPDial, owner, rt.validFor(peer))
+	rv := rt.Engine.NewReverseWith(rt.settingsFor(peer, owner.Rule), c, ip, port, keys, peer.UDPDial, owner, rt.validFor(peer))
 	if rv == nil {
 		return end, false // refused and reset: the session limit, or the node is stopping
 	}
@@ -909,6 +909,7 @@ func (rt *Runtime) serveOpen(pc *peerControl, cc *ctlConn, m control.Message) {
 			Valid:      ps.valid,
 			Sink:       rt.sink,
 			DialFailed: rt.tellFailure(peer.Name),
+			Config:     rt.settingsFor(peer, ""),
 		})
 	}()
 }

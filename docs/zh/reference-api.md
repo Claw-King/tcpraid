@@ -34,7 +34,7 @@ Www-Authenticate: Bearer
 ### GET /api/v1/status
 
 ```
-{"version":"0.6.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.7.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
  "sessions":2,"peers":1,"rules":2}
 ```
@@ -56,7 +56,7 @@ $ curl -X PUT ... -d '{"name":"nas-a"}' http://127.0.0.1:9850/api/v1/node
 [{"id":"4fce0d73c066738a655b88c7741c2405","destination":"192.0.2.10:7000","role":"client",
   "started":"2026-01-15T10:00:31.329910062Z","tx_bytes":314572800,"rx_bytes":0,"unacked_bytes":130023424,
   "resent_bytes":0,"subs":8,"subs_dialed":8,"peer":"nas-a","rule":"rsync","unsent_bytes":100663296,
-  "inflight_bytes":29360128,"up":true,"silent_ms":41,"grace_left_ms":899959}]
+  "inflight_bytes":29360128,"up":true,"silent_ms":41,"grace_left_ms":899959,"window_bytes":134217728}]
 ```
 
 `tx_bytes` 和 `rx_bytes` 是已发送和已接收的流字节数。`unacked_bytes` 是已从应用读进来、另一端还没有报告收到的部分，不管它是已经发出去了还是还在等着发。`resent_bytes` 统计排队等待重发的字节数，`subs` 是存活的子连接数。
@@ -73,6 +73,8 @@ $ curl -X PUT ... -d '{"name":"nas-a"}' http://127.0.0.1:9850/api/v1/node
 | `test` | 路径测试(`POST /api/v1/peers/{name}/test`)的会话上才有，值是 `true`。这种会话没有规则，目的地显示为 `0.0.0.0:0` |
 
 `subs_dialed` 是 0.6.0 版新增的。它是这个会话活着的子连接里由本节点打开的条数，其余的由对端打开。规则带 `"dial": "both"` 时，只要两个节点的路径都通，会话的这两个数都不是零。
+
+`window_bytes` 是 0.7.0 版新增的。它是这个会话在本节点开始时取得的窗口：节点的窗口，或者它的对端或规则设的窗口(见“传输层的设置”)。
 
 ### GET /metrics
 
@@ -117,10 +119,10 @@ Cache-Control: no-store
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.6.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.7.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
-`online` 表示和这个对端之间有一条控制连接连着。`version` 和 `last_message` 在收到过对端的消息之后才出现。0.6.0 版新增的 `spares` 是两个节点之间正在等会话的备用连接数，没有时不出现。加入到本节点的对端，在这里没有 `addresses`，也没有 `paths`。配对密钥绝不会出现在回答里，显示代理时不带它的用户名和密码。
+`online` 表示和这个对端之间有一条控制连接连着。`version` 和 `last_message` 在收到过对端的消息之后才出现。0.6.0 版新增的 `spares` 是两个节点之间正在等会话的备用连接数，没有时不出现。0.7.0 版新增的 `transport` 是本节点上和这个对端之间的会话用来取代节点设置的那些传输层设置，对端没有设时不出现(见“传输层的设置”)。加入到本节点的对端，在这里没有 `addresses`，也没有 `paths`。配对密钥绝不会出现在回答里，显示代理时不带它的用户名和密码。
 
 从 0.5.0 版起，路径可以多两个字段。`addrs` 是同一个监听的其余地址，节点在 `addr` 之后按顺序尝试它们，连同 `addr` 最多 8 个。`mark` 是这条路径的连接带的套接字标记，只在 Linux 上有。只有一个地址、不带标记的路径没有这两个字段：
 
@@ -130,16 +132,25 @@ Cache-Control: no-store
 
 ### PUT /api/v1/peers/{name}
 
-修改对端的设置。请求体 `{"paths": [...], "allow": "...", "udp_dial": "..."}`，每一项都可选，至少要有一项。`paths` 替换全部路径，每条的形式和 `GET` 显示的一样。把一条路径连同显示出来的代理原样发回去，它已有的用户名和密码会保留。所有内容先整体检查，有任何一处存不了，就什么都不改。回答是这个对端。
+修改对端的设置。请求体 `{"paths": [...], "allow": "...", "udp_dial": "...", "transport": {...}}`，每一项都可选，至少要有一项。`paths` 替换全部路径，每条的形式和 `GET` 显示的一样。把一条路径连同显示出来的代理原样发回去，它已有的用户名和密码会保留。所有内容先整体检查，有任何一处存不了，就什么都不改。回答是这个对端。
 
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.6.0",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.7.0",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 
 `allow` 是对端经由本节点可以访问的目的地，写成网段，可带端口或端口段，用逗号分隔。留空表示不限。`udp_dial` 是本节点为和这个对端之间的会话发送 UDP 回执的地址。留空表示不发。
+
+从 0.7.0 版起，`transport` 按名字设置和这个对端之间会话的传输层设置。带值的名字被设上，值是 `null` 的名字回到节点的值，请求里没有提到的名字保持原样：
+
+```
+$ curl -X PUT ... -d '{"transport":{"window":"8MB","grace":null}}' http://127.0.0.1:9850/api/v1/peers/nas-b
+{"name":"nas-b","fingerprint":"9d875c73...b9a2cd07","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
+ "allow":"","udp_dial":"","online":true,"version":"0.7.0","last_message":"2026-01-15T10:00:28.39632723Z",
+ "spares":2,"transport":{"window":"8MB"}}
+```
 
 ### PUT /api/v1/peers/{name}/paths/{path}, DELETE /api/v1/peers/{name}/paths/{path}
 
@@ -150,7 +161,7 @@ $ curl -X PUT ... -d '{"subs":4}' http://127.0.0.1:9850/api/v1/peers/nas-a/paths
 {"created":false,"peer":{"name":"nas-a","fingerprint":"e5645f9b...7795ec86","addresses":["nas-a.example.org:9851"],
  "paired_at":"2026-01-15T10:00:20Z",
  "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":4}],
- "allow":"","udp_dial":"","online":true,"version":"0.6.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
+ "allow":"","udp_dial":"","online":true,"version":"0.7.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
 ```
 
 `DELETE` 删除这条路径，回答是对端。对端没有这条路径时是 `404`。
@@ -231,6 +242,13 @@ $ curl -X DELETE ... 'http://127.0.0.1:9850/api/v1/peers/nas-a?rules=remove'
 
 0.6.0 版新增了 `dial`。规则指定了节点之间的连接由谁打开时，它是 `"self"`、`"peer"` 或 `"both"`(见 `POST`)。规则把这件事交给节点决定时，也就是 `"auto"`，这个字段不出现。
 
+0.7.0 版新增了 `transport`，是这条规则的连接用来取代对端和节点设置的那些传输层设置。规则没有设时不出现：
+
+```
+{"name":"zfs","listen":"0.0.0.0:50000-50002","destination":"192.0.2.10:50100-50102","peer":"nas-a",
+ "enabled":true,"listening":true,"sessions":0,"transport":{"window":"16MB"}}
+```
+
 ### POST /api/v1/rules
 
 请求体 `{"name", "peer", "listen", "destination"}` 或 `{"name", "peer", "match"}`，还可以带 `"enabled": false`。从 0.4.0 版起，目的地里 IP 地址的位置可以写主机名，例如 `"nas.lan:873"`，由对端在每条连接到来时解析。
@@ -238,6 +256,8 @@ $ curl -X DELETE ... 'http://127.0.0.1:9850/api/v1/peers/nas-a?rules=remove'
 从 0.5.0 版起，请求体里可以有 `"paths": ["NAME", ...]` 和 `"subs": N`。给了 `paths`，规则的连接只用这些名字的路径，名字以持有路径的节点起的为准。给了 `subs`，每条连接在每条路径上最多保持这么多条数据子连接。在持有路径的节点上，名字不是一条承载数据的路径时回答 `400`。由对端持有路径时，名字由对端在连接到来时核对，对端要是 0.5.0 或更新的版本。
 
 从 0.6.0 版起，请求体里可以有 `"dial"`，取 `"auto"`、`"self"`、`"peer"`、`"both"` 之一，指定规则的会话里节点之间的连接由哪个节点打开。四个取值的含义见 `reference-cli.md` 里 `rules add -dial` 的说明。不是这四个之一的值回答 `400`。`dial` 需要而两个节点不具备的条件，要到连接到来时才看得出，写在规则的 `error` 里。
+
+从 0.7.0 版起，请求体里可以有 `"transport": {"NAME": "VALUE", ...}`，是这条规则的连接的传输层设置(见“传输层的设置”)。不是设置的名字、超出范围的值、节点的全部会话共用的设置，都回答 `400`。
 
 ```
 $ curl -X POST ... -d '{"name":"pg","peer":"nas-a","listen":"127.0.0.1:15432","destination":"192.0.2.10:5432"}' http://127.0.0.1:9850/api/v1/rules
@@ -256,7 +276,7 @@ HTTP/1.1 400 Bad Request
 
 ### PUT /api/v1/rules/{name}
 
-替换这条规则，请求体相同。`paths`、`subs` 和 `dial` 是例外：请求体没有提到其中哪一项，规则就保留原有的那一项，这样不认识这几个字段的调用方不会把它们去掉。`paths` 给空列表、`subs` 给 `0`、`dial` 给 `"auto"` 才是去掉。停用一条规则就是带 `"enabled": false` 的 `PUT`：
+替换这条规则，请求体相同。`paths`、`subs`、`dial` 和 `transport` 是例外：请求体没有提到其中哪一项，规则就保留原有的那一项，这样不认识这几个字段的调用方不会把它们去掉。`paths` 给空列表、`subs` 给 `0`、`dial` 给 `"auto"` 才是去掉。`transport` 里的每个名字各算各的：带值的被设上，值是 `null` 的被去掉，没有提到的保持原样。只改 `transport` 时，规则的监听不动。停用一条规则就是带 `"enabled": false` 的 `PUT`：
 
 ```
 {"name":"pg","listen":"127.0.0.1:15432","destination":"192.0.2.10:5432","peer":"nas-a","enabled":false,"listening":false,"sessions":0}
@@ -265,6 +285,58 @@ HTTP/1.1 400 Bad Request
 ### DELETE /api/v1/rules/{name}
 
 删除这条规则。`204`。它正在承载的连接会跑完。
+
+## 传输层的设置
+
+`tcpraid run` 作为选项接受的那些传输层设置(见 `reference-files.md`)，可以在节点运行中读取和修改。它们是 0.7.0 版新增的。每个值都是文本，写法和命令行上一样：大小写成 `"256MB"`，时间写成 `"500ms"`，数字写成 `"5"`，开关写成 `"true"` 或 `"false"`。节点回答时用它保存的写法，所以 `"0.5s"` 回来是 `"500ms"`。
+
+一个会话在开始的那一刻取得每一项设置：规则设了就用规则的，否则用对端的，再否则用节点的。改动只对之后开始的会话起作用。
+
+### GET /api/v1/transport
+
+节点的设置，顺序固定。
+
+```
+{"settings":[
+ {"name":"window","value":"32MB","default":"128MB","source":"stored","stored":"32MB"},
+ {"name":"grace","value":"15m0s","default":"15m0s","source":"default"},
+ {"name":"hol","value":"1s","default":"1s","source":"default"},
+ {"name":"target","value":"300ms","default":"300ms","source":"default"},
+ {"name":"pigtarget","value":"1s","default":"1s","source":"default"},
+ {"name":"dead","value":"30s","default":"20s","source":"stored","stored":"30s"},
+ {"name":"kickratio","value":"5","default":"5","source":"default"},
+ {"name":"kickfloor","value":"256KB","default":"256KB","source":"default"},
+ {"name":"share","value":"true","default":"true","source":"default"},
+ {"name":"fbsubs","value":"3","default":"3","source":"default"},
+ {"name":"fbevery","value":"20ms","default":"20ms","source":"default"},
+ {"name":"coalesce","value":"20ms","default":"20ms","source":"default"},
+ {"name":"budget","value":"256MB","default":"256MB","source":"default","shared":true},
+ {"name":"timeline","value":"0s","default":"0s","source":"default","shared":true}]}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `value` | 此刻开始的会话从节点拿到的值 |
+| `default` | 程序的默认值 |
+| `source` | `"default"`；`tcpraid run` 启动时带了这项设置是 `"command line"`；节点运行中设的是 `"stored"` |
+| `stored` | 存在节点数据目录里的值。`"source": "command line"` 时它也可能在，表示有一个存下的值在等一次不带这个选项的启动 |
+| `shared` | 节点的全部会话共用的设置上是 `true`。对端和规则不能有这项设置 |
+
+### PUT /api/v1/transport
+
+请求体 `{"set": {"NAME": "VALUE", ...}}`。带值的名字被设上，值是 `null` 的名字回到默认值。至少要有一个名字。回答是 `GET` 给出的那个列表。这些值会被保存，重启之后仍然有效。
+
+```
+$ curl -X PUT ... -d '{"set":{"window":"32MB","dead":"30s"}}' http://127.0.0.1:9850/api/v1/transport
+```
+
+下面这些回答 `400`，并且什么都不改：不是设置的名字，超出范围的值，和节点的 `-maxrss` 对不上的 `budget`，以及节点的命令行给出的设置：
+
+```
+HTTP/1.1 400 Bad Request
+
+{"error":"invalid: the node was started with -grace 20m0s on its command line, which goes before a stored value. Start the node without -grace to set it while the node runs."}
+```
 
 ## 登录(供网页界面使用)
 

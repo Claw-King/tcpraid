@@ -297,24 +297,25 @@ func (s *Service) Peer(name string) (node.Peer, error) {
 
 // SetPeerPaths replaces the paths of the peer called name; see UpdatePeer.
 func (s *Service) SetPeerPaths(name string, paths []node.Path) (node.Peer, error) {
-	return s.UpdatePeer(name, &paths, nil, nil)
+	return s.UpdatePeer(name, &paths, nil, nil, nil)
 }
 
 // SetPeerOptions sets the allow list and the UDP feedback address of the peer called
 // name; see UpdatePeer.
 func (s *Service) SetPeerOptions(name string, allow, udpDial *string) (node.Peer, error) {
-	return s.UpdatePeer(name, nil, allow, udpDial)
+	return s.UpdatePeer(name, nil, allow, udpDial, nil)
 }
 
 // UpdatePeer changes settings of the peer called name in one step and returns the peer,
 // without its pair secret: its paths (replaced as a whole), its allow list, its UDP
-// feedback address. A nil argument leaves that setting as it is. Values that cannot be
+// feedback address, its transport settings (each name set to its value, or taken out
+// where the value is nil). A nil argument leaves that setting as it is. Values that cannot be
 // stored are the caller's doing (ErrInvalid) and change nothing.
 //
 // A proxy given without user and password keeps the user and password that the path of
 // the same name has now, if it goes to the same proxy: the API shows a proxy without
 // them, so a caller that sends back what it was shown changes nothing.
-func (s *Service) UpdatePeer(name string, paths *[]node.Path, allow, udpDial *string) (node.Peer, error) {
+func (s *Service) UpdatePeer(name string, paths *[]node.Path, allow, udpDial *string, transport map[string]*string) (node.Peer, error) {
 	old, ok := s.Node.Peer(name)
 	if !ok {
 		return node.Peer{}, fmt.Errorf("peer %q: %w", name, node.ErrNotFound)
@@ -330,7 +331,7 @@ func (s *Service) UpdatePeer(name string, paths *[]node.Path, allow, udpDial *st
 		}
 		paths = &kept
 	}
-	stored, err := s.Node.UpdatePeer(name, paths, allow, udpDial)
+	stored, err := s.Node.UpdatePeer(name, paths, allow, udpDial, transport)
 	if err != nil {
 		if errors.Is(err, node.ErrInvalid) {
 			err = inputError{err}
@@ -342,6 +343,13 @@ func (s *Service) UpdatePeer(name string, paths *[]node.Path, allow, udpDial *st
 	}
 	if allow != nil || udpDial != nil {
 		s.logf("peer %q: allow list %q, UDP feedback to %q", name, stored.Allow, stored.UDPDial)
+	}
+	if transport != nil {
+		text := stored.Transport.String()
+		if text == "" {
+			text = "none"
+		}
+		s.logf("peer %q: settings of its sessions at this node: %s. Sessions that begin from now on use them.", name, text)
 	}
 	return withoutSecret(stored), nil
 }

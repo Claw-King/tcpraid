@@ -187,6 +187,11 @@ This is a first version, made by one developer in spare time. What is known:
   NAS have not been run on a real NAS of any brand, and the container
   templates for Unraid and QNAP were only checked against the published
   formats.
+- **The transport settings have been used at their defaults.** Since version
+  0.7.0 a node takes more of them, for the node, for one peer or for one
+  rule. Other values than the defaults have been through the tests of the
+  repository and through no transfer on a real line. The documents say what
+  each setting changes and name no values to use.
 - **The web page has been used very little.** It was rendered and clicked
   through by a script, and one person has used it to pair two nodes.
 - **A host name as the destination of a rule needs version 0.4.0 or later on

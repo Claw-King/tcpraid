@@ -327,8 +327,9 @@ func TestSessionsListsEngineSessions(t *testing.T) {
 	var raw []map[string]any
 	json.Unmarshal(do(api, "GET", PathSessions, api.cfg.Token).Body.Bytes(), &raw)
 	// the first nine are the fields of 0.1.1, which stay as they are; "test" is there
-	// only for the session of a path test; subs_dialed came with 0.6.0
-	if got, want := keys(raw[0]), "destination grace_left_ms id inflight_bytes resent_bytes role rx_bytes silent_ms started subs subs_dialed tx_bytes unacked_bytes unsent_bytes up"; got != want {
+	// only for the session of a path test; subs_dialed came with 0.6.0, window_bytes
+	// with 0.7.0
+	if got, want := keys(raw[0]), "destination grace_left_ms id inflight_bytes resent_bytes role rx_bytes silent_ms started subs subs_dialed tx_bytes unacked_bytes unsent_bytes up window_bytes"; got != want {
 		t.Errorf("session fields %q, want %q", got, want)
 	}
 	if !c.Up || !s.Up || c.SilentMs < 0 || c.SilentMs > 5000 || c.GraceLeftMs <= 0 {

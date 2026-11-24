@@ -21,7 +21,7 @@ type DialGroup struct {
 
 // NewDial returns a function that opens one TCP connection to addr: directly, or through
 // the SOCKS5 proxy given as socks5://[user:pass@]host:port (empty = direct). A non-zero
-// mark sets SO_MARK on the socket (needs CAP_NET_ADMIN); only Linux has it
+// mark sets SO_MARK on the socket (needs CAP_NET_ADMIN, or CAP_NET_RAW from Linux 5.17); only Linux has it
 // (MarkSupported), and elsewhere a non-zero mark is an error.
 func NewDial(addr, proxy string, mark int) (func() (net.Conn, error), error) {
 	if mark != 0 && !MarkSupported {

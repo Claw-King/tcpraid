@@ -45,7 +45,7 @@ that ran out of time.
 ### GET /api/v1/status
 
 ```
-{"version":"0.6.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.7.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
  "sessions":2,"peers":1,"rules":2}
 ```
@@ -70,7 +70,7 @@ application's connection, and that node also names the `rule`. It is
 [{"id":"4fce0d73c066738a655b88c7741c2405","destination":"192.0.2.10:7000","role":"client",
   "started":"2026-01-15T10:00:31.329910062Z","tx_bytes":314572800,"rx_bytes":0,"unacked_bytes":130023424,
   "resent_bytes":0,"subs":8,"subs_dialed":8,"peer":"nas-a","rule":"rsync","unsent_bytes":100663296,
-  "inflight_bytes":29360128,"up":true,"silent_ms":41,"grace_left_ms":899959}]
+  "inflight_bytes":29360128,"up":true,"silent_ms":41,"grace_left_ms":899959,"window_bytes":134217728}]
 ```
 
 `tx_bytes` and `rx_bytes` are stream bytes sent and received. `unacked_bytes`
@@ -94,6 +94,10 @@ The fields after `rule` were added in version 0.3.0:
 live sub-connections that this node opened, and the peer opened the rest. In
 a session of a rule with `"dial": "both"` neither number is zero while the
 paths of both nodes work.
+
+`window_bytes` was added in version 0.7.0. It is the window the session began
+with at this node, which is the node's window unless its peer or its rule
+sets one (see "Transport settings").
 
 ### GET /metrics
 
@@ -142,13 +146,16 @@ code. The answer is the new peer, as below.
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.6.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.7.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
 `online` means that a control connection with the peer is up. `version` and
 `last_message` appear once the peer has been heard from. `spares`, added in
 version 0.6.0, is the number of spare connections between the two nodes that
-wait for a session to begin on them, and is absent when there is none. A peer that joined
+wait for a session to begin on them, and is absent when there is none.
+`transport`, added in version 0.7.0, holds the transport settings that the
+sessions with the peer use at this node in the place of the node's, and is
+absent when the peer has none (see "Transport settings"). A peer that joined
 this node has no `addresses` and no `paths` here. The pair secret is never in
 an answer, and a proxy is shown without its user and password.
 
@@ -165,7 +172,8 @@ and no mark:
 ### PUT /api/v1/peers/{name}
 
 Changes a peer's settings. Body `{"paths": [...], "allow": "...", "udp_dial":
-"..."}`. Each field is optional, and at least one must be there. `paths`
+"...", "transport": {...}}`. Each field is optional, and at least one must be
+there. `paths`
 replaces all paths, each in the form the `GET` shows. A path sent back with
 its proxy as shown keeps the user and password it has. Everything is checked
 first, and if something cannot be stored, nothing changes. The answer is the
@@ -174,7 +182,7 @@ peer.
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.6.0",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.7.0",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 
@@ -182,6 +190,18 @@ $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","u
 networks with an optional port or range, separated by commas. Empty means
 any. `udp_dial` is where this node sends UDP feedback for sessions with the
 peer. Empty means none.
+
+`transport`, since version 0.7.0, sets transport settings for the sessions
+with the peer, by name. A name with a value is set, a name with `null` goes
+back to the node's value, and a name that is not in the request stays as it
+is:
+
+```
+$ curl -X PUT ... -d '{"transport":{"window":"8MB","grace":null}}' http://127.0.0.1:9850/api/v1/peers/nas-b
+{"name":"nas-b","fingerprint":"9d875c73...b9a2cd07","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
+ "allow":"","udp_dial":"","online":true,"version":"0.7.0","last_message":"2026-01-15T10:00:28.39632723Z",
+ "spares":2,"transport":{"window":"8MB"}}
+```
 
 ### PUT /api/v1/peers/{name}/paths/{path}, DELETE /api/v1/peers/{name}/paths/{path}
 
@@ -202,7 +222,7 @@ $ curl -X PUT ... -d '{"subs":4}' http://127.0.0.1:9850/api/v1/peers/nas-a/paths
 {"created":false,"peer":{"name":"nas-a","fingerprint":"e5645f9b...7795ec86","addresses":["nas-a.example.org:9851"],
  "paired_at":"2026-01-15T10:00:20Z",
  "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":4}],
- "allow":"","udp_dial":"","online":true,"version":"0.6.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
+ "allow":"","udp_dial":"","online":true,"version":"0.7.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
 ```
 
 The `DELETE` removes the path and answers with the peer. A peer without that
@@ -312,6 +332,15 @@ Version 0.6.0 added `dial`: `"self"`, `"peer"` or `"both"` when the rule says
 which node opens the connections between the nodes (see `POST`). It is absent
 when the rule leaves that to the node, which is `"auto"`.
 
+Version 0.7.0 added `transport`, the transport settings that the connections
+of the rule use in the place of the peer's and the node's. It is absent when
+the rule has none:
+
+```
+{"name":"zfs","listen":"0.0.0.0:50000-50002","destination":"192.0.2.10:50100-50102","peer":"nas-a",
+ "enabled":true,"listening":true,"sessions":0,"transport":{"window":"16MB"}}
+```
+
 ### POST /api/v1/rules
 
 Body `{"name", "peer", "listen", "destination"}` or `{"name", "peer",
@@ -334,6 +363,11 @@ under `rules add -dial`. A value that is none of them is refused with `400`.
 What a `dial` needs and the two nodes do not have shows when a connection
 arrives, in the rule's `error`.
 
+Since version 0.7.0 the body may hold `"transport": {"NAME": "VALUE", ...}`,
+the transport settings of the rule's connections (see "Transport settings").
+A name that is no setting, a value outside its range, and a setting that all
+sessions of the node share are refused with `400`.
+
 ```
 $ curl -X POST ... -d '{"name":"pg","peer":"nas-a","listen":"127.0.0.1:15432","destination":"192.0.2.10:5432"}' http://127.0.0.1:9850/api/v1/rules
 HTTP/1.1 201 Created
@@ -351,11 +385,14 @@ HTTP/1.1 400 Bad Request
 
 ### PUT /api/v1/rules/{name}
 
-Replaces the rule, with the same body. `paths`, `subs` and `dial` are the
-exception: when the body does not name one of them, the rule keeps what it
-has, so that a caller which does not know these fields does not take them
-away. An empty list for `paths`, `0` for `subs` and `"auto"` for `dial` take
-them away. Switching a rule off is a
+Replaces the rule, with the same body. `paths`, `subs`, `dial` and
+`transport` are the exception. When the body does not name one of them, the
+rule keeps what it has, so that a caller which does not know these fields
+does not take them away. An empty list for `paths`, `0` for `subs` and
+`"auto"` for `dial` take them away. Within `transport` each name counts for
+itself, so one with a value is set, one with `null` is taken off, and one
+that is not named stays. A change of `transport` alone leaves the rule's listeners
+as they are. Switching a rule off is a
 `PUT` with `"enabled": false`:
 
 ```
@@ -365,6 +402,70 @@ them away. Switching a rule off is a
 ### DELETE /api/v1/rules/{name}
 
 Removes the rule. `204`. Connections it carries run to their end.
+
+## Transport settings
+
+The settings of the transport that `tcpraid run` takes as options
+(`reference-files.md`), read and changed while the node runs. They came with
+version 0.7.0. Every value is text, written as on the command line. A size
+is `"256MB"`, a duration `"500ms"`, a number `"5"`, and a switch `"true"` or
+`"false"`. The node answers with the form it stores, so
+`"0.5s"` comes back as `"500ms"`.
+
+A session takes each setting from its rule, if the rule has it, else from
+its peer, else from the node, at the moment it begins. A change acts on the
+sessions that begin afterwards.
+
+### GET /api/v1/transport
+
+The settings of the node, in a fixed order.
+
+```
+{"settings":[
+ {"name":"window","value":"32MB","default":"128MB","source":"stored","stored":"32MB"},
+ {"name":"grace","value":"15m0s","default":"15m0s","source":"default"},
+ {"name":"hol","value":"1s","default":"1s","source":"default"},
+ {"name":"target","value":"300ms","default":"300ms","source":"default"},
+ {"name":"pigtarget","value":"1s","default":"1s","source":"default"},
+ {"name":"dead","value":"30s","default":"20s","source":"stored","stored":"30s"},
+ {"name":"kickratio","value":"5","default":"5","source":"default"},
+ {"name":"kickfloor","value":"256KB","default":"256KB","source":"default"},
+ {"name":"share","value":"true","default":"true","source":"default"},
+ {"name":"fbsubs","value":"3","default":"3","source":"default"},
+ {"name":"fbevery","value":"20ms","default":"20ms","source":"default"},
+ {"name":"coalesce","value":"20ms","default":"20ms","source":"default"},
+ {"name":"budget","value":"256MB","default":"256MB","source":"default","shared":true},
+ {"name":"timeline","value":"0s","default":"0s","source":"default","shared":true}]}
+```
+
+| Field | Meaning |
+|---|---|
+| `value` | what a session that begins now gets from the node |
+| `default` | the value of the program |
+| `source` | `"default"`, `"command line"` when `tcpraid run` was started with the setting, or `"stored"` when it was set while a node ran |
+| `stored` | the value kept in the node's data directory. It is there with `"source": "command line"` too, when a stored value waits for a start without the option |
+| `shared` | `true` on a setting that all sessions of the node share. A peer and a rule cannot have it |
+
+### PUT /api/v1/transport
+
+Body `{"set": {"NAME": "VALUE", ...}}`. A name with a value is set, and a
+name with `null` goes back to its default. At least one name must be there.
+The answer is the list as `GET` gives it. The values are stored and hold
+after a restart.
+
+```
+$ curl -X PUT ... -d '{"set":{"window":"32MB","dead":"30s"}}' http://127.0.0.1:9850/api/v1/transport
+```
+
+Refused with `400`, and then nothing is changed: a name that is no setting, a
+value outside its range, a budget that does not fit the node's `-maxrss`, and
+a setting that the command line of the node gives:
+
+```
+HTTP/1.1 400 Bad Request
+
+{"error":"invalid: the node was started with -grace 20m0s on its command line, which goes before a stored value. Start the node without -grace to set it while the node runs."}
+```
 
 ## Login (for the web page)
 

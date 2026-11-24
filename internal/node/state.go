@@ -35,6 +35,10 @@ type State struct {
 // NodeState is what the state file records about the node itself.
 type NodeState struct {
 	Name string `json:"name"`
+	// Transport holds the transport settings of the node that were set while it ran
+	// (since 0.7.0). A setting that the command line of the node gives goes before the
+	// one stored here.
+	Transport Transport `json:"transport,omitempty"`
 }
 
 // Peer is a node this node is paired with.
@@ -51,6 +55,10 @@ type Peer struct {
 	// UDPDial is the host:port of the peer's UDP feedback listener; empty means this
 	// node sends the peer no UDP feedback of its own accord.
 	UDPDial string `json:"udp_dial,omitempty"`
+	// Transport holds the transport settings of the sessions with the peer, at this
+	// node's end (since 0.7.0). A rule's setting goes before it, and it goes before the
+	// node's.
+	Transport Transport `json:"transport,omitempty"`
 }
 
 // PairSecretLen is the length of a pair secret in bytes.
@@ -86,7 +94,7 @@ type Path struct {
 	Subs     int      `json:"subs"`
 	// Mark is the socket mark (SO_MARK) of the connections this node opens on the path
 	// (since 0.5.0); 0 means none. Only Linux has it, and setting it needs the
-	// capability CAP_NET_ADMIN.
+	// capability CAP_NET_ADMIN, or CAP_NET_RAW from Linux 5.17.
 	Mark int `json:"mark,omitempty"`
 }
 
@@ -142,6 +150,7 @@ func (s *State) fill() {
 // clone returns a copy that shares no memory with s.
 func (s *State) clone() *State {
 	c := *s
+	c.Node.Transport = s.Node.Transport.Clone()
 	c.Peers = make([]Peer, len(s.Peers))
 	for i, p := range s.Peers {
 		c.Peers[i] = p.clone()
@@ -170,6 +179,7 @@ func (p Peer) clone() Peer {
 		paths[i] = path
 	}
 	p.Paths = paths
+	p.Transport = p.Transport.Clone()
 	return p
 }
 
@@ -243,7 +253,7 @@ func loadState(path string) (s *State, old bool, err error) {
 			return nil, false, fmt.Errorf("%s: schema version 2 with rules, which no version 2 program wrote. %s", path, kept)
 		}
 		for _, p := range v2.Peers {
-			if p.Allow != "" || p.UDPDial != "" {
+			if p.Allow != "" || p.UDPDial != "" || p.Transport != nil {
 				return nil, false, fmt.Errorf("%s: schema version 2 with fields of version 3. %s", path, kept)
 			}
 		}
@@ -269,6 +279,9 @@ func loadState(path string) (s *State, old bool, err error) {
 // well-formed and do not collide. A rule may name a peer that is not there: the pairing
 // was ended after the rule was made.
 func (s *State) validate() error {
+	if err := s.Node.Transport.Check(true); err != nil {
+		return fmt.Errorf("the transport settings of the node: %w", err)
+	}
 	names, fps := map[string]bool{}, map[string]bool{}
 	for _, p := range s.Peers {
 		if err := CheckName(p.Name); err != nil {
@@ -292,6 +305,9 @@ func (s *State) validate() error {
 			return fmt.Errorf("peer %q, %w", p.Name, err)
 		}
 		if err := checkPeerOptions(p.Allow, p.UDPDial); err != nil {
+			return fmt.Errorf("peer %q: %w", p.Name, err)
+		}
+		if err := p.Transport.Check(false); err != nil {
 			return fmt.Errorf("peer %q: %w", p.Name, err)
 		}
 	}

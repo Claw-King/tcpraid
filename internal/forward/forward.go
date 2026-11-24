@@ -109,6 +109,10 @@ type Runtime struct {
 	// Lookup returns the IP addresses of a host name, for a peer that asks. nil: the
 	// system's resolver.
 	Lookup func(ctx context.Context, host string) ([]net.IP, error)
+	// Pinned names the transport settings that the command line of the node gave: the
+	// Engine's settings hold their values, and a value stored for the node does not
+	// change them (transport.go). Set before Start.
+	Pinned map[string]bool
 }
 
 // runningRule is a fixed rule with its listeners.
@@ -419,7 +423,7 @@ func (rt *Runtime) carryAttempt(a *attempt, r node.Rule, c net.Conn, ip net.IP, 
 			return
 		}
 	}
-	if end, ok := route.Carry(c, ip, port, engine.Owner{Peer: r.Peer, Rule: r.Name}, ps.valid); ok {
+	if end, ok := route.CarryWith(rt.settingsFor(ps.peer, r.Name), c, ip, port, engine.Owner{Peer: r.Peer, Rule: r.Name}, ps.valid); ok {
 		rt.ended(a, r.Peer, net.JoinHostPort(ip.String(), strconv.Itoa(port)), end)
 	}
 }
@@ -664,6 +668,7 @@ func (rt *Runtime) HandleSub(peer node.Peer, conn net.Conn) {
 		Valid:      rt.validFor(peer),
 		Sink:       rt.sink,
 		DialFailed: rt.tellFailure(peer.Name),
+		Config:     rt.settingsFor(peer, ""),
 	})
 }
 
@@ -747,8 +752,16 @@ func (rt *Runtime) AddRule(r node.Rule) error {
 		return err
 	}
 	rt.logf("rule %q added", r.Name)
+	rt.logSettings(r)
 	rt.Apply()
 	return nil
+}
+
+// logSettings logs the transport settings of a rule that has some.
+func (rt *Runtime) logSettings(r node.Rule) {
+	if len(r.Transport) > 0 {
+		rt.logf("rule %q: settings of its connections at this node: %s. Connections that arrive from now on use them.", r.Name, r.Transport)
+	}
 }
 
 // ReplaceRule puts r in the place of the rule called name and applies the change.
@@ -760,6 +773,7 @@ func (rt *Runtime) ReplaceRule(name string, r node.Rule) error {
 		return err
 	}
 	rt.logf("rule %q changed", name)
+	rt.logSettings(r)
 	rt.Apply()
 	return nil
 }

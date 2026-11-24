@@ -79,7 +79,11 @@ type chunk struct {
 }
 
 type session struct {
-	e        *Engine
+	e *Engine
+	// cfg are the settings the session runs with: a copy taken when it was created,
+	// of the engine's settings or of the ones its creator gave. It never changes, so
+	// a session keeps what it began with when the settings of later ones change.
+	cfg      Config
 	id       [16]byte
 	local    net.Conn // LAN side (nil on the server until the destination answers)
 	isClient bool
@@ -205,13 +209,22 @@ func (e *Engine) newSession(id [16]byte, local net.Conn, isClient bool, dst stri
 // newSessionFor is newSession for a session that belongs to owner. The owner and the
 // header key are set here for the same reason as dst.
 func (e *Engine) newSessionFor(id [16]byte, local net.Conn, isClient bool, dst string, ks keys, owner Owner) *session {
+	return e.newSessionWith(nil, id, local, isClient, dst, ks, owner)
+}
+
+// newSessionWith is newSessionFor for a session that runs with the settings cfg; nil:
+// the engine's.
+func (e *Engine) newSessionWith(cfg *Config, id [16]byte, local net.Conn, isClient bool, dst string, ks keys, owner Owner) *session {
+	if cfg == nil {
+		cfg = &e.cfg
+	}
 	now := time.Now()
 	if local != nil {
 		ArmReset(local)
 	}
-	s := &session{e: e, id: id, local: local, isClient: isClient, dstAddr: dst, owner: owner, hdrKey: ks.hdr, chunks: map[uint64]*chunk{}, sackSize: map[uint64]int{},
-		pending: map[uint64][]byte{}, pendAt: map[uint64]time.Duration{}, sendWin: e.cfg.Window, peerBudget: e.cfg.Window,
-		recvBudget: e.cfg.Window, sendFin: -1, peerFin: -1, started: now, lastPeer: now, snapAt: now}
+	s := &session{e: e, cfg: *cfg, id: id, local: local, isClient: isClient, dstAddr: dst, owner: owner, hdrKey: ks.hdr, chunks: map[uint64]*chunk{}, sackSize: map[uint64]int{},
+		pending: map[uint64][]byte{}, pendAt: map[uint64]time.Duration{}, sendWin: cfg.Window, peerBudget: cfg.Window,
+		recvBudget: cfg.Window, sendFin: -1, peerFin: -1, started: now, lastPeer: now, snapAt: now}
 	if ks.configured {
 		if isClient {
 			s.keyOut, s.keyIn = ks.snapC2S, ks.snapS2C
@@ -233,7 +246,7 @@ func (s *session) ofPair(peer string, ks keys) bool {
 }
 
 func (s *session) logf(f string, a ...interface{}) {
-	if s.e.cfg.Verbose {
+	if s.cfg.Verbose {
 		log.Printf("[%x] "+f, append([]interface{}{s.id[:3]}, a...)...)
 	}
 }
@@ -262,7 +275,7 @@ func (s *session) mark() {
 // connection: this one, or the other.
 func (s *session) addSub(c net.Conn, idx uint16, path uint8, ctrl, repair bool, awaitReply, dialed bool) {
 	now := time.Now()
-	sb := &sub{c: c, w: bufio.NewWriterSize(c, 64<<10), wdead: s.e.cfg.Dead, idx: idx, path: path, ctrl: ctrl, repair: repair && !ctrl,
+	sb := &sub{c: c, w: bufio.NewWriterSize(c, 64<<10), wdead: s.cfg.Dead, idx: idx, path: path, ctrl: ctrl, repair: repair && !ctrl,
 		name: c.LocalAddr().String(), born: now, lastRecv: now, replied: !awaitReply, dialed: dialed}
 	if ctrl {
 		sb.name += " (ctrl)"
@@ -774,7 +787,7 @@ func (s *session) buildSnapshot() *snapshot {
 // about 2 x -budget of stream data (lock held).
 func (s *session) recvCap() int {
 	others := int(s.e.recvB.Load()) - s.pendingB
-	return max(min(s.recvBudget, s.e.cfg.Budget-others), 2*s.e.cfg.Chunk)
+	return max(min(s.recvBudget, s.cfg.Budget-others), 2*s.cfg.Chunk)
 }
 
 // sendAbort tells the peer at once, on every channel, that this session is being reset:
@@ -884,7 +897,7 @@ func (s *session) onSnapshot(sb *sub, sn *snapshot) {
 			// loop since we last sent it
 			// chunks on different subs legitimately arrive up to about one queue depth
 			// (targetNow) apart, so the wait counts beyond that
-			if age > (s.e.cfg.Hol+s.targetNow())*time.Duration(c.tries+1) && now.Sub(c.sentAt) > loopOf(c.carrier) {
+			if age > (s.cfg.Hol+s.targetNow())*time.Duration(c.tries+1) && now.Sub(c.sentAt) > loopOf(c.carrier) {
 				late = append(late, q)
 			}
 		}
@@ -1025,7 +1038,7 @@ func (s *session) addLoop(sb *sub, d time.Duration) {
 // capB: bytes one data sub may hold in flight -- its delivery rate times its base
 // feedback loop plus -target, at most its rate share of the window (lock held).
 func (s *session) capB(sb *sub) int64 {
-	chunkN := int64(s.e.cfg.Chunk)
+	chunkN := int64(s.cfg.Chunk)
 	if sb.rate <= 0 {
 		return 4 * chunkN
 	}
@@ -1034,7 +1047,7 @@ func (s *session) capB(sb *sub) int64 {
 		l = 300 * time.Millisecond
 	}
 	c := int64(sb.rate * (l + s.targetNow()).Seconds())
-	if s.e.cfg.Share && sb.avg > 0 {
+	if s.cfg.Share && sb.avg > 0 {
 		var sum float64
 		for _, x := range s.subs {
 			if !x.dead && !x.ctrl {
@@ -1060,9 +1073,9 @@ func (s *session) capB(sb *sub) int64 {
 // channels exist (lock held).
 func (s *session) targetNow() time.Duration {
 	if time.Now().Before(s.fbStallTill) {
-		return s.e.cfg.PigTarget
+		return s.cfg.PigTarget
 	}
-	return s.e.cfg.Target
+	return s.cfg.Target
 }
 
 // inflight: data sb holds that the peer has not reported. While feedback is stale for the
@@ -1228,7 +1241,7 @@ var waitNames = [nWait]string{"empty", "cap"}
 // data subs only as the fallback -- one per second while a control sub is up, else on
 // -fbsubs of them (lock held).
 func (s *session) snapDue(sb *sub, now time.Time) bool {
-	if (s.snapDirty && now.Sub(s.snapAt) >= s.e.cfg.FbEvery) || now.Sub(s.snapAt) >= time.Second {
+	if (s.snapDirty && now.Sub(s.snapAt) >= s.cfg.FbEvery) || now.Sub(s.snapAt) >= time.Second {
 		s.snapGen++
 		s.snapAt = now
 		s.snapDirty = false
@@ -1243,7 +1256,7 @@ func (s *session) snapDue(sb *sub, now time.Time) bool {
 	if _, nc := s.counts(); nc > 0 || s.udpUp() {
 		return now.Sub(s.pigAt) >= time.Second
 	}
-	return s.genData < max(s.e.cfg.FbSubs, 1)
+	return s.genData < max(s.cfg.FbSubs, 1)
 }
 
 func (s *session) writer(sb *sub) {
@@ -1283,7 +1296,7 @@ func (s *session) writer(sb *sub) {
 			}
 			wait := 100 * time.Millisecond
 			if s.snapDirty {
-				wait = s.e.cfg.FbEvery
+				wait = s.cfg.FbEvery
 			}
 			waitTimeout(s.cond, wait)
 			if !sb.ctrl {
@@ -1331,8 +1344,8 @@ func (s *session) pumpLocal() {
 	for {
 		s.mu.Lock()
 		w0 := time.Now()
-		for !s.closed && (s.unackedB+s.e.cfg.Chunk > s.sendWin || s.unackedB+s.sackB+s.e.cfg.Chunk > s.peerBudget ||
-			(s.unackedB > 0 && s.e.globalB.Load()+int64(s.e.cfg.Chunk) > int64(s.e.cfg.Budget))) {
+		for !s.closed && (s.unackedB+s.cfg.Chunk > s.sendWin || s.unackedB+s.sackB+s.cfg.Chunk > s.peerBudget ||
+			(s.unackedB > 0 && s.e.globalB.Load()+int64(s.cfg.Chunk) > int64(s.cfg.Budget))) {
 			waitTimeout(s.cond, 100*time.Millisecond)
 		}
 		pw := time.Since(w0)
@@ -1343,10 +1356,10 @@ func (s *session) pumpLocal() {
 			return
 		}
 		s.mu.Unlock()
-		buf := make([]byte, s.e.cfg.Chunk)
+		buf := make([]byte, s.cfg.Chunk)
 		n, err := s.local.Read(buf)
-		if err == nil && n < len(buf) && s.e.cfg.Coalesce > 0 {
-			s.local.SetReadDeadline(time.Now().Add(s.e.cfg.Coalesce))
+		if err == nil && n < len(buf) && s.cfg.Coalesce > 0 {
+			s.local.SetReadDeadline(time.Now().Add(s.cfg.Coalesce))
 			for n < len(buf) {
 				m, e := s.local.Read(buf[n:])
 				n += m
@@ -1426,7 +1439,7 @@ func (s *session) slowSub(live []*sub) *sub {
 		med := rs[len(rs)/2]
 		for _, x := range el {
 			busy := x.sentB-x.rcvdB >= s.capB(x)/2
-			if busy && med >= float64(s.e.cfg.KickFloor) && x.rate5 < med/s.e.cfg.KickRatio {
+			if busy && med >= float64(s.cfg.KickFloor) && x.rate5 < med/s.cfg.KickRatio {
 				x.slowTicks++
 			} else {
 				x.slowTicks = 0
@@ -1470,7 +1483,7 @@ func (s *session) monitor(redial func()) {
 				continue
 			}
 			live = append(live, x)
-			silent := time.Since(x.lastRecv) > s.e.cfg.Dead
+			silent := time.Since(x.lastRecv) > s.cfg.Dead
 			if x.ctrl {
 				if silent { // snapshots flow both ways at least once a second
 					stale = append(stale, x)
@@ -1480,7 +1493,7 @@ func (s *session) monitor(redial func()) {
 			data = append(data, x)
 			// a data sub is judged by the progress the peer reports, never by its own
 			// reverse direction (which may be stalled while the forward one delivers)
-			if silent && x.sentB > x.rcvdB && time.Since(lastOf(x.lastProg, x.busySince)) > s.e.cfg.Dead {
+			if silent && x.sentB > x.rcvdB && time.Since(lastOf(x.lastProg, x.busySince)) > s.cfg.Dead {
 				stale = append(stale, x)
 			}
 		}
@@ -1514,12 +1527,12 @@ func (s *session) monitor(redial func()) {
 		neverUp := s.isClient && !s.everUp && time.Since(s.started) > 30*time.Second
 		zeroClean := zero && s.rxDone && txDone
 		var victim *sub
-		if s.e.cfg.Chaos > 0 && s.isClient && len(data) > 1 && time.Since(lastChaos) > s.e.cfg.Chaos {
+		if s.cfg.Chaos > 0 && s.isClient && len(data) > 1 && time.Since(lastChaos) > s.cfg.Chaos {
 			lastChaos = time.Now()
 			victim = data[time.Now().UnixNano()%int64(len(data))]
 		}
 		tl := ""
-		if s.e.cfg.Timeline > 0 && time.Since(s.tl.at) >= s.e.cfg.Timeline {
+		if s.cfg.Timeline > 0 && time.Since(s.tl.at) >= s.cfg.Timeline {
 			tl = s.timelineLocked(data)
 		}
 		adopted := s.adopted
@@ -1757,9 +1770,9 @@ const testGrace = 30 * time.Second
 // held).
 func (s *session) grace() time.Duration {
 	if s.owner.Test && s.everUp {
-		return min(s.e.cfg.Grace, testGrace)
+		return min(s.cfg.Grace, testGrace)
 	}
-	return s.e.cfg.Grace
+	return s.cfg.Grace
 }
 
 // end says how the session ended. Call it after monitor has returned.

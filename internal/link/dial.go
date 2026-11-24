@@ -181,7 +181,7 @@ func (d *Dialer) DialAt(ctx context.Context, peer node.Peer, path node.Path, add
 	conn, err := engine.DialContextMark(ctx, path.Addr, proxy, path.Mark)
 	if err != nil {
 		if path.Mark != 0 && errors.Is(err, os.ErrPermission) {
-			return nil, fmt.Errorf("the path's socket mark %d could not be set, because the node lacks the capability CAP_NET_ADMIN. Give the node that capability, or take the mark off the path. (%w)", path.Mark, err)
+			return nil, fmt.Errorf("the path's socket mark %d could not be set, because the node lacks the capability for it. Give the node CAP_NET_ADMIN, or CAP_NET_RAW on Linux 5.17 and later, or take the mark off the path. (%w)", path.Mark, err)
 		}
 		return nil, err
 	}

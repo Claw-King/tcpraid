@@ -12,7 +12,7 @@ package main
 //	tcpraid peers remove NAME [-with-rules]
 //	tcpraid peers check NAME
 //	tcpraid peers test NAME [-seconds N] [-path PATH] [-json]
-//	tcpraid peers set NAME [-allow LIST] [-udp-dial HOST:PORT]
+//	tcpraid peers set NAME [-allow LIST] [-udp-dial HOST:PORT] [-SETTING VALUE]...
 //	tcpraid peers path set NAME PATH [-addr A] [-type T] [-proxy P] [-security S] [-verify V] [-pin F] [-roles R,...] [-subs N]
 //	tcpraid peers path remove NAME PATH
 //
@@ -422,7 +422,7 @@ func cmdPeersPath(args []string, stdout, stderr io.Writer) int {
 			flags: func(fs *flag.FlagSet) {
 				set = fs
 				fs.StringVar(&f.addr, "addr", "", "HOST:PORT of the peer's listener as seen from the end of the path (needed for a new path). Several, separated by commas, are tried in that order when a connection cannot be made.")
-				fs.IntVar(&f.mark, "mark", 0, "socket mark of the path's connections, on Linux only and with the capability CAP_NET_ADMIN (0: none)")
+				fs.IntVar(&f.mark, "mark", 0, "socket mark of the path's connections, on Linux only and with the capability CAP_NET_ADMIN or, from Linux 5.17, CAP_NET_RAW (0: none)")
 				fs.StringVar(&f.typ, "type", "", "tcp or socks5 (a new path: tcp)")
 				fs.StringVar(&f.proxy, "proxy", "", "socks5://[user:pass@]host:port, with -type socks5")
 				fs.StringVar(&f.security, "security", "", "tls, owncert or off (a new path: tls)")
@@ -519,6 +519,7 @@ func cmdPeers(args []string, stdout, stderr io.Writer) int {
 	}
 	var set *flag.FlagSet
 	var allow, udpDial string
+	var peerTransport map[string]*string
 	var test api.PeerTestRequest
 	var testJSON, withRules bool
 	return dispatch("peers", "list", []string{"list", "show", "remove", "check", "test", "set", "path"}, map[string]command{
@@ -557,6 +558,7 @@ func cmdPeers(args []string, stdout, stderr io.Writer) int {
 				set = fs
 				fs.StringVar(&allow, "allow", "", "destinations the peer may reach through this node, as networks with an optional port or range, separated by commas, such as 192.0.2.0/24:873,[2001:db8::/32]:5000-5010 (\"\": any destination)")
 				fs.StringVar(&udpDial, "udp-dial", "", "HOST:PORT of the peer's -udp-listen, to which this node sends feedback for sessions with it (\"\": none)")
+				peerTransport = settingFlags(fs, false, "sessions with the peer then use the node's value")
 			},
 			run: func(dataDir string, args []string, stdout, _ io.Writer) error {
 				var req api.PeerUpdate
@@ -568,12 +570,15 @@ func cmdPeers(args []string, stdout, stderr io.Writer) int {
 						req.UDPDial = &udpDial
 					}
 				})
-				if req.Allow == nil && req.UDPDial == nil {
-					return errors.New("nothing to set. Give -allow, -udp-dial or both. An empty value clears the setting.")
+				if len(peerTransport) > 0 {
+					req.Transport = peerTransport
+				}
+				if req.Allow == nil && req.UDPDial == nil && req.Transport == nil {
+					return errors.New("nothing to set. Give -allow, -udp-dial or a transport setting such as -window 256MB. An empty value clears -allow or -udp-dial, and the word default takes a transport setting off.")
 				}
 				var stored api.Peer
 				if err := apiCall(dataDir, http.MethodPut, peerPath(args[0]), req, &stored, shortCall); err != nil {
-					return err
+					return olderNode(err, map[string]string{"transport": "transport settings for a peer"})
 				}
 				if req.Allow != nil {
 					if stored.Allow == "" {
@@ -588,6 +593,14 @@ func cmdPeers(args []string, stdout, stderr io.Writer) int {
 					} else {
 						fmt.Fprintf(stdout, "UDP feedback for sessions with %s goes to %s\n", stored.Name, stored.UDPDial)
 					}
+				}
+				if req.Transport != nil {
+					if len(stored.Transport) == 0 {
+						fmt.Fprintf(stdout, "sessions with %s use the node's transport settings\n", stored.Name)
+					} else {
+						fmt.Fprintf(stdout, "sessions with %s use, in the place of the node's settings: %s\n", stored.Name, transportText(stored.Transport))
+					}
+					fmt.Fprintln(stdout, "Sessions that begin from now on use this. Sessions that run now keep what they began with.")
 				}
 				return nil
 			},
@@ -616,6 +629,9 @@ func cmdPeers(args []string, stdout, stderr io.Writer) int {
 				}
 				if p.Spares > 0 {
 					fmt.Fprintf(stdout, "spares       %d connections wait for a session to begin on them\n", p.Spares)
+				}
+				if len(p.Transport) > 0 {
+					fmt.Fprintf(stdout, "transport    %s (for sessions with this peer, in the place of the node's settings)\n", transportText(p.Transport))
 				}
 				if len(p.Paths) == 0 {
 					fmt.Fprintln(stdout, "paths        none: this node cannot reach it (tcpraid peers path set adds one)")

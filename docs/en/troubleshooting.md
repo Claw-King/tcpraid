@@ -39,7 +39,7 @@ taken  0.0.0.0:9700  nas-a  192.0.2.10:873  0         FAILED: listening on 0.0.0
 | "peer ... does not answer on the connections this node opens", and after 30 seconds "peer ... answered on none of the connections within 30 seconds" | none of the sub-connections came up, and the text after it says what the attempts ran into. One cause: the pairing was ended on the other node. The rule then says "the other node does not accept this node, which is not paired with it or no longer is", and the other node's log has lines "refused a connection from ...: not a peer of this node". Pair again |
 | "the connections to peer ... cannot be opened" with an error | this node cannot connect to the peer's listener at all. `tcpraid peers check NAME` tries each path |
 | "none of the path's N addresses gave a connection", followed by each address and its error | the path names several addresses and none of them worked. `tcpraid peers check NAME` tries each address on its own |
-| "the path's socket mark N could not be set, because the node lacks the capability CAP_NET_ADMIN" | the path has a mark and the node may not set one. Give the node that capability, or take the mark off with `tcpraid peers path set NAME PATH -mark 0` |
+| "the path's socket mark N could not be set, because the node lacks the capability for it" | the path has a mark and the node may not set one. Give the node the capability `CAP_NET_ADMIN`, or `CAP_NET_RAW` on Linux 5.17 and later, or take the mark off with `tcpraid peers path set NAME PATH -mark 0` |
 | "the rule names the path NAME, and this node has no path of that name to peer ... that carries data" | the rule has `-paths` with a name that is no path for data on this node. `tcpraid peers show PEER` lists the paths |
 | "peer ... could not open the connections: it has no path called NAME that carries data" | the same, where the peer holds the paths: the name in the rule's `-paths` is not one of the peer's paths for data. Look at the paths on the peer |
 | "peer ... does not keep a rule to the paths it names (it runs version ...)" | the rule has `-paths` or `-subs`, the peer holds the paths, and the peer is older than 0.5.0. Update it, or add the rule without the two flags |
@@ -157,8 +157,8 @@ A node without a path to its peer cannot check, and says `this node has no path 
 - When a session ends, both nodes log two lines about it: bytes, chunks sent
   again, sub-connections replaced, time stalled. A node started with
   `-timeline` logs the same kind of figures while the session runs. The next
-  section explains them, and how they tell whether to change `-window` or
-  `-hol` (`reference-files.md`).
+  section explains them, and how they tell whether to change a transport
+  setting such as `-window` or `-hol` (`reference-files.md`).
 
 ## Reading the session lines in the log
 
@@ -193,7 +193,7 @@ moment of the line.
 | `fbage` | seconds since the last report from the peer arrived (`-1`: none yet) |
 | `fb=IN/OUT` | reports received and sent since the previous line (of those sent, the copies over UDP are not counted) |
 | `fbc`, `fbu` | of the reports received, those that came on control connections and over UDP |
-| `cap=A/N` | of the `N` live sub-connections that carry data (roles `data` and `repair`), `A` hold as much in flight as they are allowed |
+| `cap=A/N` | of the `N` live sub-connections that carry data (roles `data` and `repair`), `A` hold as much in flight as they are allowed. The allowance is what arrives within the feedback loop plus the allowed queue (`-target`) |
 | `holage` | receiving: seconds the oldest data in `pend` has waited for a chunk that is missing before it |
 | `pumpwait` | share of the time since the previous line that this node did not read from the application because `-window`, the peer's window or `-budget` was full. A wait is counted in the line during which it ends: one wait that lasts over several lines shows as 0 in them and then as a value above 1 |
 | `starve` | share of the time an average data sub-connection had room and nothing to send. Sub-connections of a `repair` path count and are idle most of the time |
@@ -214,12 +214,23 @@ What limits a transfer shows at the sending node:
   large. Look at the receiving node. If its `holage` is above zero, data
   waits there for missing chunks. A larger `-window` at both nodes gives it
   more room, and a shorter `-hol` at the sending node sends a missing chunk
-  again sooner, at the price of some chunks sent twice. If its `holage` stays
+  again sooner, at the price of some chunks sent twice. The sending node sends
+  a chunk again once later data has waited for `-hol` plus the allowed queue.
+  While `holage` stays well below that, the chunks that are waited for arrive
+  without being sent again, and a shorter `-hol` adds copies and no speed. If
+  its `holage` stays
   at zero while its `pend` is large, the application there is slow to take
   the data, and no setting of tcpraid changes that. The `stall` figure in its
   end line says for how long. If its `holage` is zero and its `pend` is small
   as well, nothing waits there. The window is then smaller than what the path
   holds in flight, and a larger `-window` at both nodes may let more through.
+
+Every setting named here can be changed while the node runs, with
+`tcpraid transport set`, and for one peer or one rule alone, with
+`tcpraid peers set` and `tcpraid rules set`. A change acts on the sessions
+that begin afterwards, so start the transfer again to see what it does.
+`reference-files.md` lists all the settings under "The transport settings",
+each with the figure that belongs to it.
 
 ### The two lines at the end
 
@@ -228,7 +239,11 @@ What limits a transfer shows at the sending node:
 [ddc465] session diag: pump win 0.7s | resent | subs died lost=0 silent=0 write=0 slow=0 | fb gap max 0.0s >1s 0 | gap repairs 0 (retries 0) ms p50/p95/max: peer wait 0/0/0, queued 0/0/0, to release 0/0/0 | snapshots truncated 0
 ```
 
-`session end` (or `session aborted`) gives the reason, then:
+`session end` (or `session aborted`) gives the reason. Two reasons are not
+what they seem. `local read: the path test is over` is how the sessions of
+`tcpraid peers test` end, and is no fault. `server could not reach ADDRESS`
+also stands for a destination that the peer's allow list does not let
+through, and `tcpraid rules` gives the reason then. After the reason come:
 
 | Field | Meaning |
 |---|---|
@@ -236,7 +251,7 @@ What limits a transfer shows at the sending node:
 | `tx`, `rx` | stream data sent (first time only) and received |
 | `chunks` | chunks sent for the first time |
 | `resends` | chunks queued to be sent again |
-| `kicks` | sub-connections replaced for being much slower than the others of their path |
+| `kicks` | sub-connections replaced for being much slower than the others of their path (`-kickratio`, `-kickfloor`) |
 | `subs` | sub-connections that came up over the life of the session |
 | `stall` | time spent in writes to the application that each took over 50 ms: the application, or the stretch to it, was slow to take the data |
 
@@ -246,10 +261,10 @@ What limits a transfer shows at the sending node:
 |---|---|
 | `pump win` | total time this node did not read from the application because a window or the budget was full (the sum behind `pumpwait`) |
 | `resent gap=N stall=N dead=N` | why chunks were queued again: the peer reported later data waiting for it (`gap`); it was not reported received long after it was due (`stall`); its sub-connection ended (`dead`). Causes with a count of zero are left out |
-| `subs died lost / silent / write / slow` | how sub-connections ended: the connection failed or was closed (`lost`, which includes the ones the other node closes when the session finishes); no progress for 20 seconds (`silent`); a write that did not finish in time (`write`); replaced for being slow (`slow`) |
+| `subs died lost / silent / write / slow` | how sub-connections ended: the connection failed or was closed (`lost`, which includes the ones the other node closes when the session finishes); no progress for the time of `-dead`, 20 seconds by default (`silent`); a write that did not finish in that time (`write`); replaced for being slow (`slow`) |
 | `fb gap max`, `>1s N` | the longest time between two reports from the peer while data was unacknowledged, and how often it was over a second |
 | `gap repairs N (retries R)` | chunks that were sent again because the peer reported them missing and that it then reported received (the count stops at 4096; `resent gap=` has them all), and how many sends for a missing chunk were not the first for it |
-| `peer wait` | for those chunks: how long later data had waited at the peer when this node decided to send the chunk again. **It is not a property of the path.** The decision is taken once the wait is over `-hol` plus the allowed queue (300 ms; 1 s for a while after reports stalled), so with the defaults it is never below 1.3 s and usually just above |
+| `peer wait` | for those chunks: how long later data had waited at the peer when this node decided to send the chunk again. **It is not a property of the path.** The decision is taken once the wait is over `-hol` plus the allowed queue (`-target`, 300 ms by default, or `-pigtarget`, 1 s, for a while after reports stalled), so with the defaults it is never below 1.3 s and usually just above |
 | `queued` | from that decision until the chunk was handed to a sub-connection |
 | `to release` | from that decision until the peer reported the chunk received |
 | `snapshots truncated` | reports this node built that could not list every range it holds out of order |
@@ -278,7 +293,7 @@ others are the state at that moment.
 | `heap` | memory the Go runtime has in use for the heap |
 | `unacked` | data of all sessions that was read from applications and that the peers have not reported received; `-budget` limits it |
 | `resends` | counter: chunks queued to be sent again |
-| `kicks=A/B/C` | counters: sub-connections this node replaced because they were much slower than the others of their path (`A`), made no progress for 20 seconds (`B`), or did not finish a write in time (`C`) |
+| `kicks=A/B/C` | counters: sub-connections this node replaced because they were much slower than the others of their path (`A`), made no progress for the time of `-dead` (`B`), or did not finish a write in that time (`C`) |
 | `rxdrop` | counter: chunks dropped on arrival because the space for data out of order was full; the peer sends them again |
 | `udp in/out/bad/toobig/old` | counters for UDP feedback: datagrams accepted; sent; rejected (not for a session of this node, or failed authentication); reports that were too large for a datagram and went over the TCP connections only; authentic datagrams that were not newer than one already seen |
 
@@ -331,6 +346,11 @@ stream data.
   same `-data` as the node has, which in the container is `-data /data`.
 - The log warns when the data directory or its key files can be read or
   written by others. Fix the permissions.
+- "the budget of ... that is stored in the node does not fit: -maxrss ... is
+  below 2 x budget + 100 MB ...": a budget was set with
+  `tcpraid transport set`, and this start gives a `-maxrss` that is too low
+  for it. Start with a higher `-maxrss`, or with `-budget`, which goes
+  before the stored value.
 
 ## Numbers for monitoring
 

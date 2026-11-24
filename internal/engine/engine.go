@@ -176,6 +176,11 @@ func New(cfg Config) *Engine {
 	return &Engine{cfg: cfg, sess: map[[16]byte]*session{}, ended: map[[16]byte]endInfo{}}
 }
 
+// Config returns the settings the Engine was made with. A session runs with a copy of
+// them unless its creator gave it others (Route.CarryWith, NewReverseWith,
+// SubOptions.Config).
+func (e *Engine) Config() Config { return e.cfg }
+
 // Keys are the keys two ends share: they authenticate the headers and the snapshots of
 // the sessions between them, and seal their UDP feedback. The zero value means none.
 type Keys struct {

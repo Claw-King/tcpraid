@@ -40,7 +40,7 @@ tcpraid -mode client -listen 127.0.0.1:9801 -remote server.example.org:9901 \
 
 ```
 $ tcpraid -check -mode client -listen 127.0.0.1:9801 -remote server.example.org:9901 -dst 192.0.2.5:873 -psk psk
-ok: 0.6.0 client paths [data/data x8], window 128 MB, budget 256 MB, maxrss 0 MB, grace 15m0s, psk true, udp listen "" dial ""
+ok: 0.7.0 client paths [data/data x8], window 128 MB, budget 256 MB, maxrss 0 MB, grace 15m0s, psk true, udp listen "" dial ""
 ```
 
 ## 透明使用
@@ -72,7 +72,7 @@ table ip tcpraid {
 
 路径在配置文件里设置(见下)。命令行参数描述的是常见情形，即一条数据路径(`-remote`、`-n`、`-socks`)，可选地再加控制连接(`-ctrl`、`-ctrlremote`、`-ctrlsocks`)。
 
-想让某条路径走特定的线路而又不需要额外权限，就让它指向一个目的地是 tcpraid server 的代理或端口转发。`mark`(SO_MARK)可以用于策略路由，但需要 CAP_NET_ADMIN。它只在 Linux 上有，在别的系统上，带 mark 的路径会在启动时被拒绝。
+想让某条路径走特定的线路而又不需要额外权限，就让它指向一个目的地是 tcpraid server 的代理或端口转发。`mark`(SO_MARK)可以用于策略路由，但需要 CAP_NET_ADMIN，Linux 5.17 起有 CAP_NET_RAW 也可以。它只在 Linux 上有，在别的系统上，带 mark 的路径会在启动时被拒绝。
 
 ## 回执通道
 
@@ -115,7 +115,7 @@ limits: { maxrss_mb: 700, maxsess: 64 }
 
 ```
 $ tcpraid -config client.yaml -check
-ok: 0.6.0 client paths [main/data x8, second/repair x4, second/control x1, proxy/data x4], window 128 MB, budget 256 MB, maxrss 700 MB, grace 15m0s, psk true, udp listen "0.0.0.0:8445" dial ""
+ok: 0.7.0 client paths [main/data x8, second/repair x4, second/control x1, proxy/data x4], window 128 MB, budget 256 MB, maxrss 700 MB, grace 15m0s, psk true, udp listen "0.0.0.0:8445" dial ""
 ```
 
 `addr` 是 client 经这条路径要去连的地址。它是 tcpraid server 的监听，或者通往它的入口。对于目的地固定的端口转发或代理入口，它就是那个转发的地址。server 不需要 `paths`：

@@ -37,7 +37,7 @@ type pathCfg struct {
 	Type  string   `yaml:"type"`  // tcp (default) or socks5
 	Addr  string   `yaml:"addr"`  // the tcpraid server as seen from the end of this path
 	Proxy string   `yaml:"proxy"` // socks5://[user:pass@]host:port (type socks5)
-	Mark  int      `yaml:"mark"`  // optional SO_MARK on its sockets (needs CAP_NET_ADMIN)
+	Mark  int      `yaml:"mark"`  // optional SO_MARK on its sockets (needs CAP_NET_ADMIN, or CAP_NET_RAW from Linux 5.17)
 	Roles []string `yaml:"roles"` // data, repair, control
 	Subs  int      `yaml:"subs"`  // data subs (default 8) or repair subs (default 2)
 	Ctrl  int      `yaml:"ctrl"`  // control subs (default 1 when the path has the control role)

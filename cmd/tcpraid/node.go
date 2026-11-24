@@ -1,13 +1,13 @@
 package main
 
-// Subcommands: tcpraid run, status, version, pair, peers, rules and sessions. A first argument
+// Subcommands: tcpraid run, status, version, pair, peers, rules, sessions and transport. A first argument
 // that does not start with "-" names one; any other command line is the manual mode in
 // main.go.
 //
 // "run" starts a node: a long-running process with a data directory (identity, state),
 // a local HTTP API, its forwarding rules and, if asked for, listeners for other nodes.
 // The other commands ask the node on this host through that API; "pair" and "peers" are
-// in peers.go, "rules" in rules.go, "sessions" in sessions.go.
+// in peers.go, "rules" in rules.go, "sessions" in sessions.go, "transport" in transport.go.
 
 import (
 	"context"
@@ -75,9 +75,11 @@ func subcommand(args []string, stdout, stderr io.Writer) (code int, ok bool) {
 		return cmdRules(args[1:], stdout, stderr), true
 	case "sessions":
 		return cmdSessions(args[1:], stdout, stderr), true
+	case "transport":
+		return cmdTransport(args[1:], stdout, stderr), true
 	}
 	fmt.Fprintf(stderr, "tcpraid: unknown command %q\n"+
-		"commands: run, status, version, pair, peers, rules, sessions (tcpraid COMMAND -h lists a command's flags)\n"+
+		"commands: run, status, version, pair, peers, rules, sessions, transport (tcpraid COMMAND -h lists a command's flags)\n"+
 		"without a command, tcpraid takes the manual-mode flags (tcpraid -h)\n", args[0])
 	return 2, true
 }
@@ -153,6 +155,7 @@ func runFlags(args []string, stderr io.Writer) (o runOptions, code int, done boo
 	if code, done := parseFlags(fs, args); done {
 		return o, code, true
 	}
+	transport.noteGiven(fs)
 	if *dataDir == "" {
 		fmt.Fprintln(stderr, "tcpraid run: -data is empty. Name the data directory.")
 		return o, 2, true
@@ -258,11 +261,26 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 		// what a peer puts into a path of the owncert tier that verifies by pin
 		log.Printf("certificate of -cert: key fingerprint %s", node.Fingerprint(c.Leaf))
 	}
+	// The engine holds the defaults and what the command line gives. What was set
+	// while a node ran is stored in the node and read for each session that begins;
+	// here it is only checked against the command line and shown.
 	cfg := o.engineConfig()
+	var given map[string]bool
+	if o.transport != nil {
+		given = o.transport.given
+	}
+	stored := n.Transport()
+	atStart := node.ResolveTransport(cfg, given, stored, nil, nil)
+	if err := node.CheckTransportFit(atStart); err != nil {
+		if stored["budget"] != "" && !given["budget"] {
+			return fmt.Errorf("the budget of %s that is stored in the node does not fit: %w Start the node with -budget to go before the stored value.", stored["budget"], err)
+		}
+		return err
+	}
 	e := engine.New(cfg)
 
 	dialer := &link.Dialer{Identity: n.Identity}
-	rules := &forward.Runtime{Node: n, Engine: e, Dialer: dialer, Version: version, Logf: log.Printf, Spares: defaultSpares}
+	rules := &forward.Runtime{Node: n, Engine: e, Dialer: dialer, Version: version, Logf: log.Printf, Spares: defaultSpares, Pinned: given}
 	if o.spares != nil {
 		rules.Spares = *o.spares
 	}
@@ -337,8 +355,16 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 	}
 	log.Printf("node %s name=%q fingerprint=%s data=%s api=%s listen=%s listen-plain=%s transparent=%s udp-listen=%s", version, n.Name(), n.Identity.Fingerprint(),
 		n.Dir, bound["-api"], bound["-listen"], bound["-listen-plain"], bound["-transparent"], bound["-udp-listen"])
-	transport := transportOptions{window: cfg.Window, budget: cfg.Budget, grace: cfg.Grace, hol: cfg.Hol, timeline: cfg.Timeline, maxRSS: cfg.MaxRSS}
+	transport := transportOptions{window: atStart.Window, budget: atStart.Budget, grace: atStart.Grace, hol: atStart.Hol, timeline: atStart.Timeline, maxRSS: atStart.MaxRSS}
 	log.Printf("transport %s", &transport)
+	// the line above is read by scripts and stays as it is; what else is not at its
+	// default has a line to itself
+	if more := tuned(atStart); more != "" {
+		log.Printf("tuned %s", more)
+	}
+	if len(stored) > 0 {
+		log.Printf("settings stored in the node while it ran: %s. A setting that the command line gives goes before the stored one.", stored)
+	}
 
 	// where the web page is, as something to type into a browser: the line above says
 	// only "api=", and a person who starts a node for the first time looks for this

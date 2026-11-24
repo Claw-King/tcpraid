@@ -49,7 +49,7 @@ Now connect the application to `127.0.0.1:9801` instead of `192.0.2.5:873`.
 
 ```
 $ tcpraid -check -mode client -listen 127.0.0.1:9801 -remote server.example.org:9901 -dst 192.0.2.5:873 -psk psk
-ok: 0.6.0 client paths [data/data x8], window 128 MB, budget 256 MB, maxrss 0 MB, grace 15m0s, psk true, udp listen "" dial ""
+ok: 0.7.0 client paths [data/data x8], window 128 MB, budget 256 MB, maxrss 0 MB, grace 15m0s, psk true, udp listen "" dial ""
 ```
 
 ## Transparent use
@@ -94,8 +94,8 @@ control connections (`-ctrl`, `-ctrlremote`, `-ctrlsocks`).
 
 To send a path a particular way without extra privileges, point it at a proxy
 or port forward whose destination is the tcpraid server. `mark` (SO_MARK) is
-available for policy routing but needs CAP_NET_ADMIN. It exists on Linux
-only, and elsewhere a path with a mark is refused at the start.
+available for policy routing but needs CAP_NET_ADMIN, or CAP_NET_RAW on
+Linux 5.17 and later. It exists on Linux only, and elsewhere a path with a mark is refused at the start.
 
 ## Feedback channels
 
@@ -147,7 +147,7 @@ limits: { maxrss_mb: 700, maxsess: 64 }
 
 ```
 $ tcpraid -config client.yaml -check
-ok: 0.6.0 client paths [main/data x8, second/repair x4, second/control x1, proxy/data x4], window 128 MB, budget 256 MB, maxrss 700 MB, grace 15m0s, psk true, udp listen "0.0.0.0:8445" dial ""
+ok: 0.7.0 client paths [main/data x8, second/repair x4, second/control x1, proxy/data x4], window 128 MB, budget 256 MB, maxrss 700 MB, grace 15m0s, psk true, udp listen "0.0.0.0:8445" dial ""
 ```
 
 `addr` is the address the client dials over that path. It is the tcpraid

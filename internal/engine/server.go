@@ -151,6 +151,9 @@ type SubOptions struct {
 	// DialFailed, if not nil, is told when a session could not be connected to its
 	// destination, before the other end is: code is DialRefused or DialError.
 	DialFailed func(id [16]byte, code, reason string)
+	// Config, if not nil, are the settings a session that the call creates runs with,
+	// instead of the engine's: the session takes a copy when it is created.
+	Config *Config
 }
 
 // The codes DialFailed gives.
@@ -296,7 +299,7 @@ func (e *Engine) serveSub(c net.Conn, opt SubOptions, r *Route, join *session, s
 	keepAlive(c)
 	ok := func(s *session) bool {
 		c.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if _, err := c.Write(reply(stOK, uint16(e.cfg.Window>>20))); err != nil {
+		if _, err := c.Write(reply(stOK, uint16(s.cfg.Window>>20))); err != nil {
 			c.Close()
 			return false
 		}
@@ -353,7 +356,7 @@ func (e *Engine) serveSub(c net.Conn, opt SubOptions, r *Route, join *session, s
 		return false
 	}
 	sink := opt.Sink != nil && isSink(h.dstIP, h.dstPort)
-	s := e.newSessionFor(h.id, nil, false, net.JoinHostPort(h.dstIP.String(), strconv.Itoa(h.dstPort)), ks, Owner{Peer: opt.Peer, Test: sink})
+	s := e.newSessionWith(opt.Config, h.id, nil, false, net.JoinHostPort(h.dstIP.String(), strconv.Itoa(h.dstPort)), ks, Owner{Peer: opt.Peer, Test: sink})
 	// the session is listed from the moment it exists (SessionList), so what a listing
 	// reads is set under the session's lock
 	s.mu.Lock()

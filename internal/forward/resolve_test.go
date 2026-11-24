@@ -213,7 +213,7 @@ func TestRuleToAHostNameSaysWhy(t *testing.T) {
 			got := sinks(t, dst, 1)
 			// the list holds the second address only: that is the one the connection goes to
 			allow := fmt.Sprintf("127.0.0.1/32:%d", dst)
-			if _, err := exit.svc.UpdatePeer(entry.n.Name(), nil, &allow, nil); err != nil {
+			if _, err := exit.svc.UpdatePeer(entry.n.Name(), nil, &allow, nil, nil); err != nil {
 				t.Fatal(err)
 			}
 			sum, err := send(t, loop(in), 1<<20)
@@ -225,7 +225,7 @@ func TestRuleToAHostNameSaysWhy(t *testing.T) {
 			}
 			// the list holds none of the name's addresses: refused, and the addresses are not told
 			allow = "198.51.100.0/24"
-			if _, err := exit.svc.UpdatePeer(entry.n.Name(), nil, &allow, nil); err != nil {
+			if _, err := exit.svc.UpdatePeer(entry.n.Name(), nil, &allow, nil, nil); err != nil {
 				t.Fatal(err)
 			}
 			failed(t, entry, in, fmt.Sprintf("peer %q refused the destination nas:%d", exit.n.Name(), dst), "allow list")
@@ -234,7 +234,7 @@ func TestRuleToAHostNameSaysWhy(t *testing.T) {
 			}
 			// the same port on the right address, another port in the list: the port counts too
 			allow = "127.0.0.1/32:1"
-			if _, err := exit.svc.UpdatePeer(entry.n.Name(), nil, &allow, nil); err != nil {
+			if _, err := exit.svc.UpdatePeer(entry.n.Name(), nil, &allow, nil, nil); err != nil {
 				t.Fatal(err)
 			}
 			failed(t, entry, in, "refused the destination")

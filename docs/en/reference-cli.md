@@ -6,10 +6,11 @@ tcpraid status  [-json]                       the node on this host
 tcpraid pair    create | list | revoke ID | join [CODE]
 tcpraid peers   [list] | show NAME | check NAME | remove NAME [-with-rules]
 tcpraid peers   test NAME [-seconds N] [-path PATH] [-json]
-tcpraid peers   set NAME [-allow LIST] [-udp-dial HOST:PORT]
+tcpraid peers   set NAME [-allow LIST] [-udp-dial HOST:PORT] [-SETTING VALUE]...
 tcpraid peers   path set NAME PATH [flags] | path remove NAME PATH
-tcpraid rules   [list] | add NAME [flags] | remove NAME | enable NAME | disable NAME
+tcpraid rules   [list] | add NAME [flags] | set NAME -SETTING VALUE... | remove NAME | enable NAME | disable NAME
 tcpraid sessions [-json] [-watch]             what the node carries right now
+tcpraid transport [-json] | set -SETTING VALUE...    the node's transport settings
 tcpraid version
 ```
 
@@ -28,8 +29,8 @@ image. In a container the command is
 ## run
 
 Starts a node. Its flags are in `reference-files.md`. They say where it
-listens and set six values of the transport (`-window`, `-budget`, `-grace`,
-`-hol`, `-timeline`, `-maxrss`). It stops on SIGINT or SIGTERM with exit status 0,
+listens and set the transport settings of the node, from `-window` to
+`-maxrss`. It stops on SIGINT or SIGTERM with exit status 0,
 after telling its peers and resetting the application connections it carries.
 
 ## status
@@ -38,7 +39,7 @@ after telling its peers and resetting the application connections it carries.
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.6.0 (wire protocol 1)
+version      0.7.0 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -91,7 +92,7 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.6.0, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.7.0, last heard 2026-01-15T10:00:05Z
 spares       2 connections wait for a session to begin on them
 
 PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS  MARK
@@ -189,7 +190,7 @@ changes.
 | `-pin FINGERPRINT` | with `owncert` and `pin`: fingerprint of the certificate's key, 64 hex digits | |
 | `-roles data,repair,control` | what the path carries; not `data` and `repair` together | `data` |
 | `-subs N` | sub-connections, 1 to 64 | 8 |
-| `-mark N` | the socket mark of the path's connections, for the routing rules of the host. Linux only, and the node needs the capability `CAP_NET_ADMIN`. `0`: none | none |
+| `-mark N` | the socket mark of the path's connections, for the routing rules of the host. Linux only, and the node needs the capability `CAP_NET_ADMIN`, or `CAP_NET_RAW` on Linux 5.17 and later. `0`: none | none |
 
 ```
 $ tcpraid peers path set nas-a side -addr 192.0.2.10:9851 -type socks5 -proxy socks5://user:pass@127.0.0.1:1080 -roles repair,control -subs 2
@@ -238,10 +239,10 @@ Windows a mark is refused when it is set.
 
 ### peers set
 
-`peers set NAME [-allow LIST] [-udp-dial HOST:PORT]` changes two settings of
-the peer `NAME`. Only what is given changes, and an empty value clears a
-setting.
-With neither flag the command changes nothing and fails (exit status 1).
+`peers set NAME [-allow LIST] [-udp-dial HOST:PORT] [-SETTING VALUE]...`
+changes settings of the peer `NAME`. Only what is given changes, and an empty
+value clears `-allow` or `-udp-dial`.
+With no flag the command changes nothing and fails (exit status 1).
 
 | Flag | Meaning |
 |---|---|
@@ -261,6 +262,35 @@ UDP feedback for sessions with nas-b goes to 192.0.2.20:8446
 
 `peers show NAME` lists both settings when they are set. The web page has
 them under Peers > Details > Advanced.
+
+The command also takes the transport settings that are set for each session:
+`-window`, `-grace`, `-hol`, `-target`, `-pigtarget`, `-dead`,
+`-kickratio`, `-kickfloor`, `-share`, `-fbsubs`, `-fbevery` and `-coalesce`
+(`reference-files.md` describes each). A setting given here holds for the
+sessions with this peer, at this node, in the place of the node's value. That
+covers the sessions of this node's rules to the peer and the sessions that
+the peer's rules bring to this node. The word `default` in the place of a
+value takes the setting off again. For `-share` it is written with an equals
+sign, `-share=default`, like its other values.
+
+```
+$ tcpraid peers set nas-b -window 8MB
+sessions with nas-b use, in the place of the node's settings: window=8MB
+Sessions that begin from now on use this. Sessions that run now keep what they began with.
+
+$ tcpraid peers show nas-b
+name         nas-b
+...
+transport    window=8MB (for sessions with this peer, in the place of the node's settings)
+
+$ tcpraid peers set nas-b -window default
+sessions with nas-b use the node's transport settings
+Sessions that begin from now on use this. Sessions that run now keep what they began with.
+```
+
+`-budget` and `-timeline` belong to all sessions of the node together and
+are refused here. The peer needs no particular version, because each node
+sets its own end of a session.
 
 ## rules
 
@@ -326,6 +356,23 @@ rule pull added: listening, over the paths side, with at most 3 sub-connections 
 
 `rules enable` and `rules disable` keep both settings. To change them,
 remove the rule and add it again.
+
+`rules add` also takes the transport settings that are set for each session,
+the same twelve as `peers set`. They hold for the connections of the rule,
+at the node where the rule is stored, in the place of the peer's and the
+node's values. `rules set NAME -SETTING VALUE...` changes them on a rule that
+is there, and the word `default` takes one off again. The rule goes on
+listening while its settings change. A rule that has settings shows them in
+its state:
+
+```
+$ tcpraid rules add zfs -peer nas-a -listen 0.0.0.0:50000-50002 -dest 192.0.2.10:50100-50102 -window 16MB
+rule zfs added: listening, with window=16MB
+
+$ tcpraid rules set zfs -window default -hol 500ms
+the connections of rule zfs use, in the place of the peer's and the node's settings: hol=500ms
+Connections that arrive from now on use this. Sessions that run now keep what they began with.
+```
 
 `-dial` says which node opens the connections between the two nodes for the
 sessions of the rule:
@@ -408,7 +455,7 @@ One line for each application connection the node carries right now, or
 | `SENT`, `RECEIVED` | stream data sent to the peer and received from it |
 | `AVERAGE`, `NOW` | speed of both directions together: since the session began, and over the last second |
 | `SENT AGAIN` | data queued to be sent again, as a share of the data sent |
-| `SUBS` | live sub-connections |
+| `SUBS` | live sub-connections of every role: those that carry data, and those of paths with the roles `repair` and `control`. The `-subs` of a path or a rule counts the ones of that path alone, so this figure can be larger |
 | `NOT SENT YET` | data read from the application that still waits for a sub-connection. A value that stays large means the application delivers faster than the line carries |
 | `IN FLIGHT` | data that was sent and that the peer has not yet reported as received |
 | `STATE` | `ok`, `connecting` while the peer has not answered on any sub-connection, or how long the session has waited for the peer |
@@ -443,11 +490,70 @@ day, until you interrupt it. `-interval DURATION` sets another interval, from
 `1s` to `1h`.
 
 `-json` prints the answer of `GET /api/v1/sessions` instead, taken once
-(`reference-api.md`).
+(`reference-api.md`). Each session there has `window_bytes`, the window it
+began with at this node, which tells whose setting it took.
+
+## transport
+
+```
+$ tcpraid transport
+SETTING    VALUE  DEFAULT  FROM          FOR
+window     32MB   128MB    stored        each session (a peer or a rule can set its own)
+grace      20m0s  15m0s    command line  each session (a peer or a rule can set its own)
+hol        1s     1s       default       each session (a peer or a rule can set its own)
+target     300ms  300ms    default       each session (a peer or a rule can set its own)
+pigtarget  1s     1s       default       each session (a peer or a rule can set its own)
+dead       30s    20s      stored        each session (a peer or a rule can set its own)
+kickratio  5      5        default       each session (a peer or a rule can set its own)
+kickfloor  256KB  256KB    default       each session (a peer or a rule can set its own)
+share      true   true     default       each session (a peer or a rule can set its own)
+fbsubs     3      3        default       each session (a peer or a rule can set its own)
+fbevery    20ms   20ms     default       each session (a peer or a rule can set its own)
+coalesce   20ms   20ms     default       each session (a peer or a rule can set its own)
+budget     256MB  256MB    default       all sessions of the node together
+timeline   0s     0s       default       all sessions of the node together
+
+These are the node's values. A session takes them when it begins and keeps them until it ends.
+"tcpraid transport set" changes them while the node runs. The memory limit (-maxrss) and the statistics line (-stats) are set only when the node starts.
+```
+
+The transport settings of the node, as a session that begins now gets them
+unless its peer or its rule sets the same one. `FROM` says where a value
+comes from:
+
+| `FROM` | Meaning |
+|---|---|
+| `default` | nobody set it |
+| `command line` | `tcpraid run` was started with it. It holds for as long as this node runs |
+| `stored` | it was set with `tcpraid transport set` and is kept in the node's data directory |
+
+`transport set -SETTING VALUE...` changes one or more of them while the node
+runs. The names and the values are those of `tcpraid run`
+(`reference-files.md`), and the word `default` puts a setting back.
+
+```
+$ tcpraid transport set -window 32MB -dead 30s
+window is now 32MB (stored), and was 128MB
+dead is now 30s (stored), and was 20s
+Sessions that begin from now on use this. Sessions that run now keep what they began with. The values are stored and hold after a restart.
+```
+
+A setting that the command line of the node gives is not changed this way:
+
+```
+$ tcpraid transport set -grace 10m
+tcpraid transport set: invalid: the node was started with -grace 20m0s on its command line, which goes before a stored value. Start the node without -grace to set it while the node runs.
+```
+
+A budget that does not fit the node's `-maxrss` is refused in the same way,
+and so is a value outside the range of its setting. `-json` on
+`tcpraid transport` prints the answer of `GET /api/v1/transport`
+(`reference-api.md`). A node that runs a version before 0.7.0 answers both
+commands with a message that says so.
 
 ## version
 
 ```
 $ tcpraid version
-tcpraid 0.6.0 (wire protocol 1)
+tcpraid 0.7.0 (wire protocol 1)
 ```

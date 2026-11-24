@@ -114,7 +114,7 @@ func (s *session) udpClose() {
 // udpSend: a snapshot whenever the state changed (at most every -fbevery) and at least
 // once a second, while the session lives.
 func (s *session) udpSend(u *udpState) {
-	tk := time.NewTicker(s.e.cfg.FbEvery)
+	tk := time.NewTicker(s.cfg.FbEvery)
 	defer tk.Stop()
 	for range tk.C {
 		s.mu.Lock()
@@ -131,7 +131,7 @@ func (s *session) udpSend(u *udpState) {
 		u.lastSend = now
 		body := s.buildSnapshot().marshal()
 		s.mu.Unlock()
-		if s.e.cfg.UDPLoss > 0 && rand.Float64() < s.e.cfg.UDPLoss {
+		if s.cfg.UDPLoss > 0 && rand.Float64() < s.cfg.UDPLoss {
 			continue // test switch: emulate loss
 		}
 		s.udpWrite(u, body)

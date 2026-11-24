@@ -26,9 +26,7 @@ func testSub(idx uint16) *sub {
 func TestReorderBudgetHoleFill(t *testing.T) {
 	s := testSession(t)
 	s.recvBudget = 4
-	old := te.cfg.Chunk
-	te.cfg.Chunk = 2 // the per-session floor of the shared receive budget is 2 chunks
-	t.Cleanup(func() { te.cfg.Chunk = old })
+	s.cfg.Chunk = 2 // the per-session floor of the shared receive budget is 2 chunks
 	sb := testSub(1)
 	s.subs = []*sub{sb}
 	big := make([]byte, maxData)
@@ -188,9 +186,9 @@ func TestRedialBackoff(t *testing.T) {
 // Out-of-order data held by all sessions together stays within -budget.
 func TestRecvCapShared(t *testing.T) {
 	a, b := testSession(t), testSession(t)
-	old := te.cfg.Budget
-	te.cfg.Budget = 64 << 20
-	t.Cleanup(func() { te.cfg.Budget = old; te.recvB.Store(0) })
+	// a session reads the settings it was created with
+	a.cfg.Budget, b.cfg.Budget = 64<<20, 64<<20
+	t.Cleanup(func() { te.recvB.Store(0) })
 	a.recvBudget, b.recvBudget = 48<<20, 48<<20
 	a.pendingB = 40 << 20
 	te.recvB.Store(40 << 20)

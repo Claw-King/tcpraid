@@ -90,8 +90,14 @@ func (e *Engine) RunClient(groups []DialGroup) error {
 // whether it may be (see Engine.AbortPeer); a session that may not be is reset at once.
 // The return value says how the session ended, and ok is false when none was created.
 func (r *Route) Carry(c net.Conn, ip net.IP, port int, owner Owner, valid func() bool) (end End, ok bool) {
+	return r.CarryWith(nil, c, ip, port, owner, valid)
+}
+
+// CarryWith is Carry for a session that runs with the settings cfg instead of the
+// engine's: the session takes a copy when it is created. nil: the engine's.
+func (r *Route) CarryWith(cfg *Config, c net.Conn, ip net.IP, port int, owner Owner, valid func() bool) (end End, ok bool) {
 	e, ks := r.e, r.ks
-	s := e.begin(c, ip, port, ks, r.udpDial, owner, valid)
+	s := e.begin(cfg, c, ip, port, ks, r.udpDial, owner, valid)
 	if s == nil {
 		return End{}, false
 	}
@@ -110,12 +116,12 @@ func (r *Route) Carry(c net.Conn, ip net.IP, port int, owner Owner, valid func()
 // calls, and the function it returns dials over the group, sends the header and adds
 // the connection to the session.
 func (r *Route) opener(s *session, ip net.IP, port int) func(g DialGroup) func() {
-	e, ks, id := r.e, r.ks, s.id
+	ks, id := r.ks, s.id
 	return func(g DialGroup) func() {
 		s.mu.Lock()
 		s.nextIdx++
 		h := subHeader{isNew: !s.everUp, ctrl: g.Ctrl, repair: g.Repair, id: id, dstIP: ip, dstPort: port, path: g.Path,
-			idx: s.nextIdx, windowMB: uint16(e.cfg.Window >> 20), unix: time.Now().Unix()}
+			idx: s.nextIdx, windowMB: uint16(s.cfg.Window >> 20), unix: time.Now().Unix()}
 		s.mu.Unlock()
 		return func() {
 			sc, err := g.Dial()
@@ -150,8 +156,8 @@ func (r *Route) opener(s *session, ip net.IP, port int) func(g DialGroup) func()
 
 // begin creates the session that carries the application connection c to ip:port, or
 // resets c and returns nil: at the session limit, while the engine stops, or when valid
-// says no.
-func (e *Engine) begin(c net.Conn, ip net.IP, port int, ks keys, udpDial string, owner Owner, valid func() bool) *session {
+// says no. The session runs with the settings cfg; nil: the engine's.
+func (e *Engine) begin(cfg *Config, c net.Conn, ip net.IP, port int, ks keys, udpDial string, owner Owner, valid func() bool) *session {
 	if e.nSessions.Load() >= int64(e.cfg.MaxSess) {
 		log.Printf("refusing %s: %d sessions", c.RemoteAddr(), e.nSessions.Load())
 		resetClose(c)
@@ -168,7 +174,7 @@ func (e *Engine) begin(c net.Conn, ip net.IP, port int, ks keys, udpDial string,
 		resetClose(c)
 		return nil
 	}
-	s := e.newSessionFor(id, c, true, fmt.Sprintf("%s:%d", ip, port), ks, owner)
+	s := e.newSessionWith(cfg, id, c, true, fmt.Sprintf("%s:%d", ip, port), ks, owner)
 	e.smu.Unlock()
 	s.udpSetup(ks, udpDial)
 	return s
@@ -276,7 +282,13 @@ const maxAttached = 2048
 // that the other end opens. It returns nil, with c reset, where Carry would have reset
 // c at once. Call Run next.
 func (e *Engine) NewReverse(c net.Conn, ip net.IP, port int, k Keys, udpDial string, owner Owner, valid func() bool) *Reverse {
-	s := e.begin(c, ip, port, k.ks, udpDial, owner, valid)
+	return e.NewReverseWith(nil, c, ip, port, k, udpDial, owner, valid)
+}
+
+// NewReverseWith is NewReverse for a session that runs with the settings cfg instead of
+// the engine's: the session takes a copy when it is created. nil: the engine's.
+func (e *Engine) NewReverseWith(cfg *Config, c net.Conn, ip net.IP, port int, k Keys, udpDial string, owner Owner, valid func() bool) *Reverse {
+	s := e.begin(cfg, c, ip, port, k.ks, udpDial, owner, valid)
 	if s == nil {
 		return nil
 	}
@@ -302,7 +314,7 @@ func (rv *Reverse) Attach(sc net.Conn, path uint8, ctrl, repair bool) {
 	}
 	s.nextIdx++
 	h := subHeader{isNew: !s.everUp, ctrl: ctrl, repair: repair && !ctrl, id: s.id, dstIP: rv.ip, dstPort: rv.port, path: path,
-		idx: s.nextIdx, windowMB: uint16(rv.e.cfg.Window >> 20), unix: time.Now().Unix()}
+		idx: s.nextIdx, windowMB: uint16(s.cfg.Window >> 20), unix: time.Now().Unix()}
 	s.mu.Unlock()
 	keepAlive(sc)
 	sc.SetWriteDeadline(time.Now().Add(10 * time.Second))

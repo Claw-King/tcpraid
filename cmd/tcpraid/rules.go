@@ -50,6 +50,9 @@ func ruleUses(r api.Rule) string {
 	if r.PeerDials {
 		s += ", the peer opens the connections while this node's path is down"
 	}
+	if len(r.Transport) > 0 {
+		s += ", with " + transportText(r.Transport)
+	}
 	switch r.Dial {
 	case "self":
 		s += ", only this node opens the connections"
@@ -103,7 +106,9 @@ func cmdRules(args []string, stdout, stderr io.Writer) int {
 	var disabled bool
 	var paths, dial string
 	var subs int
-	return dispatch("rules", "list", []string{"list", "add", "remove", "enable", "disable"}, map[string]command{
+	var ruleTransport map[string]*string
+	const below = "the rule's connections then use the value of the peer or of the node"
+	return dispatch("rules", "list", []string{"list", "add", "set", "remove", "enable", "disable"}, map[string]command{
 		"list": {
 			name: "rules",
 			run: func(dataDir string, _ []string, stdout, _ io.Writer) error {
@@ -128,7 +133,7 @@ func cmdRules(args []string, stdout, stderr io.Writer) int {
 			},
 		},
 		"add": {
-			name: "rules add", usage: "NAME -peer PEER (-listen IP:PORT[-PORT] -dest IP:PORT[-PORT] | -match NETWORKS) [-paths NAMES] [-subs N] [-dial auto|self|peer|both]", nargs: 1,
+			name: "rules add", usage: "NAME -peer PEER (-listen IP:PORT[-PORT] -dest IP:PORT[-PORT] | -match NETWORKS) [-paths NAMES] [-subs N] [-dial auto|self|peer|both] [-SETTING VALUE]...", nargs: 1,
 			flags: func(fs *flag.FlagSet) {
 				fs.StringVar(&spec.Peer, "peer", "", "name of the peer the connections go to")
 				fs.StringVar(&spec.Listen, "listen", "", "fixed rule: where this node listens, IP:port or IP:first-last (without the IP: every address)")
@@ -138,6 +143,7 @@ func cmdRules(args []string, stdout, stderr io.Writer) int {
 				fs.StringVar(&paths, "paths", "", "names of the paths the rule's connections use, separated by commas, as the node that holds the paths calls them (\"\": every path)")
 				fs.IntVar(&subs, "subs", 0, "the most data sub-connections a connection of the rule keeps on each path (0: as many as the path has)")
 				fs.StringVar(&dial, "dial", "", "which node opens the connections between the nodes: auto, self, peer or both (default auto: this node where it has a path that works, else the peer)")
+				ruleTransport = settingFlags(fs, false, below)
 			},
 			run: func(dataDir string, args []string, stdout, _ io.Writer) error {
 				if spec.Peer == "" {
@@ -157,15 +163,59 @@ func cmdRules(args []string, stdout, stderr io.Writer) int {
 				if dial != "" && dial != "auto" {
 					spec.Dial = &dial
 				}
+				for name, value := range ruleTransport {
+					if value != nil {
+						if spec.Transport == nil {
+							spec.Transport = map[string]*string{}
+						}
+						spec.Transport[name] = value
+					}
+				}
 				var out api.Rule
 				if err := apiCall(dataDir, http.MethodPost, api.PathRules, spec, &out, shortCall); err != nil {
-					return olderNode(err, map[string]string{"paths": "paths for a rule", "subs": "a number of sub-connections for a rule", "dial": "the dial of a rule"})
+					return olderNode(err, map[string]string{"paths": "paths for a rule", "subs": "a number of sub-connections for a rule", "dial": "the dial of a rule",
+						"transport": "transport settings for a rule"})
 				}
 				fmt.Fprintf(stdout, "rule %s added: %s\n", out.Name, ruleState(out))
 				if out.Enabled && !out.Listening {
 					return errors.New("the rule is stored but does not take connections")
 				}
 				return nil
+			},
+		},
+		"set": {
+			name: "rules set", usage: "NAME -SETTING VALUE ...", nargs: 1,
+			flags: func(fs *flag.FlagSet) {
+				ruleTransport = settingFlags(fs, false, below)
+			},
+			run: func(dataDir string, args []string, stdout, _ io.Writer) error {
+				if len(ruleTransport) == 0 {
+					return errors.New("nothing to set. Give at least one transport setting, such as -window 256MB. The rest of a rule is changed by removing it and adding it again.")
+				}
+				var list []api.Rule
+				if err := apiCall(dataDir, http.MethodGet, api.PathRules, nil, &list, shortCall); err != nil {
+					return err
+				}
+				for _, r := range list {
+					if r.Name != args[0] {
+						continue
+					}
+					// what the request does not name stays as the node has it: paths,
+					// sub-connections, who dials, and the settings not given here
+					spec := api.RuleSpec{Name: r.Name, Listen: r.Listen, Destination: r.Destination, Match: r.Match, Peer: r.Peer, Enabled: &r.Enabled, Transport: ruleTransport}
+					var out api.Rule
+					if err := apiCall(dataDir, http.MethodPut, rulePath(r.Name), spec, &out, shortCall); err != nil {
+						return olderNode(err, map[string]string{"transport": "transport settings for a rule"})
+					}
+					if len(out.Transport) == 0 {
+						fmt.Fprintf(stdout, "the connections of rule %s use the transport settings of the peer and the node\n", out.Name)
+					} else {
+						fmt.Fprintf(stdout, "the connections of rule %s use, in the place of the peer's and the node's settings: %s\n", out.Name, transportText(out.Transport))
+					}
+					fmt.Fprintln(stdout, "Connections that arrive from now on use this. Sessions that run now keep what they began with.")
+					return nil
+				}
+				return fmt.Errorf("no rule is called %q", args[0])
 			},
 		},
 		"remove": {

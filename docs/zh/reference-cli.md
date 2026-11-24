@@ -6,10 +6,11 @@ tcpraid status  [-json]                       the node on this host
 tcpraid pair    create | list | revoke ID | join [CODE]
 tcpraid peers   [list] | show NAME | check NAME | remove NAME [-with-rules]
 tcpraid peers   test NAME [-seconds N] [-path PATH] [-json]
-tcpraid peers   set NAME [-allow LIST] [-udp-dial HOST:PORT]
+tcpraid peers   set NAME [-allow LIST] [-udp-dial HOST:PORT] [-SETTING VALUE]...
 tcpraid peers   path set NAME PATH [flags] | path remove NAME PATH
-tcpraid rules   [list] | add NAME [flags] | remove NAME | enable NAME | disable NAME
+tcpraid rules   [list] | add NAME [flags] | set NAME -SETTING VALUE... | remove NAME | enable NAME | disable NAME
 tcpraid sessions [-json] [-watch]             what the node carries right now
+tcpraid transport [-json] | set -SETTING VALUE...    the node's transport settings
 tcpraid version
 ```
 
@@ -19,7 +20,7 @@ tcpraid version
 
 ## run
 
-启动一个节点。它的参数见 `reference-files.md`，包括在哪里监听，以及传输层的六项设置(`-window`、`-budget`、`-grace`、`-hol`、`-timeline`、`-maxrss`)。收到 SIGINT 或 SIGTERM 时，它先通知各个对端、重置自己承载的应用连接，然后以退出状态 0 停止。
+启动一个节点。它的参数见 `reference-files.md`，包括在哪里监听，以及节点的传输层设置，从 `-window` 到 `-maxrss`。收到 SIGINT 或 SIGTERM 时，它先通知各个对端、重置自己承载的应用连接，然后以退出状态 0 停止。
 
 ## status
 
@@ -27,7 +28,7 @@ tcpraid version
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.6.0 (wire protocol 1)
+version      0.7.0 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -76,7 +77,7 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.6.0, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.7.0, last heard 2026-01-15T10:00:05Z
 spares       2 connections wait for a session to begin on them
 
 PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS  MARK
@@ -144,7 +145,7 @@ default: 8 sub-connections together carried little more than one alone. Either o
 | `-pin FINGERPRINT` | `owncert` 档且用 `pin` 时：证书密钥的指纹，64 位十六进制 | |
 | `-roles data,repair,control` | 路径承担什么；`data` 和 `repair` 不能同时有 | `data` |
 | `-subs N` | 子连接数，1 到 64 | 8 |
-| `-mark N` | 这条路径的连接带的套接字标记，供主机的路由规则使用。只在 Linux 上有，节点需要 `CAP_NET_ADMIN` 权限。`0`：不带 | 不带 |
+| `-mark N` | 这条路径的连接带的套接字标记，供主机的路由规则使用。只在 Linux 上有，节点需要 `CAP_NET_ADMIN` 权限，Linux 5.17 起有 `CAP_NET_RAW` 也可以。`0`：不带 | 不带 |
 
 ```
 $ tcpraid peers path set nas-a side -addr 192.0.2.10:9851 -type socks5 -proxy socks5://user:pass@127.0.0.1:1080 -roles repair,control -subs 2
@@ -179,7 +180,7 @@ tcpraid peers check: 1 of 2 address(es) to nas-a failed. Every path still has an
 
 ### peers set
 
-`peers set NAME [-allow LIST] [-udp-dial HOST:PORT]` 修改对端 `NAME` 的两项设置。只有给出的项会改变，给空值就是清除这项设置。两个参数都不给时，命令什么也不改并报错(退出状态 1)。
+`peers set NAME [-allow LIST] [-udp-dial HOST:PORT] [-SETTING VALUE]...` 修改对端 `NAME` 的设置。只有给出的项会改变，给空值就是清除 `-allow` 或 `-udp-dial`。一个参数都不给时，命令什么也不改并报错(退出状态 1)。
 
 | 参数 | 含义 |
 |---|---|
@@ -198,6 +199,25 @@ UDP feedback for sessions with nas-b goes to 192.0.2.20:8446
 ```
 
 这两项设置了的时候，`peers show NAME` 会把它们列出来。在网页界面里，它们在 对端 > 详情 > 高级 下面。
+
+这条命令还接受一个会话可以单独有的那些传输层设置：`-window`、`-grace`、`-hol`、`-target`、`-pigtarget`、`-dead`、`-kickratio`、`-kickfloor`、`-share`、`-fbsubs`、`-fbevery` 和 `-coalesce`(每一项的含义见 `reference-files.md`)。在这里给出的设置，对本节点上和这个对端之间的会话起作用，取代节点的值。这包括本节点的规则发往这个对端的会话，也包括对端的规则带到本节点来的会话。在值的位置写 `default` 就把这项设置去掉。`-share` 和它别的取值一样要带等号，写成 `-share=default`。
+
+```
+$ tcpraid peers set nas-b -window 8MB
+sessions with nas-b use, in the place of the node's settings: window=8MB
+Sessions that begin from now on use this. Sessions that run now keep what they began with.
+
+$ tcpraid peers show nas-b
+name         nas-b
+...
+transport    window=8MB (for sessions with this peer, in the place of the node's settings)
+
+$ tcpraid peers set nas-b -window default
+sessions with nas-b use the node's transport settings
+Sessions that begin from now on use this. Sessions that run now keep what they began with.
+```
+
+`-budget` 和 `-timeline` 属于节点的全部会话，在这里会被拒绝。对端不需要是某个版本，因为每个节点只设自己这一端。
 
 ## rules
 
@@ -245,6 +265,17 @@ rule pull added: listening, over the paths side, with at most 3 sub-connections 
 ```
 
 `rules enable` 和 `rules disable` 会保留这两项设置。要修改它们，就删掉规则再重新添加。
+
+`rules add` 也接受一个会话可以单独有的那些传输层设置，和 `peers set` 的那十二项相同。它们在规则所在的节点上对这条规则的连接起作用，取代对端的和节点的值。`rules set NAME -SETTING VALUE...` 修改一条已有规则的这些设置，在值的位置写 `default` 就把一项去掉。修改设置期间规则照常监听。有设置的规则会在状态里写出来：
+
+```
+$ tcpraid rules add zfs -peer nas-a -listen 0.0.0.0:50000-50002 -dest 192.0.2.10:50100-50102 -window 16MB
+rule zfs added: listening, with window=16MB
+
+$ tcpraid rules set zfs -window default -hol 500ms
+the connections of rule zfs use, in the place of the peer's and the node's settings: hol=500ms
+Connections that arrive from now on use this. Sessions that run now keep what they began with.
+```
 
 `-dial` 指定规则的会话里，两个节点之间的连接由哪个节点打开：
 
@@ -299,7 +330,7 @@ ID      ROLE    RULE   PEER   DESTINATION     AGE  SENT      RECEIVED  AVERAGE  
 | `SENT`、`RECEIVED` | 发给对端和从对端收到的流数据 |
 | `AVERAGE`、`NOW` | 两个方向合计的速度：从会话开始算起的，和最近一秒的 |
 | `SENT AGAIN` | 被排进重发队列的数据，占已发数据的比例 |
-| `SUBS` | 存活的子连接数 |
+| `SUBS` | 存活的子连接数，各种角色的都算：承载数据的，以及角色是 `repair` 和 `control` 的路径上的。路径或规则的 `-subs` 只数那一条路径上的，所以这里的数可以更大 |
 | `NOT SENT YET` | 已从应用读进来、还在等子连接的数据。这个数一直很大，说明应用给数据的速度比线路能带的快 |
 | `IN FLIGHT` | 已经发出、对端还没有报告收到的数据 |
 | `STATE` | `ok`；对端还没有在任何子连接上应答时是 `connecting`；或者会话已经等了对端多久 |
@@ -319,11 +350,61 @@ ID      ROLE    RULE   PEER   DESTINATION     AGE    SENT     RECEIVED  AVERAGE 
 
 `-watch` 每 2 秒把表格再打印一次，每次上面带一行当时的时间，直到你中断它。`-interval DURATION` 可以换一个间隔，从 `1s` 到 `1h`。
 
-`-json` 改为打印 `GET /api/v1/sessions` 的回答，只取一次(见 `reference-api.md`)。
+`-json` 改为打印 `GET /api/v1/sessions` 的回答，只取一次(见 `reference-api.md`)。其中每个会话都有 `window_bytes`，是它在本节点开始时取得的窗口，由此可以看出它用的是谁的设置。
+
+## transport
+
+```
+$ tcpraid transport
+SETTING    VALUE  DEFAULT  FROM          FOR
+window     32MB   128MB    stored        each session (a peer or a rule can set its own)
+grace      20m0s  15m0s    command line  each session (a peer or a rule can set its own)
+hol        1s     1s       default       each session (a peer or a rule can set its own)
+target     300ms  300ms    default       each session (a peer or a rule can set its own)
+pigtarget  1s     1s       default       each session (a peer or a rule can set its own)
+dead       30s    20s      stored        each session (a peer or a rule can set its own)
+kickratio  5      5        default       each session (a peer or a rule can set its own)
+kickfloor  256KB  256KB    default       each session (a peer or a rule can set its own)
+share      true   true     default       each session (a peer or a rule can set its own)
+fbsubs     3      3        default       each session (a peer or a rule can set its own)
+fbevery    20ms   20ms     default       each session (a peer or a rule can set its own)
+coalesce   20ms   20ms     default       each session (a peer or a rule can set its own)
+budget     256MB  256MB    default       all sessions of the node together
+timeline   0s     0s       default       all sessions of the node together
+
+These are the node's values. A session takes them when it begins and keeps them until it ends.
+"tcpraid transport set" changes them while the node runs. The memory limit (-maxrss) and the statistics line (-stats) are set only when the node starts.
+```
+
+节点的传输层设置。此刻开始的会话拿到的就是这些值，除非它的对端或规则设了同一项。`FROM` 说明一个值是从哪里来的：
+
+| `FROM` | 含义 |
+|---|---|
+| `default` | 没有人设过 |
+| `command line` | `tcpraid run` 启动时带了它。这个节点运行期间它一直有效 |
+| `stored` | 用 `tcpraid transport set` 设的，存在节点的数据目录里 |
+
+`transport set -SETTING VALUE...` 在节点运行中修改其中的一项或几项。名字和取值与 `tcpraid run` 的相同(见 `reference-files.md`)，写 `default` 就把一项设置放回默认值。
+
+```
+$ tcpraid transport set -window 32MB -dead 30s
+window is now 32MB (stored), and was 128MB
+dead is now 30s (stored), and was 20s
+Sessions that begin from now on use this. Sessions that run now keep what they began with. The values are stored and hold after a restart.
+```
+
+节点的命令行给出的设置不能这样改：
+
+```
+$ tcpraid transport set -grace 10m
+tcpraid transport set: invalid: the node was started with -grace 20m0s on its command line, which goes before a stored value. Start the node without -grace to set it while the node runs.
+```
+
+和节点的 `-maxrss` 对不上的 `budget` 同样会被拒绝，超出范围的值也一样。`tcpraid transport` 带 `-json` 时打印 `GET /api/v1/transport` 的回答(见 `reference-api.md`)。节点运行的是 0.7.0 之前的版本时，这两条命令会用一句话说明这一点。
 
 ## version
 
 ```
 $ tcpraid version
-tcpraid 0.6.0 (wire protocol 1)
+tcpraid 0.7.0 (wire protocol 1)
 ```

@@ -44,7 +44,7 @@ func TestSessionList(t *testing.T) {
 	}
 	l[0].Silent, l[0].GraceLeft = 0, 0
 	want := SessionInfo{ID: [16]byte{0xa1, 2}, Destination: "192.0.2.10:873", Started: srv.started,
-		TxBytes: 300, RxBytes: 200, UnackedBytes: 100, Subs: 2, UnsentBytes: 60, Up: true}
+		TxBytes: 300, RxBytes: 200, UnackedBytes: 100, Subs: 2, UnsentBytes: 60, Up: true, Window: e.cfg.Window}
 	if l[0] != want {
 		t.Errorf("oldest session:\n got %+v\nwant %+v", l[0], want)
 	}

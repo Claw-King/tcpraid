@@ -39,6 +39,9 @@ type SessionInfo struct {
 	// that never had one: how long ago it was created). GraceLeft is how much longer
 	// the session lasts if the silence goes on; it ends with a reset at zero.
 	Silent, GraceLeft time.Duration
+	// Window is the send window the session was created with, in bytes: the engine's
+	// or the one its creator gave it.
+	Window int
 }
 
 // SessionList returns the live sessions, oldest first.
@@ -81,6 +84,7 @@ func (e *Engine) SessionList() []SessionInfo {
 			NoReply:      s.noReply,
 			Silent:       silent,
 			GraceLeft:    max(s.grace()-silent, 0),
+			Window:       s.cfg.Window,
 		})
 		s.mu.Unlock()
 		return true

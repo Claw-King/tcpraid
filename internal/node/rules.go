@@ -43,6 +43,9 @@ type Rule struct {
 	// Dial says which node opens the sub-connections of the rule's connections (since
 	// 0.6.0): DialSelf, DialPeer or DialBoth. Empty is DialAuto.
 	Dial string `json:"dial,omitempty"`
+	// Transport holds the transport settings of the rule's connections, at this node's
+	// end (since 0.7.0). It goes before the peer's settings and the node's.
+	Transport Transport `json:"transport,omitempty"`
 }
 
 // Who opens the sub-connections of a rule's connections (Rule.Dial).
@@ -86,10 +89,13 @@ func (r Rule) Clone() Rule {
 	if r.Paths != nil {
 		r.Paths = append([]string{}, r.Paths...)
 	}
+	r.Transport = r.Transport.Clone()
 	return r
 }
 
-// Equal reports whether the two rules say the same.
+// Equal reports whether the two rules say the same about which connections they take
+// and where those go. The transport settings are left out: a session reads them when
+// it is created, so a change of them needs no new listener.
 func (r Rule) Equal(o Rule) bool {
 	return r.Name == o.Name && r.Listen == o.Listen && r.Destination == o.Destination && r.Match == o.Match &&
 		r.Peer == o.Peer && r.Enabled == o.Enabled && r.Subs == o.Subs && slices.Equal(r.Paths, o.Paths) &&
@@ -254,6 +260,9 @@ func (r Rule) Check() error {
 		return errors.New("the rule names no peer")
 	}
 	if err := r.checkNarrowing(); err != nil {
+		return err
+	}
+	if err := r.Transport.Check(false); err != nil {
 		return err
 	}
 	if stored, err := CheckDial(r.Dial); err != nil {
@@ -440,5 +449,5 @@ func (n *Node) RemoveRule(name string) error {
 // SetPeerOptions sets the allow list and the UDP feedback address of the peer called
 // name and returns the peer as stored; see UpdatePeer.
 func (n *Node) SetPeerOptions(name string, allow, udpDial *string) (Peer, error) {
-	return n.UpdatePeer(name, nil, allow, udpDial)
+	return n.UpdatePeer(name, nil, allow, udpDial, nil)
 }

@@ -35,7 +35,7 @@ taken  0.0.0.0:9700  nas-a  192.0.2.10:873  0         FAILED: listening on 0.0.0
 | "peer ... does not answer on the connections this node opens"，30 秒后变成 "peer ... answered on none of the connections within 30 seconds" | 子连接一条都没建起来，后面的文字说明那些尝试碰到了什么。原因之一：另一个节点上已经解除了配对。这时规则会说 "the other node does not accept this node, which is not paired with it or no longer is"，另一个节点的日志里有 "refused a connection from ...: not a peer of this node" 这样的行。重新配对 |
 | "the connections to peer ... cannot be opened"，后面带一个错误 | 本节点根本连不上对端的监听。用 `tcpraid peers check NAME` 逐条试路径 |
 | "none of the path's N addresses gave a connection"，后面是每个地址和它的错误 | 这条路径写了多个地址，一个都没连通。用 `tcpraid peers check NAME` 逐个地址试 |
-| "the path's socket mark N could not be set, because the node lacks the capability CAP_NET_ADMIN" | 这条路径带了标记，而节点没有权限设置它。给节点这项权限，或者用 `tcpraid peers path set NAME PATH -mark 0` 去掉标记 |
+| "the path's socket mark N could not be set, because the node lacks the capability for it" | 这条路径带了标记，而节点没有权限设置它。给节点 `CAP_NET_ADMIN` 权限(Linux 5.17 起 `CAP_NET_RAW` 也可以)，或者用 `tcpraid peers path set NAME PATH -mark 0` 去掉标记 |
 | "the rule names the path NAME, and this node has no path of that name to peer ... that carries data" | 规则的 `-paths` 里有一个名字，在本节点上不是一条承载数据的路径。`tcpraid peers show PEER` 列出各条路径 |
 | "peer ... could not open the connections: it has no path called NAME that carries data" | 同样的情况，只是路径由对端持有：规则的 `-paths` 里的名字不是对端的一条承载数据的路径。到对端上看它的路径 |
 | "peer ... does not keep a rule to the paths it names (it runs version ...)" | 规则带了 `-paths` 或 `-subs`，路径由对端持有，而对端的版本早于 0.5.0。升级它，或者不带这两个参数添加规则 |
@@ -100,7 +100,7 @@ default  nas-a.example.org:9851 (tls): ok
 - 在“会话”页、用 `tcpraid sessions` 或 `GET /api/v1/sessions` 看会话。`subs` 应该等于各条路径的连接数之和(默认 8)，`resent_bytes` 应该只占 `tx_bytes` 的一小部分，命令里的 `SENT AGAIN` 一列显示的就是这个比例。重发的字节很多，说明路径在丢包或者卡顿。这时有帮助的是第二条承担 `repair` 和 `control`(网页上勾“补发”和“回执”)的路径，或者 UDP 回执(见 `concepts.md`)。
 - 带 `-dial both` 的规则，会话里应该有两个节点各自打开的子连接：`tcpraid sessions` 里它的 `STATE` 末尾写着两边各打开了几条。只看到一个节点的，说明另一个节点的路径不通。如果对端在会话开始时就没能打开它那一份，规则所在节点的日志里有一行 "peer ... could not open its share of the connections of a session"，后面是对端给的原因，并且每 20 秒再请求对端一次，直到它的第一条连接到达。
 - 应用和它的节点之间、远端节点和目的地之间这两段的速度同样算数，因为 tcpraid 快不过其中较慢的一段，也快不过应用本身。
-- 会话结束时，两个节点各自会为它记两行日志：字节数、重发的块数、被换掉的子连接数、卡住的时间。用 `-timeline` 启动的节点在会话进行中也会记同一类数字。下一节解释这些数字，以及怎样从中看出要不要改 `-window` 或 `-hol`(`reference-files.md`)。
+- 会话结束时，两个节点各自会为它记两行日志：字节数、重发的块数、被换掉的子连接数、卡住的时间。用 `-timeline` 启动的节点在会话进行中也会记同一类数字。下一节解释这些数字，以及怎样从中看出要不要改 `-window`、`-hol` 这样的传输层设置(`reference-files.md`)。
 
 ## 读懂日志里的会话行
 
@@ -130,7 +130,7 @@ default  nas-a.example.org:9851 (tls): ok
 | `fbage` | 距离对端上一份报告到达过了多少秒(`-1`：还没有收到过) |
 | `fb=IN/OUT` | 上一行以来收到和发出的报告数(发出的里面不计经 UDP 发的那一份) |
 | `fbc`、`fbu` | 收到的报告里，经控制连接来的和经 UDP 来的各有多少 |
-| `cap=A/N` | 承载数据的 `N` 条存活子连接(角色 `data` 和 `repair`)里，有 `A` 条的在途数据已经到了允许的上限 |
+| `cap=A/N` | 承载数据的 `N` 条存活子连接(角色 `data` 和 `repair`)里，有 `A` 条的在途数据已经到了允许的上限。这个上限是回执往返一圈之内到得了的数据，加上允许的排队量(`-target`) |
 | `holage` | 接收方面：`pend` 里最老的数据为了等它前面缺失的块，已经等了多少秒 |
 | `pumpwait` | 上一行以来，因为 `-window`、对端的窗口或 `-budget` 已满，本节点没有从应用读数据的时间占比。一次等待记在它结束时的那一行里：跨了好几行的一次长等待，在那几行里显示为 0，然后在结束的那一行里显示为大于 1 的值 |
 | `starve` | 平均每条数据子连接“有空位却没有数据可发”的时间占比。`repair` 路径的子连接也算在内，它们大部分时间是空闲的 |
@@ -140,7 +140,9 @@ default  nas-a.example.org:9851 (tls): ok
 
 - `pumpwait` 接近 0，同时数据在走(`tx` 大于零)：节点在等应用，限制不在路径上。连续几行 `pumpwait` 为 0 而 `tx` 也为 0，是一次还没结束的长等待，要按下面两种情况来看。
 - `pumpwait` 接近 1，`unsent` 很大，数据路径的每条子连接都到了上限：应用给数据的速度比路径带走的快。窗口里装满了还没发出去的数据，所以把 `-window` 加大只会多装一些，不会发得更快。
-- `pumpwait` 接近 1，`unsent` 接近 0：数据已经发出去了，窗口里装满的是对端还没报告、或者还交付不了的数据，`sacked` 很大。这时去看接收端的节点。如果它的 `holage` 大于零，说明那里的数据在等缺失的块。两个节点都把 `-window` 加大，可以给它更多空间。在发送端的节点上把 `-hol` 调短，缺失的块会更早重发，代价是有些块会发两遍。如果它的 `holage` 一直是零而 `pend` 很大，说明那边的应用取数据慢，tcpraid 的任何设置都改变不了这一点。它结束时那一行里的 `stall` 给出了总共慢了多久。如果它的 `holage` 是零，`pend` 也很小，说明那里没有数据在等。这时窗口比路径上能容纳的在途数据还小，两个节点都把 `-window` 加大，可能会多走一些。
+- `pumpwait` 接近 1，`unsent` 接近 0：数据已经发出去了，窗口里装满的是对端还没报告、或者还交付不了的数据，`sacked` 很大。这时去看接收端的节点。如果它的 `holage` 大于零，说明那里的数据在等缺失的块。两个节点都把 `-window` 加大，可以给它更多空间。在发送端的节点上把 `-hol` 调短，缺失的块会更早重发，代价是有些块会发两遍。发送端要等后面的数据等了 `-hol` 加上允许的排队量之后才重发一块。`holage` 一直明显小于这个时间时，等的那些块不用重发也会到，把 `-hol` 调短只会多发副本，不会更快。如果它的 `holage` 一直是零而 `pend` 很大，说明那边的应用取数据慢，tcpraid 的任何设置都改变不了这一点。它结束时那一行里的 `stall` 给出了总共慢了多久。如果它的 `holage` 是零，`pend` 也很小，说明那里没有数据在等。这时窗口比路径上能容纳的在途数据还小，两个节点都把 `-window` 加大，可能会多走一些。
+
+这里提到的每一项设置都可以在节点运行中改，用 `tcpraid transport set`。也可以只给一个对端或一条规则改，用 `tcpraid peers set` 和 `tcpraid rules set`。改动只对之后开始的会话起作用，所以要重新开始传输才看得到效果。全部设置列在 `reference-files.md` 的“传输层的设置”一节，每一项都写了和它对应的数字。
 
 ### 结束时的两行
 
@@ -149,7 +151,7 @@ default  nas-a.example.org:9851 (tls): ok
 [ddc465] session diag: pump win 0.7s | resent | subs died lost=0 silent=0 write=0 slow=0 | fb gap max 0.0s >1s 0 | gap repairs 0 (retries 0) ms p50/p95/max: peer wait 0/0/0, queued 0/0/0, to release 0/0/0 | snapshots truncated 0
 ```
 
-`session end`(或 `session aborted`)先给出原因，然后是：
+`session end`(或 `session aborted`)先给出原因。有两个原因和字面不一样。`local read: the path test is over` 是 `tcpraid peers test` 的会话正常结束的方式，不是故障。`server could not reach ADDRESS` 也可能是对端的允许列表不放行这个目的地，这时 `tcpraid rules` 会写明原因。原因之后是：
 
 | 字段 | 含义 |
 |---|---|
@@ -157,7 +159,7 @@ default  nas-a.example.org:9851 (tls): ok
 | `tx`、`rx` | 发出(只算第一次)和收到的流数据 |
 | `chunks` | 第一次发出的块数 |
 | `resends` | 被排进重发队列的块数 |
-| `kicks` | 因为比同一路径上的其他子连接慢得多而被换掉的子连接数 |
+| `kicks` | 因为比同一路径上的其他子连接慢得多而被换掉的子连接数(`-kickratio`、`-kickfloor`) |
 | `subs` | 会话存续期间建立起来的子连接数 |
 | `stall` | 花在“单次超过 50 毫秒的、写给应用的写操作”上的时间：应用，或者到应用的那一段，取数据慢 |
 
@@ -167,10 +169,10 @@ default  nas-a.example.org:9851 (tls): ok
 |---|---|
 | `pump win` | 因为窗口或预算已满，本节点没有从应用读数据的总时间(就是 `pumpwait` 背后的那个总和) |
 | `resent gap=N stall=N dead=N` | 块为什么被排进重发队列：对端报告后面的数据在等它(`gap`)；过了应到的时间很久，对端仍没有报告收到它(`stall`)；承载它的子连接断了(`dead`)。次数为零的原因不显示 |
-| `subs died lost / silent / write / slow` | 子连接是怎么结束的：连接出错或被关闭(`lost`，其中包括会话结束时对方节点关掉的那些)；20 秒没有进展(`silent`)；一次写操作没有按时完成(`write`)；因为慢而被换掉(`slow`) |
+| `subs died lost / silent / write / slow` | 子连接是怎么结束的：连接出错或被关闭(`lost`，其中包括会话结束时对方节点关掉的那些)；在 `-dead` 这么长的时间里(默认 20 秒)没有进展(`silent`)；一次写操作在这么长的时间里没有完成(`write`)；因为慢而被换掉(`slow`) |
 | `fb gap max`、`>1s N` | 有未确认数据时，对端相邻两份报告之间隔得最久的一次；以及超过一秒的次数 |
 | `gap repairs N (retries R)` | 因为对端报告缺失而重发、之后对端又报告已收到的块数(数到 4096 为止；全部的次数在 `resent gap=` 里)；以及为缺失的块重发时，不是该块第一次重发的次数 |
-| `peer wait` | 针对这些块：本节点决定重发它的那一刻，对端后面的数据已经等了多久。**它不是路径的性质。** 只有等待超过 `-hol` 加上允许的排队量(300 毫秒；报告中断之后的一段时间里是 1 秒)才会做这个决定，所以在默认设置下它不会低于 1.3 秒，通常只比 1.3 秒多一点 |
+| `peer wait` | 针对这些块：本节点决定重发它的那一刻，对端后面的数据已经等了多久。**它不是路径的性质。** 只有等待超过 `-hol` 加上允许的排队量(`-target`，默认 300 毫秒，报告中断之后的一段时间里是 `-pigtarget`，1 秒)才会做这个决定，所以在默认设置下它不会低于 1.3 秒，通常只比 1.3 秒多一点 |
 | `queued` | 从做出决定，到这个块被交给某条子连接 |
 | `to release` | 从做出决定，到对端报告收到了这个块 |
 | `snapshots truncated` | 本节点生成的报告里，有多少份列不下它持有的全部乱序区间 |
@@ -197,7 +199,7 @@ stats sessions=1 goroutines=28 rss=20MB heap=6MB unacked=0MB resends=0 kicks=0/0
 | `heap` | Go 运行时的堆正在使用的内存 |
 | `unacked` | 所有会话合计：从应用读进来、对端还没报告收到的数据；`-budget` 限制的就是它 |
 | `resends` | 计数器：排队等待重发的块数 |
-| `kicks=A/B/C` | 计数器：本节点换掉的子连接数——因为比同一路径上的其他子连接慢得多(`A`)，20 秒没有进展(`B`)，一次写入没有按时完成(`C`) |
+| `kicks=A/B/C` | 计数器：本节点换掉的子连接数——因为比同一路径上的其他子连接慢得多(`A`)，在 `-dead` 这么长的时间里没有进展(`B`)，一次写入在这么长的时间里没有完成(`C`) |
 | `rxdrop` | 计数器：到达时因为乱序数据的空间已满而被丢掉的块数；对端会重发 |
 | `udp in/out/bad/toobig/old` | UDP 回执的计数器：接受的数据报；发出的数据报；被拒绝的(不属于本节点的会话，或者认证失败)；因为太大装不进一个数据报、只走了 TCP 连接的报告；通过了认证、但不比已经见过的更新的数据报 |
 
@@ -233,6 +235,7 @@ stats sessions=1 goroutines=28 rss=20MB heap=6MB unacked=0MB resends=0 kicks=0/0
 - "... has a state file but neither identity.key nor identity.crt. Its identity is lost, and a new one is not created in its place."：从备份里恢复这些文件，或者用一个空目录启动并重新配对。
 - `tcpraid status` 说 "the node is not running or -data DIR is not its data directory"：这些命令是通过数据目录找到节点的。给出和节点相同的 `-data`，在容器里是 `-data /data`。
 - 数据目录或其中的密钥文件能被其他人读或写时，日志会给出警告。请修正权限。
+- "the budget of ... that is stored in the node does not fit: -maxrss ... is below 2 x budget + 100 MB ..."：之前用 `tcpraid transport set` 设过 `budget`，而这一次启动给的 `-maxrss` 对它来说太低。把 `-maxrss` 调高，或者启动时带上 `-budget`，命令行上的值优先于存下的值。
 
 ## 用于监控的数字
 

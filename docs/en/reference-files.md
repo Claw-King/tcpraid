@@ -19,42 +19,113 @@
 | `-stats DURATION` | off | log the node's totals this often, and one line for each session that runs then (`troubleshooting.md` explains the lines) |
 | `-window SIZE` | `128MB` | per session: how much data this node holds that the peer has not yet reported received, and the space it offers the peer for data that arrives out of order. Whole MB |
 | `-budget SIZE` | `256MB` | all sessions together: the most data held unacknowledged, and as much again held out of order |
-| `-grace DURATION` | `900s` | how long a session is kept while no sub-connection to the peer is up |
-| `-hol DURATION` | `1s` | a missing chunk is sent again once later data has waited for it longer than this plus the allowed queue (300 ms; 1 s for a while after reports stalled). Each further attempt for the same chunk waits as long again |
+| `-grace DURATION` | `900s` | how long a session is kept while nothing arrives from the peer |
+| `-hol DURATION` | `1s` | a missing chunk is sent again once later data has waited for it longer than this plus the allowed queue (`-target`, or `-pigtarget` for a while after reports stalled). Each further attempt for the same chunk waits as long again |
+| `-target DURATION` | `300ms` | the allowed queue of a sub-connection: how much data it may hold on the way beyond what its feedback loop covers, counted as time at the rate it delivers. `20ms` to `5s` |
+| `-pigtarget DURATION` | `1s` | the allowed queue for 10 seconds after the peer's reports stalled for over a second. `20ms` to `30s` |
+| `-dead DURATION` | `20s` | a sub-connection that has data on the way and makes no progress for this long, or that takes no write for this long, is closed and replaced. `5s` to `10m` |
+| `-kickratio NUMBER` | `5` | a busy sub-connection that delivers less than the median of its path divided by this number, for 10 seconds, is replaced. `1.5` to `100` |
+| `-kickfloor SIZE` | `256KB` | no sub-connection is replaced for being slow while the median rate of its path is below this many bytes a second. `1KB` to `1GB` |
+| `-share` | on | each sub-connection is held to its share of the window, by the rate it delivers at. `-share=false` switches that off |
+| `-fbsubs N` | `3` | while a session has neither a control sub-connection nor UDP feedback, each report on what arrived goes out on this many data sub-connections. `1` to `16` |
+| `-fbevery DURATION` | `20ms` | how often a report on what arrived is sent while something changes. One goes every second in any case. `5ms` to `1s` |
+| `-coalesce DURATION` | `20ms` | how long the node waits for more data from the application before it sends a chunk that is not full. `0s` to `1s` |
 | `-timeline DURATION` | off | log one line of figures per session this often (`troubleshooting.md` explains the line) |
 | `-maxrss MB` | off | stop the node when its resident memory exceeds this many MB. Linux only |
 
 The start-up lines of the log repeat what is in effect:
 
 ```
-node 0.6.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
-transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
+node 0.7.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+transport window=128MB budget=256MB grace=20m0s hol=1s timeline=off maxrss=off
+tuned target=500ms
 ```
+
+The line `transport` always has these six fields. The line `tuned` is there
+only when one of the settings from `-target` to `-coalesce` is not at its
+default, and it lists those. A node that holds settings which were changed
+while it ran logs them in a third line.
 
 ### The transport settings
 
-The last six options change how the transport of the node works. The defaults
-suit most paths. Change one when a measurement says so. Each takes effect at
-the next start of the node, and each end has its own. A node's `-window` is
-what it sends with and what it offers when it receives, and the other node
-learns it when a session begins.
+The options from `-window` to `-maxrss` change how the transport works at
+this node. The defaults suit most paths. Change one when a measurement says
+so. `troubleshooting.md` explains the figures a node logs about a session,
+and the table at the end of this section says which setting belongs to which
+figure.
 
-- A size is written `256MB` or `1GB`, or as a plain number of bytes. A
-  duration is written `3600s`, `500ms`, `15m`.
+Each setting acts at this node's end of a session. Nothing of it is sent to
+the peer, with one exception. A node's `-window` is what it sends with and
+what it offers when it receives, and the other node learns it when a session
+begins. The two nodes of a pair may run with different values.
+
+A session takes each setting from three places, in this order:
+
+| Layer | Set with | Holds for |
+|---|---|---|
+| rule | `tcpraid rules add NAME ... -SETTING VALUE`, `tcpraid rules set NAME -SETTING VALUE` | the connections of that rule |
+| peer | `tcpraid peers set NAME -SETTING VALUE` | the sessions with that peer, whichever of the two nodes has the rule |
+| node | `tcpraid run -SETTING VALUE` at the start, `tcpraid transport set -SETTING VALUE` while the node runs | every session of the node |
+
+A setting that the rule does not have comes from the peer, and one that the
+peer does not have comes from the node. A rule's settings act at the node
+where the rule is stored. The other node of the same session takes its own,
+from what it has stored for its peer and from its node. `-budget` and `-timeline`
+belong to all sessions of a node together and exist for the node only.
+`-maxrss` and `-stats` are set when the node starts and at no other time.
+
+A session takes its settings when it begins and keeps them until it ends. A
+change, in any of the three places, acts on the sessions that begin
+afterwards. `tcpraid transport`, `tcpraid peers set` and `tcpraid rules set`
+are in `reference-cli.md`.
+
+A setting given on the command line of `tcpraid run` holds for as long as
+that node runs, and `tcpraid transport set` refuses to change it. A setting
+changed with `tcpraid transport set` is stored in `state.json` and holds
+after a restart, unless the command line of the next start gives the same
+setting.
+
+The web page does not show these settings and does not change them. An edit
+of a peer or a rule made in the web page leaves its transport settings as
+they are.
+
+- A size is written `256MB`, `64KB` or `1GB`, or as a plain number of bytes.
+  A duration is written `3600s`, `500ms`, `15m`.
 - `-window` is a whole number of MB, at least 1 MB. `-budget` is at least
-  1 MB. `-grace` and `-hol` are above zero.
+  1 MB. `-grace` and `-hol` are above zero. The table above has the ranges
+  of the others.
 - `-maxrss` is at least 2 x `-budget` + 100 MB, because a node holds up to
   twice `-budget` of stream data in normal operation. Past the limit the node
   stops as it does on a signal. It tells its peers, resets the application
   connections it carries, and exits with status 1 and the reason in its log.
   A container with a restart policy then starts it again, but the sessions
   are not resumed. The option also sets the soft memory limit of the Go
-  runtime to 70% of the value.
+  runtime to 70% of the value. A budget that was stored while the node ran
+  and does not fit the `-maxrss` of a later start keeps the node from
+  starting. The message says so, and `-budget` on the command line goes
+  before the stored value.
 - A value that cannot work ends `tcpraid run` immediately, before it listens
   anywhere, with a message that names the option.
-- The other settings of the transport (chunk size, the queue allowed on each
-  sub-connection, when a sub-connection is replaced) are fixed in a node. The
-  manual mode has options for them.
+- The chunk size, `-chunk` in the manual mode, is not a setting of a node. It
+  stays at 256 KB at every node, because the two ends of a session should
+  use the same.
+
+What each setting changes, and the figure in the log that belongs to it:
+
+| Setting | A larger value | Look at it when |
+|---|---|---|
+| `-window` | lets the node hold more data that is sent and not yet reported received, and offers the peer more room for data that arrives out of order | `pumpwait` is near 1 while `unsent` is near 0 (`troubleshooting.md`) |
+| `-budget` | lets all sessions together hold more | several sessions run at the same time and their windows add up to more than the budget |
+| `-grace` | keeps a session longer while nothing arrives from the peer | the line is down for longer than 15 minutes at a time and the application should not be cut off, or a session should give up sooner |
+| `-hol` | waits longer before a missing chunk is sent again | `holage` at the receiving node stays above zero. A shorter `-hol` at the sending node sends the chunk again sooner, and some chunks then go twice |
+| `-target`, `-pigtarget` | lets each sub-connection hold more data on the way, so more waits behind a sub-connection that stalls | `cap=A/N` shows most sub-connections at their limit, or `peer wait` in the end line is long, since that wait is `-hol` plus this |
+| `-dead` | keeps a sub-connection longer that makes no progress | the end line counts sub-connections that ended as `silent` or `write` on a path that pauses for long and then goes on |
+| `-kickratio` | replaces fewer sub-connections for being slow | `kicks` in the end line is high on a path whose sub-connections differ in speed all the time |
+| `-kickfloor` | replaces none for being slow up to a higher speed of the path | the same, on a slow path |
+| `-share` | (a switch) with it off, a slow sub-connection may hold as much of the window as a fast one | you compare the two |
+| `-fbsubs` | sends each report on more data sub-connections | no path has the control role and no UDP feedback is set up, and `fb gap max` in the end line is long |
+| `-fbevery` | sends fewer reports, and the sending node learns later what arrived | reports take a noticeable share of a slow return direction |
+| `-coalesce` | waits longer to fill a chunk | an application sends small pieces and waits for an answer to each. `0s` sends each piece without waiting |
 
 ### The password of the web page
 
@@ -133,7 +204,9 @@ drwx------  .
   a mark, and a rule with `-paths` or `-subs`. Version 0.4.0 and older do not
   take a file that holds one of them, so take them off before you go back.
   The same goes for a rule with a `-dial` other than `auto`, which version
-  0.5.0 and older do not take.
+  0.5.0 and older do not take, and for a transport setting stored for the
+  node, a peer or a rule, which version 0.6.0 and older do not take. Take
+  such a setting off with the word `default` in the place of its value.
 
 ## Ports at a glance
 

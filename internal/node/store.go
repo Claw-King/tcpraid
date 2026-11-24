@@ -309,15 +309,16 @@ func (n *Node) ChangePaths(name string, change func(paths []Path) ([]Path, error
 // SetPeerPaths replaces the paths of the peer called name by paths and returns the peer
 // as stored; see UpdatePeer.
 func (n *Node) SetPeerPaths(name string, paths []Path) (Peer, error) {
-	return n.UpdatePeer(name, &paths, nil, nil)
+	return n.UpdatePeer(name, &paths, nil, nil, nil)
 }
 
 // UpdatePeer changes settings of the peer called name, in one step, and returns the
 // peer as stored: its paths (replaced as a whole), its allow list, its UDP feedback
-// address. A nil argument leaves that setting as it is. Everything is checked before
-// anything changes; an error of those checks matches ErrInvalid. When the state file
-// cannot be written, the peer stays as it was.
-func (n *Node) UpdatePeer(name string, paths *[]Path, allow, udpDial *string) (Peer, error) {
+// address, its transport settings (each name in transport is set to its value, or taken
+// out where the value is nil). A nil argument leaves that setting as it is. Everything
+// is checked before anything changes; an error of those checks matches ErrInvalid. When
+// the state file cannot be written, the peer stays as it was.
+func (n *Node) UpdatePeer(name string, paths *[]Path, allow, udpDial *string, transport map[string]*string) (Peer, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	var stored Peer
@@ -341,6 +342,13 @@ func (n *Node) UpdatePeer(name string, paths *[]Path, allow, udpDial *string) (P
 			}
 			if err := checkPeerOptions(p.Allow, p.UDPDial); err != nil {
 				return fmt.Errorf("%w: %w", ErrInvalid, err)
+			}
+			if transport != nil {
+				next, err := p.Transport.Merge(transport, false)
+				if err != nil {
+					return fmt.Errorf("%w: %w", ErrInvalid, err)
+				}
+				p.Transport = next
 			}
 			stored = p.clone()
 			return nil
@@ -489,4 +497,49 @@ func (n *Node) RedeemPairingCode(id string, now time.Time, proofOK func(secretHa
 	}
 	delete(n.failures, id)
 	return stored, nil
+}
+
+// Transport returns a copy of the transport settings stored for the node itself; nil
+// when none is.
+func (n *Node) Transport() Transport {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.state.Node.Transport.Clone()
+}
+
+// SetTransport changes the transport settings stored for the node itself and returns
+// them as stored: each name in change is set to its value, or taken out where the value
+// is nil. fits, if not nil, is asked whether the node can run with the settings as they
+// would be; what it refuses, like a name or a value that is no setting, is the caller's
+// doing (ErrInvalid) and changes nothing.
+func (n *Node) SetTransport(change map[string]*string, fits func(next Transport) error) (Transport, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	var stored Transport
+	err := n.update(func(st *State) error {
+		next, err := st.Node.Transport.Merge(change, true)
+		if err == nil && fits != nil {
+			err = fits(next)
+		}
+		if err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+		st.Node.Transport = next
+		stored = next.Clone()
+		return nil
+	})
+	return stored, err
+}
+
+// RuleTransport returns a copy of the transport settings of the rule called name; nil
+// when it has none or there is no such rule.
+func (n *Node) RuleTransport(name string) Transport {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for _, r := range n.state.Rules {
+		if r.Name == name {
+			return r.Transport.Clone()
+		}
+	}
+	return nil
 }

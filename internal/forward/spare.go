@@ -288,7 +288,13 @@ func (rt *Runtime) serveSpare(pc *peerControl, ps *peerState, conn net.Conn) {
 		conn.Close()
 		return
 	}
+	// A spare is opened ahead of any session, and a session takes the settings that
+	// hold when it is created: they are read again when the peer begins one on the
+	// spare. The engine calls that function before it creates the session, in the
+	// same goroutine.
+	cfg := rt.settingsFor(peer, "")
 	rt.Engine.ServeSpare(conn, engine.SubOptions{
+		Config:     cfg,
 		Keys:       keys,
 		Peer:       peer.Name,
 		Allow:      allow,
@@ -299,6 +305,9 @@ func (rt *Runtime) serveSpare(pc *peerControl, ps *peerState, conn net.Conn) {
 		DialFailed: rt.tellFailure(peer.Name),
 	}, func() {
 		// the peer begins a session on it: the next spare is due
+		if now, ok := rt.Node.Peer(peer.Name); ok {
+			*cfg = *rt.settingsFor(now, "")
+		}
 		used = gone()
 		rt.mu.Lock()
 		pc.spareFails = 0

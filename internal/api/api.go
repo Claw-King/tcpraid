@@ -23,6 +23,8 @@
 //	POST   /api/v1/rules                  make a rule (RuleSpec -> Rule)
 //	PUT    /api/v1/rules/{name}           replace a rule (RuleSpec -> Rule)
 //	DELETE /api/v1/rules/{name}           remove a rule; its sessions run to their end
+//	GET    /api/v1/transport              the transport settings of the node (Transport)
+//	PUT    /api/v1/transport              set some of them while the node runs (TransportUpdate -> Transport)
 //
 // A change of the rules takes effect at once and touches only the listeners of the
 // rules that changed.
@@ -73,6 +75,7 @@ const (
 	PathPairingCodes = "/api/v1/pairing-codes"
 	PathPeers        = "/api/v1/peers"
 	PathRules        = "/api/v1/rules"
+	PathTransport    = "/api/v1/transport"
 )
 
 // MaxBody is the largest request body the API reads.
@@ -94,7 +97,7 @@ type Node interface {
 	Join(ctx context.Context, code, address string) (node.Peer, error)
 	Peers() []node.Peer
 	Peer(name string) (node.Peer, error)
-	UpdatePeer(name string, paths *[]node.Path, allow, udpDial *string) (node.Peer, error)
+	UpdatePeer(name string, paths *[]node.Path, allow, udpDial *string, transport map[string]*string) (node.Peer, error)
 	SetPath(name, path string, c node.PathChange) (stored node.Peer, created bool, err error)
 	RemovePath(name, path string) (node.Peer, error)
 	RemovePeer(name string) error
@@ -109,6 +112,8 @@ type Rules interface {
 	RemoveRule(name string) error
 	PeerStatus(name string) forward.PeerStatus
 	TestPeer(ctx context.Context, name string, opt forward.TestOptions) (forward.TestResult, error)
+	Transport() []forward.TransportValue
+	SetTransport(change map[string]*string) ([]forward.TransportValue, error)
 }
 
 // Config is what a Server serves.
@@ -170,6 +175,9 @@ type Session struct {
 	GraceLeftMs int64 `json:"grace_left_ms"`
 	// Test: the session carries the data of a path test, not an application connection.
 	Test bool `json:"test,omitempty"`
+	// WindowBytes (since 0.7.0) is the send window the session was created with at
+	// this node: the node's, or the one its peer or its rule sets.
+	WindowBytes int64 `json:"window_bytes"`
 }
 
 // PairingCodeRequest is the body of POST /api/v1/pairing-codes. Both fields are
@@ -212,6 +220,10 @@ type Peer struct {
 	// Spares (since 0.6.0) is the number of spare connections between the two nodes
 	// that wait for a session to begin on them; absent when there is none.
 	Spares int `json:"spares,omitempty"`
+	// Transport (since 0.7.0) holds the transport settings that sessions with the peer
+	// use at this node in the place of the node's, by name, each written as on the
+	// command line ("window": "256MB"); absent when the peer has none.
+	Transport map[string]string `json:"transport,omitempty"`
 }
 
 // Path describes one way to a peer. A proxy is shown without its user and password.
@@ -237,10 +249,17 @@ type Path struct {
 // a whole (an empty list leaves the peer without a path). Allow is a list of networks
 // with optional ports ("192.0.2.0/24:873, [2001:db8::/32]:5000-5010"); empty means any
 // destination. UDPDial is a host:port; empty means none.
+//
+// Since 0.7.0: transport sets transport settings for the sessions with the peer, by
+// name. A name with a value is set to it, a name with null goes back to what the node
+// has, and a name that is not there stays as it is.
 type PeerUpdate struct {
 	Paths   *[]Path `json:"paths"`
 	Allow   *string `json:"allow"`
 	UDPDial *string `json:"udp_dial"`
+	// left out of a request that does not set it, so that a node from before 0.7.0
+	// takes a request that only names what it knows
+	Transport map[string]*string `json:"transport,omitempty"`
 }
 
 // PathUpdate is the body of PUT /api/v1/peers/{name}/paths/{path} (since 0.4.0): what
@@ -300,6 +319,11 @@ type RuleSpec struct {
 	// connections: "auto", "self", "peer" or "both". In a POST, absent means "auto"; in
 	// a PUT, absent leaves the rule as it is.
 	Dial *string `json:"dial,omitempty"`
+	// Transport (since 0.7.0) sets transport settings for the rule's connections, by
+	// name, as in a PeerUpdate: a name with a value is set, a name with null goes back
+	// to what the peer or the node has, and in a PUT a name that is not there stays as
+	// the stored rule has it.
+	Transport map[string]*string `json:"transport,omitempty"`
 }
 
 // Rule describes a forwarding rule and how it is doing.
@@ -326,6 +350,38 @@ type Rule struct {
 	// Dial (since 0.6.0): "self", "peer" or "both" when the rule says which node
 	// opens the sub-connections; absent for "auto".
 	Dial string `json:"dial,omitempty"`
+	// Transport (since 0.7.0): the transport settings the rule's connections use in
+	// the place of the peer's and the node's; absent when the rule has none.
+	Transport map[string]string `json:"transport,omitempty"`
+}
+
+// Transport is the answer of GET and PUT /api/v1/transport (since 0.7.0): every
+// transport setting of the node, in a fixed order.
+type Transport struct {
+	Settings []TransportSetting `json:"settings"`
+}
+
+// TransportSetting is one transport setting of the node. Value is what a session that
+// is created now gets, unless its peer or its rule sets the same name; it is written as
+// on the command line ("256MB", "300ms", "5", "true"). Source says where the value
+// comes from: "default", "command line" (given when the node was started, and not to
+// be changed while it runs) or "stored" (set while a node ran). Stored is the value
+// kept in the node's state, also where the command line goes before it. Shared marks a
+// setting that all sessions of the node share: a peer and a rule cannot set it.
+type TransportSetting struct {
+	Name    string `json:"name"`
+	Value   string `json:"value"`
+	Default string `json:"default"`
+	Source  string `json:"source"`
+	Stored  string `json:"stored,omitempty"`
+	Shared  bool   `json:"shared,omitempty"`
+}
+
+// TransportUpdate is the body of PUT /api/v1/transport: under "set", a name with a
+// value is set to it and a name with null goes back to its default. At least one name
+// must be there. The change acts on sessions that are created afterwards.
+type TransportUpdate struct {
+	Set map[string]*string `json:"set"`
 }
 
 // PeerRemoval is the answer of DELETE /api/v1/peers/{name} when the request has the
@@ -434,6 +490,8 @@ func New(cfg Config) *Server {
 		add(http.MethodPut, PathRules+"/{name}", s.putRule)
 		add(http.MethodDelete, PathRules+"/{name}", s.removeRule)
 		add(http.MethodPost, PathPeers+"/{name}/test", s.testPeer)
+		add(http.MethodGet, PathTransport, s.getTransport)
+		add(http.MethodPut, PathTransport, s.putTransport)
 	}
 	return s
 }
@@ -593,6 +651,7 @@ func (s *Server) sessions(w http.ResponseWriter, _ *http.Request, _ map[string]s
 			SilentMs:      si.Silent.Milliseconds(),
 			GraceLeftMs:   si.GraceLeft.Milliseconds(),
 			Test:          si.Test,
+			WindowBytes:   int64(si.Window),
 		})
 	}
 	writeJSON(w, http.StatusOK, list)
@@ -748,8 +807,8 @@ func (s *Server) putPeer(w http.ResponseWriter, r *http.Request, arg map[string]
 	if !readBody(w, r, &req) {
 		return
 	}
-	if req.Paths == nil && req.Allow == nil && req.UDPDial == nil {
-		writeError(w, http.StatusBadRequest, "the request changes nothing, because it has none of the fields \"paths\", \"allow\", \"udp_dial\". An empty list for \"paths\" removes every path.")
+	if req.Paths == nil && req.Allow == nil && req.UDPDial == nil && len(req.Transport) == 0 {
+		writeError(w, http.StatusBadRequest, "the request changes nothing, because it has none of the fields \"paths\", \"allow\", \"udp_dial\", \"transport\". An empty list for \"paths\" removes every path.")
 		return
 	}
 	var paths *[]node.Path
@@ -767,7 +826,7 @@ func (s *Server) putPeer(w http.ResponseWriter, r *http.Request, arg map[string]
 		}
 		paths = &list
 	}
-	p, err := s.cfg.Node.UpdatePeer(arg["name"], paths, req.Allow, req.UDPDial)
+	p, err := s.cfg.Node.UpdatePeer(arg["name"], paths, req.Allow, req.UDPDial, req.Transport)
 	if err != nil {
 		fail(w, err, false)
 		return
@@ -897,6 +956,7 @@ func apiRule(st forward.RuleStatus) Rule {
 	if len(r.Paths) > 0 {
 		out.Paths = append([]string{}, r.Paths...)
 	}
+	out.Transport = r.Transport.Clone()
 	if st.Error != "" && !st.ErrorAt.IsZero() {
 		at := st.ErrorAt.UTC()
 		out.ErrorAt = &at
@@ -926,13 +986,21 @@ func (s *Server) ruleStatus(w http.ResponseWriter, code int, name string) {
 }
 
 // nodeRule makes the rule a request describes. was, if not nil, is the stored rule that
-// the request replaces: what the request does not say about paths, sub-connections and
-// who dials stays as was has it.
-func nodeRule(spec RuleSpec, was *node.Rule) node.Rule {
+// the request replaces: what the request does not say about paths, sub-connections, who
+// dials and the transport settings stays as was has it. An error is a transport setting
+// that cannot be stored.
+func nodeRule(spec RuleSpec, was *node.Rule) (node.Rule, error) {
 	r := node.Rule{Name: spec.Name, Listen: spec.Listen, Destination: spec.Destination, Match: spec.Match, Peer: spec.Peer,
 		Enabled: spec.Enabled == nil || *spec.Enabled}
 	if was != nil {
-		r.Paths, r.Subs, r.Dial = was.Clone().Paths, was.Subs, was.Dial
+		r.Paths, r.Subs, r.Dial, r.Transport = was.Clone().Paths, was.Subs, was.Dial, was.Transport.Clone()
+	}
+	if spec.Transport != nil {
+		next, err := r.Transport.Merge(spec.Transport, false)
+		if err != nil {
+			return r, fmt.Errorf("%w: rule %q: %w", node.ErrInvalid, spec.Name, err)
+		}
+		r.Transport = next
 	}
 	if spec.Dial != nil {
 		// a value that is none of the four stays as it came, for the rule's check to
@@ -952,7 +1020,7 @@ func nodeRule(spec RuleSpec, was *node.Rule) node.Rule {
 	if spec.Subs != nil {
 		r.Subs = *spec.Subs
 	}
-	return r
+	return r, nil
 }
 
 func (s *Server) addRule(w http.ResponseWriter, r *http.Request, _ map[string]string) {
@@ -960,7 +1028,11 @@ func (s *Server) addRule(w http.ResponseWriter, r *http.Request, _ map[string]st
 	if !readBody(w, r, &spec) {
 		return
 	}
-	if err := s.cfg.Rules.AddRule(nodeRule(spec, nil)); err != nil {
+	rule, err := nodeRule(spec, nil)
+	if err == nil {
+		err = s.cfg.Rules.AddRule(rule)
+	}
+	if err != nil {
 		fail(w, err, false)
 		return
 	}
@@ -982,7 +1054,11 @@ func (s *Server) putRule(w http.ResponseWriter, r *http.Request, arg map[string]
 			break
 		}
 	}
-	if err := s.cfg.Rules.ReplaceRule(arg["name"], nodeRule(spec, was)); err != nil {
+	rule, err := nodeRule(spec, was)
+	if err == nil {
+		err = s.cfg.Rules.ReplaceRule(arg["name"], rule)
+	}
+	if err != nil {
 		fail(w, err, false)
 		return
 	}
@@ -995,6 +1071,35 @@ func (s *Server) removeRule(w http.ResponseWriter, _ *http.Request, arg map[stri
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func apiTransport(values []forward.TransportValue) Transport {
+	out := Transport{Settings: []TransportSetting{}}
+	for _, v := range values {
+		out.Settings = append(out.Settings, TransportSetting{Name: v.Name, Value: v.Value, Default: v.Default, Source: v.Source, Stored: v.Stored, Shared: v.Shared})
+	}
+	return out
+}
+
+func (s *Server) getTransport(w http.ResponseWriter, _ *http.Request, _ map[string]string) {
+	writeJSON(w, http.StatusOK, apiTransport(s.cfg.Rules.Transport()))
+}
+
+func (s *Server) putTransport(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+	var req TransportUpdate
+	if !readBody(w, r, &req) {
+		return
+	}
+	if len(req.Set) == 0 {
+		writeError(w, http.StatusBadRequest, "the request changes nothing, because \"set\" names no setting. Give a name with a value, or with null for its default.")
+		return
+	}
+	values, err := s.cfg.Rules.SetTransport(req.Set)
+	if err != nil {
+		fail(w, err, false)
+		return
+	}
+	writeJSON(w, http.StatusOK, apiTransport(values))
 }
 
 // peer returns a peer in the form the API shows, with what the control connections
@@ -1015,7 +1120,7 @@ func (s *Server) peer(p node.Peer) Peer {
 // apiPeer copies a peer into the form the API shows. The pair secret has no field there.
 func apiPeer(p node.Peer) Peer {
 	out := Peer{Name: p.Name, Fingerprint: p.Fingerprint, Addresses: append([]string{}, p.Addresses...), PairedAt: p.PairedAt.UTC(), Paths: []Path{},
-		Allow: p.Allow, UDPDial: p.UDPDial}
+		Allow: p.Allow, UDPDial: p.UDPDial, Transport: p.Transport.Clone()}
 	for _, path := range p.Paths {
 		shown := Path{
 			Name: path.Name, Type: path.Type, Addr: path.Addr, Proxy: withoutUser(path.Proxy), Security: path.Security,

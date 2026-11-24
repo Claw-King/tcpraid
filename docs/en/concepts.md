@@ -125,6 +125,12 @@ while. The session stays at the sending node until the far node has reported
 all of it received. Compare files, or act on the result, when the receiving
 application has finished, not when the sending one returns.
 
+A session runs with transport settings, such as its window and how long it
+is kept while the peer is silent. It takes them when it begins: from its
+rule, else from its peer, else from the node. Each of the two nodes takes its
+own, and neither is told the other's (`reference-files.md`, "The transport
+settings").
+
 A session lives in the memory of the two nodes. If every sub-connection fails,
 both nodes hold it for 15 minutes and continue when the path is back. If
 either node restarts, the session is gone, and the applications see a reset

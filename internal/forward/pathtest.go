@@ -276,7 +276,7 @@ func (rt *Runtime) testRun(ctx context.Context, name string, p pathSpec, subs in
 		}
 		route := rt.Engine.NewRoute(groups, keys, ps.peer.UDPDial)
 		go func() {
-			end, ok := route.Carry(gen, engine.SinkIP, engine.SinkPort, owner, ps.valid)
+			end, ok := route.CarryWith(rt.settingsFor(ps.peer, ""), gen, engine.SinkIP, engine.SinkPort, owner, ps.valid)
 			done <- outcome{end, ok}
 		}()
 	}
