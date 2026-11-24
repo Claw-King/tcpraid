@@ -218,7 +218,9 @@ This is a first version, made by one developer in spare time. What is known:
   are tried in order. A node whose path to its peer fails asks the peer to
   open the connections only when the peer holds a path to it too. That
   change takes from a few seconds to about a minute, and sessions that are
-  running are not moved (`docs/en/connecting.md`).
+  running are not moved. A rule with `-dial both` has sub-connections from
+  both nodes in one session, which goes on over those of one node while the
+  path of the other is down (`docs/en/connecting.md`).
 - **The systemd unit was checked by `systemd-analyze` only.** It runs the node
   as a separate user with a set of restrictions, and it has not been
   installed or started on a machine.

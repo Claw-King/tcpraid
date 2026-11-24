@@ -168,6 +168,47 @@ Sessions that are running are not moved. A session that was using the
 broken path waits for it, as it does on a node with one path only. A rule
 with `-paths` or `-subs` keeps to its node's paths.
 
+**Choosing the dialing node.** A rule can say which node opens the
+connections, with `-dial` (`reference-cli.md`). `self` and `peer` fix the
+choice. `both` lets the two nodes open sub-connections for the same session,
+each over its paths. That is useful when the two directions are
+different lines, for example an IPv6 address at one site and a forwarded port
+at the other. The session then uses both lines, and it keeps running on one
+while the other is down. When both directions run over the same line, `both`
+gives the session twice as many sub-connections on that line and nothing
+else.
+
+`both` needs a path on each node, and version 0.6.0 or later on both. When
+one of the two paths is not there, the connections of the rule are reset and
+the rule's state says which path is missing. A path that is there and down
+is another matter. The session then starts on the sub-connections of the
+other node. A peer whose path is down is asked again every 20 seconds, and
+the node with the rule keeps dialing over its own path, until the missing
+sub-connections arrive.
+
+## Spare connections
+
+A session whose connections the peer opens starts later than one that the
+node dials for itself. The request goes over the control connection first.
+Then the peer connects, and the two nodes authenticate before the node can
+send the header of the session. On a long line these steps take several
+round trips.
+
+A node that holds no path to its peer therefore asks the peer to keep a few
+connections ready. They are opened and authenticated ahead of any session
+and stay idle until one needs them. A new session begins on one of them
+immediately and asks for its other sub-connections as before. The peer then opens
+a new spare connection to replace it.
+
+Both nodes need version 0.6.0 or later, and each keeps to its `-spares`
+(`reference-files.md`). The node without a path asks for that many, the
+dialing node keeps at most that many, and the default is 2. `-spares 0` on
+either node switches them off. The spare connections go over the first path
+that carries data, and a rule with `-paths` or `-subs` does not use them. A
+node takes a spare connection only from a peer that it asked, and only
+after the connection has passed the same authentication as every connection
+between the two nodes. `tcpraid peers show` says how many are waiting.
+
 ## Tool by tool
 
 Only tools whose behaviour we could read in their own documentation are

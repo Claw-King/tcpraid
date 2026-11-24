@@ -114,7 +114,7 @@ func startNodeIn(t *testing.T, dir, name string, configure ...func(*Runtime)) *t
 	tn.svc = &link.Service{Node: n, Dialer: d, Logf: logs.logf, PeerRemoved: tn.rt.PeerRemoved}
 	srv := &link.Server{Identity: n.Identity, PeerByFingerprint: n.PeerByFingerprint, HandlePair: tn.svc.HandlePair, Logf: logs.logf}
 	acc := &link.Acceptor{PeerByFingerprint: n.PeerByFingerprint, HandleSub: tn.rt.HandleSub, HandleReverse: tn.rt.HandleReverse,
-		HandleControl: tn.rt.HandleControl, LogRefused: srv.LogRefused}
+		HandleControl: tn.rt.HandleControl, HandleSpare: tn.rt.HandleSpare, LogRefused: srv.LogRefused}
 	srv.HandlePeer, srv.HandlePlain = acc.HandlePeer, acc.HandlePlain
 	ctx, cancel := context.WithCancel(bg)
 	var wg sync.WaitGroup

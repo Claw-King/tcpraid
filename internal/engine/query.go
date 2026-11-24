@@ -24,6 +24,7 @@ type SessionInfo struct {
 	UnackedBytes int64 // read from the application and not yet reported received by the peer: sent, or still queued
 	ResentBytes  int64 // stream bytes queued for sending again (a chunk counts each time)
 	Subs         int   // live sub-connections, data and control
+	Dialed       int   // of those, the ones this end opened; the other end opened the rest
 
 	// UnsentBytes is the part of UnackedBytes that was never sent yet: read from the
 	// application and still waiting for a sub-connection. The rest was sent at least
@@ -48,6 +49,12 @@ func (e *Engine) SessionList() []SessionInfo {
 		s := k.(*session)
 		s.mu.Lock()
 		data, ctrl := s.counts()
+		dialed := 0
+		for _, x := range s.subs {
+			if !x.dead && x.dialed {
+				dialed++
+			}
+		}
 		var unsent int64 // as in the timeline line
 		for _, q := range s.newQ {
 			if c := s.chunks[q]; c != nil {
@@ -68,6 +75,7 @@ func (e *Engine) SessionList() []SessionInfo {
 			UnackedBytes: int64(s.unackedB),
 			ResentBytes:  s.st.resentB,
 			Subs:         data + ctrl,
+			Dialed:       dialed,
 			UnsentBytes:  unsent,
 			Up:           s.everUp,
 			NoReply:      s.noReply,

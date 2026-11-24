@@ -33,6 +33,7 @@ type sub struct {
 	repair   bool // repair sub: re-sent chunks; new data only while no other data sub is up
 	name     string
 	dead     bool
+	dialed   bool // this end opened the connection
 	replied  bool // the server answered the header (always true on the server side)
 	born     time.Time
 	lastRecv time.Time // any frame from the peer on it
@@ -129,10 +130,17 @@ type session struct {
 	changeN     uint64    // bumped whenever our state changes (the UDP sender follows it)
 	udp         *udpState // UDP feedback channel (nil = none)
 	// lifecycle
-	closed    bool
-	everUp    bool
-	cleanEnd  bool
-	endWhy    string // why the session ended, as shutdown was told
+	closed   bool
+	everUp   bool
+	cleanEnd bool
+	endWhy   string // why the session ended, as shutdown was told
+	// redials: the end that takes this session keeps the sub-connections it dials for
+	// it at their numbers (it created the session for a request that asked for them,
+	// or adopt took a function later). adopted is the one adopt took. A session this
+	// end carries leaves it false and gives its function to the monitor.
+	redials   bool
+	adopted   func()
+	attached  bool   // a connection that the other end opened became a sub-connection
 	noReply   string // how the last sub-connection that the other end never answered ended
 	lastPeer  time.Time
 	nextIdx   uint16
@@ -250,10 +258,12 @@ func (s *session) mark() {
 
 // ---------- subs ----------
 
-func (s *session) addSub(c net.Conn, idx uint16, path uint8, ctrl, repair bool, awaitReply bool) {
+// addSub makes c a sub-connection of the session. dialed says which end opened the
+// connection: this one, or the other.
+func (s *session) addSub(c net.Conn, idx uint16, path uint8, ctrl, repair bool, awaitReply, dialed bool) {
 	now := time.Now()
 	sb := &sub{c: c, w: bufio.NewWriterSize(c, 64<<10), wdead: s.e.cfg.Dead, idx: idx, path: path, ctrl: ctrl, repair: repair && !ctrl,
-		name: c.LocalAddr().String(), born: now, lastRecv: now, replied: !awaitReply}
+		name: c.LocalAddr().String(), born: now, lastRecv: now, replied: !awaitReply, dialed: dialed}
 	if ctrl {
 		sb.name += " (ctrl)"
 	} else if sb.repair {
@@ -267,6 +277,9 @@ func (s *session) addSub(c net.Conn, idx uint16, path uint8, ctrl, repair bool, 
 	}
 	s.subs = append(s.subs, sb)
 	s.st.subsUp++
+	if !dialed {
+		s.attached = true
+	}
 	s.cond.Broadcast()
 	s.mu.Unlock()
 	s.e.mSubsUp.Add(1)
@@ -1509,6 +1522,7 @@ func (s *session) monitor(redial func()) {
 		if s.e.cfg.Timeline > 0 && time.Since(s.tl.at) >= s.e.cfg.Timeline {
 			tl = s.timelineLocked(data)
 		}
+		adopted := s.adopted
 		s.mu.Unlock()
 		if tl != "" {
 			log.Printf("[%x] tl %s", s.id[:3], tl)
@@ -1541,10 +1555,29 @@ func (s *session) monitor(redial func()) {
 			s.shutdown(WhyNoAnswer, true)
 			return
 		}
-		if redial != nil && !allDone && !s.peerGone {
-			redial()
+		if !allDone && !s.peerGone {
+			if redial != nil {
+				redial()
+			}
+			if adopted != nil {
+				adopted()
+			}
 		}
 	}
+}
+
+// adopt gives the session a function that keeps the sub-connections this end dials at
+// their numbers, for a session whose monitor was given none: the monitor calls it from
+// then on, as it calls the one it was given. It reports whether the session took it: a
+// session takes one such function in its life.
+func (s *session) adopt(redial func()) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.redials {
+		return false
+	}
+	s.redials, s.adopted = true, redial
+	return true
 }
 
 // timelineLocked: one -timeline line (lock held): MB/s new / re-sent / freed / received /

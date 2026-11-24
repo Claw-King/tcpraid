@@ -40,6 +40,45 @@ type Rule struct {
 	// affected by either.
 	Paths []string `json:"paths,omitempty"`
 	Subs  int      `json:"subs,omitempty"`
+	// Dial says which node opens the sub-connections of the rule's connections (since
+	// 0.6.0): DialSelf, DialPeer or DialBoth. Empty is DialAuto.
+	Dial string `json:"dial,omitempty"`
+}
+
+// Who opens the sub-connections of a rule's connections (Rule.Dial).
+const (
+	// DialAuto: this node, if it holds a path to the peer and the path works; the
+	// peer, if this node holds no path or its path is down while the peer's is not. A
+	// rule is stored with an empty Dial for it.
+	DialAuto = "auto"
+	// DialSelf: this node only.
+	DialSelf = "self"
+	// DialPeer: the peer only, also where this node holds a path.
+	DialPeer = "peer"
+	// DialBoth: this node and the peer at the same time, for the same session. Each
+	// of the two nodes needs a path to the other.
+	DialBoth = "both"
+)
+
+// DialMode returns who opens the sub-connections of the rule's connections: one of
+// DialAuto, DialSelf, DialPeer and DialBoth.
+func (r Rule) DialMode() string {
+	if r.Dial == "" {
+		return DialAuto
+	}
+	return r.Dial
+}
+
+// CheckDial reports whether dial is a value Rule.Dial can have, and returns the value
+// as a rule stores it: DialAuto is stored as the empty string.
+func CheckDial(dial string) (string, error) {
+	switch dial {
+	case "", DialAuto:
+		return "", nil
+	case DialSelf, DialPeer, DialBoth:
+		return dial, nil
+	}
+	return "", fmt.Errorf("dial is %q (want auto, self, peer or both)", dial)
 }
 
 // Clone returns a copy that shares no memory with r.
@@ -53,7 +92,8 @@ func (r Rule) Clone() Rule {
 // Equal reports whether the two rules say the same.
 func (r Rule) Equal(o Rule) bool {
 	return r.Name == o.Name && r.Listen == o.Listen && r.Destination == o.Destination && r.Match == o.Match &&
-		r.Peer == o.Peer && r.Enabled == o.Enabled && r.Subs == o.Subs && slices.Equal(r.Paths, o.Paths)
+		r.Peer == o.Peer && r.Enabled == o.Enabled && r.Subs == o.Subs && slices.Equal(r.Paths, o.Paths) &&
+		r.DialMode() == o.DialMode()
 }
 
 // Narrowed reports whether the rule names paths or a number of sub-connections.
@@ -215,6 +255,11 @@ func (r Rule) Check() error {
 	}
 	if err := r.checkNarrowing(); err != nil {
 		return err
+	}
+	if stored, err := CheckDial(r.Dial); err != nil {
+		return err
+	} else if stored != r.Dial {
+		return errors.New("dial \"auto\" is stored as no dial at all")
 	}
 	if r.Transparent() {
 		if r.Listen != "" || r.Destination != "" {

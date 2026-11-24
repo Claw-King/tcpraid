@@ -27,7 +27,7 @@ tcpraid version
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.5.0 (wire protocol 1)
+version      0.6.0 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -76,7 +76,8 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.5.0, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.6.0, last heard 2026-01-15T10:00:05Z
+spares       2 connections wait for a session to begin on them
 
 PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS  MARK
 default  tcp   nas-a.example.org:9851  -      tls       -       -    data   8     -
@@ -88,6 +89,7 @@ $ tcpraid peers remove nas-b
 peer nas-b removed. The other node is not told and still lists this one.
 ```
 
+- 和对端之间有备用连接在等会话时，`peers show NAME` 会多一行 `spares`(见 `connecting.md` 的“备用连接”)。两个节点上显示的数相同。
 - `peers check NAME` 在每条路径上按该路径的档位打开一条连接，并让另一个节点证明它持有这个配对。路径有多个地址时，每个地址各查一次，各占一行。有路径或地址不通时以状态 1 退出，最后一行会说明是不是每条路径都还有一个能用的地址。没有通往对端路径的节点没有可检查的。
 - `peers remove NAME` 在本节点上解除配对。和这个对端之间两个方向上的会话都被重置，它的连接从此被拒绝。命令随后列出仍然指向这个对端的规则。这些规则会保留，以后用同一个名字配对的节点会接手它们。带上 `-with-rules` 时，这些规则和对端一起删除。
 
@@ -244,6 +246,26 @@ rule pull added: listening, over the paths side, with at most 3 sub-connections 
 
 `rules enable` 和 `rules disable` 会保留这两项设置。要修改它们，就删掉规则再重新添加。
 
+`-dial` 指定规则的会话里，两个节点之间的连接由哪个节点打开：
+
+| 取值 | 含义 |
+|---|---|
+| `auto` | 默认。本节点持有通往对端的路径并且路径是通的，就由本节点打开。本节点没有路径，或者本节点的路径不通而对端的路径通，就由对端打开 |
+| `self` | 只由本节点打开。本节点要有通往对端的路径 |
+| `peer` | 只由对端打开，本节点有路径时也一样。对端要有通往本节点的路径 |
+| `both` | 两个节点都打开，属于同一个会话。两个节点各自要有通往对方的路径，并且都要是 0.6.0 或更新的版本 |
+
+用 `both` 时，一个会话同时有本节点路径上的子连接和对端路径上的子连接。一个节点的路径断了，会话靠另一个节点的子连接继续，路径恢复之后断掉的子连接会补回来。什么时候值得这样用，见 `connecting.md`。
+
+规则的 `-dial` 需要的条件不满足时，它的连接被重置，规则的状态里写明缺的是什么。节点不会改用别的方式去打开连接。
+
+用 `-dial peer` 时，`-paths` 里的名字是对端起的。用 `-dial both` 时，每个节点各取自己有的名字，一个名字都没有的节点会让这条连接失败。`-dial` 不是 `auto` 的规则会在状态里写出来，`rules enable` 和 `rules disable` 会保留这项设置：
+
+```
+$ tcpraid rules add sync -peer nas-a -listen 0.0.0.0:9803 -dest 192.0.2.10:873 -dial both
+rule sync added: listening, both nodes open the connections
+```
+
 `STATE` 是 `listening`、`disabled`，或者 `FAILED:` 加上规则没能监听的原因。这时 `rules add` 以状态 1 退出，规则已经保存，规则有变动时会再试。"last connection:" 后面是这条规则最近一条没能承载的连接出了什么问题，以及那是多久以前：
 
 ```
@@ -293,6 +315,8 @@ ID      ROLE    RULE   PEER   DESTINATION     AGE    SENT     RECEIVED  AVERAGE 
 
 时间到了，会话结束，应用的连接被重置。路径测试的会话在 `RULE` 和 `DESTINATION` 两栏显示 `(path test)`。
 
+一个会话的子连接如果一部分由本节点打开、一部分由对端打开，`STATE` 的末尾会写出来，例如 `ok, 8 sub-connections opened by this node and 8 by the peer`。这是带 `-dial both` 的规则的会话。带 `-json` 时，每个会话都有 `subs_dialed`，是它的子连接里由本节点打开的条数。
+
 `-watch` 每 2 秒把表格再打印一次，每次上面带一行当时的时间，直到你中断它。`-interval DURATION` 可以换一个间隔，从 `1s` 到 `1h`。
 
 `-json` 改为打印 `GET /api/v1/sessions` 的回答，只取一次(见 `reference-api.md`)。
@@ -301,5 +325,5 @@ ID      ROLE    RULE   PEER   DESTINATION     AGE    SENT     RECEIVED  AVERAGE 
 
 ```
 $ tcpraid version
-tcpraid 0.5.0 (wire protocol 1)
+tcpraid 0.6.0 (wire protocol 1)
 ```

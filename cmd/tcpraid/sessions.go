@@ -96,17 +96,22 @@ func cmdSessions(args []string, stdout, stderr io.Writer) int {
 
 // sessionState says in a few words how a session is doing: whether the peer has
 // answered at all, and whether anything arrives from it. A session from which nothing
-// arrives is kept for the grace time and reset then.
+// arrives is kept for the grace time and reset then. A session whose sub-connections
+// were opened partly by this node and partly by the peer says how many each opened.
 func sessionState(s api.Session) string {
 	silent := time.Duration(s.SilentMs) * time.Millisecond
 	left := (time.Duration(s.GraceLeftMs) * time.Millisecond).Truncate(time.Second)
+	state := "ok"
 	switch {
 	case !s.Up:
-		return "connecting"
+		state = "connecting"
 	case silent >= silentAfter:
-		return fmt.Sprintf("waiting for the peer for %v, gives up in %v", silent.Truncate(time.Second), left)
+		state = fmt.Sprintf("waiting for the peer for %v, gives up in %v", silent.Truncate(time.Second), left)
 	}
-	return "ok"
+	if s.SubsDialed > 0 && s.SubsDialed < s.Subs {
+		state += fmt.Sprintf(", %d sub-connections opened by this node and %d by the peer", s.SubsDialed, s.Subs-s.SubsDialed)
+	}
+	return state
 }
 
 // printSessions writes one line for each session of after. before is the same list

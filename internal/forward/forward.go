@@ -36,6 +36,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Claw-King/tcpraid/internal/control"
 	"github.com/Claw-King/tcpraid/internal/engine"
 	"github.com/Claw-King/tcpraid/internal/link"
 	"github.com/Claw-King/tcpraid/internal/node"
@@ -92,9 +93,19 @@ type Runtime struct {
 	// version before 0.3.0). noResolve: it does not name the resolve feature (to be
 	// 0.3.0).
 	// noRulePaths: nor the rule-paths feature (to be 0.4.0).
+	// noDialBoth: nor the dial-both and spare features (to be 0.5.0). noSpare: not the
+	// spare feature alone.
 	noFeatures  bool
 	noResolve   bool
 	noRulePaths bool
+	noDialBoth  bool
+	noSpare     bool
+	// Spares is how many spare connections this node asks a peer for that it holds no
+	// path to, and the most it keeps to one peer that asks for them: control.MaxSpares
+	// at most, 0 for none. Set before Start.
+	Spares     int
+	spares     map[string][]*spareConn // peer name -> the spare connections the peer keeps to this node
+	sparesUsed int                     // sessions that began on a spare connection
 	// Lookup returns the IP addresses of a host name, for a peer that asks. nil: the
 	// system's resolver.
 	Lookup func(ctx context.Context, host string) ([]net.IP, error)
@@ -169,6 +180,8 @@ func (rt *Runtime) Start(ctx context.Context) {
 	rt.peers = map[string]*peerState{}
 	rt.ctl = map[string]*peerControl{}
 	rt.reverse = map[reverseKey]*reverseEntry{}
+	rt.spares = map[string][]*spareConn{}
+	rt.Spares = max(0, min(rt.Spares, control.MaxSpares))
 	rt.mu.Unlock()
 	go rt.superviseControl(ctx)
 	context.AfterFunc(ctx, func() {
@@ -177,6 +190,9 @@ func (rt *Runtime) Start(ctx context.Context) {
 		for name, rr := range rt.running {
 			rr.close()
 			delete(rt.running, name)
+		}
+		for name := range rt.spares {
+			rt.dropSparesLocked(name)
 		}
 	})
 	rt.Apply()
@@ -359,13 +375,31 @@ func (rt *Runtime) carryNamed(r node.Rule, c net.Conn, host string, port int) {
 	rt.carryAttempt(a, r, c, ip, port)
 }
 
-// carryAttempt carries the connection that a stands for; see carry.
+// carryAttempt carries the connection that a stands for; see carry. Who opens the
+// sub-connections is the rule's to say (Rule.Dial).
 func (rt *Runtime) carryAttempt(a *attempt, r node.Rule, c net.Conn, ip net.IP, port int) {
-	if peer, ok := rt.Node.Peer(r.Peer); ok && len(peer.Paths) == 0 {
+	peer, ok := rt.Node.Peer(r.Peer)
+	holds := ok && len(peer.Paths) > 0
+	switch mode := r.DialMode(); {
+	case !ok:
+		// peerFor says so below
+	case mode == node.DialPeer:
+		rt.carryReverse(a, r, peer, c, ip, port)
+		return
+	case mode == node.DialBoth:
+		rt.carryBoth(a, r, peer, c, ip, port)
+		return
+	case mode == node.DialSelf:
+		if !holds {
+			a.fail(fmt.Sprintf("the rule lets only this node open the connections (dial self), and this node has no path to peer %q. Add a path with \"tcpraid peers path set\", or change the rule's dial.", peer.Name))
+			reset(c)
+			return
+		}
+	case !holds:
 		// no way to dial the peer: it is asked to dial
 		rt.carryReverse(a, r, peer, c, ip, port)
 		return
-	} else if ok && !r.Narrowed() && rt.peerDials(peer.Name) {
+	case !r.Narrowed() && rt.peerDials(peer.Name):
 		// this node's own path is down and the peer's is not: the peer dials for now.
 		// A rule that names paths means this node's paths and stays with them.
 		rt.carryReverse(a, r, peer, c, ip, port)
@@ -434,6 +468,18 @@ func (rt *Runtime) peerFor(name string) (*peerState, error) {
 // many as it has), and every control and repair group as it is. When a name fits no
 // path that carries data, it returns nil and that name.
 func narrow(groups []engine.DialGroup, names []string, subs int) (out []engine.DialGroup, missing string) {
+	return narrowTo(groups, names, subs, false)
+}
+
+// narrowSome is narrow for a session that both nodes dial for: the names are looked
+// for among the paths of each node, so a name that this node has no path for is passed
+// over. It returns nil when no path that carries data is left.
+func narrowSome(groups []engine.DialGroup, names []string, subs int) []engine.DialGroup {
+	out, _ := narrowTo(groups, names, subs, true)
+	return out
+}
+
+func narrowTo(groups []engine.DialGroup, names []string, subs int, some bool) (out []engine.DialGroup, missing string) {
 	found := map[string]bool{}
 	for _, g := range groups {
 		switch {
@@ -448,7 +494,7 @@ func narrow(groups []engine.DialGroup, names []string, subs int) (out []engine.D
 		}
 	}
 	for _, name := range names {
-		if !found[name] {
+		if !found[name] && !some {
 			return nil, name
 		}
 	}
@@ -460,11 +506,17 @@ func narrow(groups []engine.DialGroup, names []string, subs int) (out []engine.D
 
 // narrowKey names what a rule uses of a peer's paths.
 func narrowKey(r node.Rule) string {
-	return strconv.Itoa(r.Subs) + "\x00" + strings.Join(r.Paths, "\x00")
+	key := strconv.Itoa(r.Subs) + "\x00" + strings.Join(r.Paths, "\x00")
+	if r.DialMode() == node.DialBoth {
+		key = "both\x00" + key // the names are taken another way
+	}
+	return key
 }
 
 // narrowedRoute returns the route for the connections of a rule that names paths or a
-// number of sub-connections, over the paths this node holds to the rule's peer.
+// number of sub-connections, over the paths this node holds to the rule's peer. For a
+// rule that both nodes dial for, the names that this node has no path for are passed
+// over (narrowSome).
 func (rt *Runtime) narrowedRoute(ps *peerState, r node.Rule) (*engine.Route, error) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
@@ -472,9 +524,16 @@ func (rt *Runtime) narrowedRoute(ps *peerState, r node.Rule) (*engine.Route, err
 	if route := ps.narrowed[key]; route != nil {
 		return route, nil
 	}
-	groups, missing := narrow(rt.groups(ps, ps.peer), r.Paths, r.Subs)
-	if groups == nil {
-		return nil, noSuchPath(ps.peer.Name, missing)
+	var groups []engine.DialGroup
+	if r.DialMode() == node.DialBoth {
+		if groups = narrowSome(rt.groups(ps, ps.peer), r.Paths, r.Subs); groups == nil {
+			return nil, fmt.Errorf("the rule lets both nodes open the connections (dial both), and this node has none of the paths it names to peer %q that carry data. \"tcpraid peers show %s\" lists the paths.", ps.peer.Name, ps.peer.Name)
+		}
+	} else {
+		var missing string
+		if groups, missing = narrow(rt.groups(ps, ps.peer), r.Paths, r.Subs); groups == nil {
+			return nil, noSuchPath(ps.peer.Name, missing)
+		}
 	}
 	keys, err := pairKeys(ps.peer)
 	if err != nil {
@@ -501,7 +560,9 @@ func noSuchPath(peer, path string) error {
 // told when the rule is stored: this node holds the paths to the rule's peer. Where
 // the peer holds them, it says so when a connection comes.
 func (rt *Runtime) checkNarrowing(r node.Rule) error {
-	if len(r.Paths) == 0 {
+	// where the peer dials, the names are the peer's; where both do, each node takes
+	// the names it has
+	if mode := r.DialMode(); len(r.Paths) == 0 || mode == node.DialPeer || mode == node.DialBoth {
 		return nil
 	}
 	peer, ok := rt.Node.Peer(r.Peer)
@@ -617,6 +678,7 @@ func (rt *Runtime) PeerRemoved(name string) {
 		delete(rt.peers, name)
 	}
 	rt.dropControlLocked(name)
+	rt.dropSparesLocked(name)
 	delete(rt.dialErr, name)
 	rt.mu.Unlock()
 	if n := rt.Engine.AbortPeer(name); n > 0 {
@@ -650,7 +712,7 @@ func (rt *Runtime) Rules() []RuleStatus {
 	for _, r := range rules {
 		p := rt.problems[r.Name]
 		st := RuleStatus{Rule: r, Sessions: sessions[r.Name], Error: p.text, ErrorAt: p.at}
-		st.PeerDials = r.Enabled && !r.Narrowed() && holds[r.Peer] && rt.pathDownLocked(r.Peer)
+		st.PeerDials = r.Enabled && r.DialMode() == node.DialAuto && !r.Narrowed() && holds[r.Peer] && rt.pathDownLocked(r.Peer)
 		switch {
 		case !r.Enabled:
 			st.Error, st.ErrorAt = "", time.Time{}

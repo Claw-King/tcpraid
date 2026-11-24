@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Claw-King/tcpraid/internal/api"
 	"github.com/Claw-King/tcpraid/internal/engine"
@@ -138,6 +139,9 @@ func TestRuleStateSaysWhatIsParticular(t *testing.T) {
 		"disabled":                                                                                     {Paths: []string{"a"}, Subs: 2},
 		"FAILED: the port is taken":                                                                    {Enabled: true, Error: "the port is taken", Paths: []string{"a"}},
 		"listening, the peer opens the connections while this node's path is down, last connection: x": {Enabled: true, Listening: true, PeerDials: true, Error: "x"},
+		"listening, only this node opens the connections":                                              {Enabled: true, Listening: true, Dial: "self"},
+		"listening, only the peer opens the connections":                                               {Enabled: true, Listening: true, Dial: "peer"},
+		"listening, over the paths a, both nodes open the connections":                                 {Enabled: true, Listening: true, Paths: []string{"a"}, Dial: "both"},
 	} {
 		if got := ruleState(r); got != want {
 			t.Errorf("ruleState(%+v) = %q, want %q", r, got, want)
@@ -160,6 +164,7 @@ func TestCommandsSayWhenTheNodeIsOlder(t *testing.T) {
 		"mark":  {"peers", "path", "set", "alpha", "default", "-mark", "7"},
 		"paths": {"rules", "add", "zfs", "-peer", "alpha", "-listen", "127.0.0.1:5000", "-dest", "192.0.2.1:873", "-paths", "default"},
 		"subs":  {"rules", "add", "zfs", "-peer", "alpha", "-listen", "127.0.0.1:5000", "-dest", "192.0.2.1:873", "-subs", "2"},
+		"dial":  {"rules", "add", "zfs", "-peer", "alpha", "-listen", "127.0.0.1:5000", "-dest", "192.0.2.1:873", "-dial", "both"},
 	} {
 		dir := fakeNode(t, refuse(field))
 		code, _, _, stderr := call(append(args, "-data", dir)...)
@@ -186,7 +191,7 @@ func TestCommandsSayWhenTheNodeIsOlder(t *testing.T) {
 	if len(bodies) != 2 {
 		t.Fatalf("%d requests arrived", len(bodies))
 	}
-	for i, fields := range [][]string{{`"addrs"`, `"mark"`}, {`"paths"`, `"subs"`}} {
+	for i, fields := range [][]string{{`"addrs"`, `"mark"`}, {`"paths"`, `"subs"`, `"dial"`}} {
 		for _, field := range fields {
 			if strings.Contains(bodies[i], field) {
 				t.Errorf("a request without the new flags has %s: %s", field, bodies[i])
@@ -225,6 +230,53 @@ func TestPeersCheckSummary(t *testing.T) {
 		code, _, stdout, stderr := call("peers", "check", "alpha", "-data", answer(c.paths))
 		if code != c.code || (c.want != "" && !strings.Contains(stderr, c.want)) || (c.want == "" && strings.TrimSpace(stderr) != "") {
 			t.Errorf("%s: code %d\n%s\n%s", name, code, stdout, stderr)
+		}
+	}
+}
+
+// Through the commands: a rule says who opens its connections and keeps saying it, and
+// the node without a path shows the spare connections its peer keeps to it.
+func TestDialAndSparesCommands(t *testing.T) {
+	dirA, dirB := filepath.Join(t.TempDir(), "a"), filepath.Join(t.TempDir(), "b")
+	lnA, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addrA := lnA.Addr().String()
+	lnA.Close()
+	startNodeWith(t, runOptions{dataDir: dirA, name: "alpha", listen: addrA, advertise: stringList{addrA}})
+	startNodeWith(t, runOptions{dataDir: dirB, name: "beta"})
+	withStdin(t, strings.TrimSpace(must(t, "pair", "create", "-data", dirA)))
+	must(t, "pair", "join", "-data", dirB)
+
+	lnR, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := lnR.Addr().String()
+	lnR.Close()
+	out := must(t, "rules", "add", "zfs", "-peer", "alpha", "-listen", in, "-dest", "192.0.2.1:873", "-dial", "peer", "-data", dirB)
+	want := "listening, only the peer opens the connections"
+	if !strings.Contains(out, "rule zfs added: "+want) {
+		t.Fatalf("rules add with -dial peer: %q", out)
+	}
+	must(t, "rules", "disable", "zfs", "-data", dirB)
+	if out := must(t, "rules", "enable", "zfs", "-data", dirB); !strings.Contains(out, want) {
+		t.Errorf("after disable and enable: %q", out)
+	}
+	if code, _, _, stderr := call("rules", "add", "x", "-peer", "alpha", "-listen", "127.0.0.1:1", "-dest", "192.0.2.1:1", "-dial", "neither", "-data", dirB); code != 1 ||
+		!strings.Contains(stderr, "want auto, self, peer or both") {
+		t.Errorf("rules add with a dial that is none of the four: code %d, %q", code, stderr)
+	}
+	// alpha has no path to beta and asks for the two spare connections a node asks for
+	// when nothing else is said; both nodes count them
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		a, b := must(t, "peers", "show", "beta", "-data", dirA), must(t, "peers", "show", "alpha", "-data", dirB)
+		if strings.Contains(a, "spares       2 connections wait for a session to begin on them") && strings.Contains(b, "spares       2 connections") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no two spare connections:\nalpha: %s\nbeta: %s", a, b)
 		}
 	}
 }

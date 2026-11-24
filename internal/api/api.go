@@ -155,6 +155,7 @@ type Session struct {
 	UnackedBytes int64     `json:"unacked_bytes"`
 	ResentBytes  int64     `json:"resent_bytes"`   // stream bytes queued for sending again
 	Subs         int       `json:"subs"`           // live sub-connections
+	SubsDialed   int       `json:"subs_dialed"`    // of those, the ones this node opened (since 0.6.0); the peer opened the rest
 	Peer         string    `json:"peer,omitempty"` // the peer at the other end
 	Rule         string    `json:"rule,omitempty"` // role client: the rule that carries the connection
 	// Since 0.3.0. unacked_bytes is the sum of the next two: read from the application
@@ -208,6 +209,9 @@ type Peer struct {
 	Online      bool       `json:"online"`                 // one is up, in either direction
 	Version     string     `json:"version,omitempty"`      // the program version the peer reported
 	LastMessage *time.Time `json:"last_message,omitempty"` // when the last message from the peer arrived
+	// Spares (since 0.6.0) is the number of spare connections between the two nodes
+	// that wait for a session to begin on them; absent when there is none.
+	Spares int `json:"spares,omitempty"`
 }
 
 // Path describes one way to a peer. A proxy is shown without its user and password.
@@ -292,6 +296,10 @@ type RuleSpec struct {
 	Enabled     *bool     `json:"enabled,omitempty"`
 	Paths       *[]string `json:"paths,omitempty"`
 	Subs        *int      `json:"subs,omitempty"`
+	// Dial (since 0.6.0) says which node opens the sub-connections of the rule's
+	// connections: "auto", "self", "peer" or "both". In a POST, absent means "auto"; in
+	// a PUT, absent leaves the rule as it is.
+	Dial *string `json:"dial,omitempty"`
 }
 
 // Rule describes a forwarding rule and how it is doing.
@@ -315,6 +323,9 @@ type Rule struct {
 	// PeerDials (since 0.5.0): new connections of the rule are opened by the peer for
 	// now, because this node's own path to the peer is down. Absent otherwise.
 	PeerDials bool `json:"peer_dials,omitempty"`
+	// Dial (since 0.6.0): "self", "peer" or "both" when the rule says which node
+	// opens the sub-connections; absent for "auto".
+	Dial string `json:"dial,omitempty"`
 }
 
 // PeerRemoval is the answer of DELETE /api/v1/peers/{name} when the request has the
@@ -572,6 +583,7 @@ func (s *Server) sessions(w http.ResponseWriter, _ *http.Request, _ map[string]s
 			UnackedBytes: si.UnackedBytes,
 			ResentBytes:  si.ResentBytes,
 			Subs:         si.Subs,
+			SubsDialed:   si.Dialed,
 			Peer:         si.Peer,
 			Rule:         si.Rule,
 
@@ -881,7 +893,7 @@ func (s *Server) testPeer(w http.ResponseWriter, r *http.Request, arg map[string
 func apiRule(st forward.RuleStatus) Rule {
 	r := st.Rule
 	out := Rule{Name: r.Name, Listen: r.Listen, Destination: r.Destination, Match: r.Match, Peer: r.Peer, Enabled: r.Enabled,
-		Listening: st.Listening, Error: st.Error, Sessions: st.Sessions, Subs: r.Subs, PeerDials: st.PeerDials}
+		Listening: st.Listening, Error: st.Error, Sessions: st.Sessions, Subs: r.Subs, PeerDials: st.PeerDials, Dial: r.Dial}
 	if len(r.Paths) > 0 {
 		out.Paths = append([]string{}, r.Paths...)
 	}
@@ -914,13 +926,22 @@ func (s *Server) ruleStatus(w http.ResponseWriter, code int, name string) {
 }
 
 // nodeRule makes the rule a request describes. was, if not nil, is the stored rule that
-// the request replaces: what the request does not say about paths and sub-connections
-// stays as was has it.
+// the request replaces: what the request does not say about paths, sub-connections and
+// who dials stays as was has it.
 func nodeRule(spec RuleSpec, was *node.Rule) node.Rule {
 	r := node.Rule{Name: spec.Name, Listen: spec.Listen, Destination: spec.Destination, Match: spec.Match, Peer: spec.Peer,
 		Enabled: spec.Enabled == nil || *spec.Enabled}
 	if was != nil {
-		r.Paths, r.Subs = was.Clone().Paths, was.Subs
+		r.Paths, r.Subs, r.Dial = was.Clone().Paths, was.Subs, was.Dial
+	}
+	if spec.Dial != nil {
+		// a value that is none of the four stays as it came, for the rule's check to
+		// refuse it
+		if stored, err := node.CheckDial(*spec.Dial); err == nil {
+			r.Dial = stored
+		} else {
+			r.Dial = *spec.Dial
+		}
 	}
 	if spec.Paths != nil {
 		r.Paths = nil
@@ -982,7 +1003,7 @@ func (s *Server) peer(p node.Peer) Peer {
 	out := apiPeer(p)
 	if s.cfg.Rules != nil {
 		st := s.cfg.Rules.PeerStatus(p.Name)
-		out.Online, out.Version = st.Online, st.Version
+		out.Online, out.Version, out.Spares = st.Online, st.Version, st.Spares
 		if !st.LastMessage.IsZero() {
 			at := st.LastMessage.UTC()
 			out.LastMessage = &at

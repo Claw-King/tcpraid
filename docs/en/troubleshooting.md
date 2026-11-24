@@ -35,7 +35,7 @@ taken  0.0.0.0:9700  nas-a  192.0.2.10:873  0         FAILED: listening on 0.0.0
 | "peer ... looks up as many host names as it does at a time, and did not look up NAME" | the far node is busy with other lookups. Try again in a moment |
 | "peer ... is not connected to this node, so it cannot be asked which address NAME stands for" | a host name is looked up over the connection between the two nodes, which is down. `tcpraid peers` shows the peer as offline. See "The peer is offline" |
 | "peer ... could not connect to ADDRESS. Its log says why." | the same two cases, with a far node of a version before 0.3.0, which does not report the reason. Its log has `dial ADDRESS: ... connection refused`, or `dial ADDRESS: not in the allow list of the peer` |
-| reset after 15 seconds, rule on the node without a path | the peer was asked to connect and nothing arrived: the peer can no longer reach this node's listener |
+| reset after 15 seconds, rule on the node without a path | the peer was asked to connect and nothing arrived: the peer can no longer reach this node's listener. The same happens for up to 30 seconds after the peer lost its control connection where this node did not see it end, because the request goes out on the old connection |
 | "peer ... does not answer on the connections this node opens", and after 30 seconds "peer ... answered on none of the connections within 30 seconds" | none of the sub-connections came up, and the text after it says what the attempts ran into. One cause: the pairing was ended on the other node. The rule then says "the other node does not accept this node, which is not paired with it or no longer is", and the other node's log has lines "refused a connection from ...: not a peer of this node". Pair again |
 | "the connections to peer ... cannot be opened" with an error | this node cannot connect to the peer's listener at all. `tcpraid peers check NAME` tries each path |
 | "none of the path's N addresses gave a connection", followed by each address and its error | the path names several addresses and none of them worked. `tcpraid peers check NAME` tries each address on its own |
@@ -43,6 +43,10 @@ taken  0.0.0.0:9700  nas-a  192.0.2.10:873  0         FAILED: listening on 0.0.0
 | "the rule names the path NAME, and this node has no path of that name to peer ... that carries data" | the rule has `-paths` with a name that is no path for data on this node. `tcpraid peers show PEER` lists the paths |
 | "peer ... could not open the connections: it has no path called NAME that carries data" | the same, where the peer holds the paths: the name in the rule's `-paths` is not one of the peer's paths for data. Look at the paths on the peer |
 | "peer ... does not keep a rule to the paths it names (it runs version ...)" | the rule has `-paths` or `-subs`, the peer holds the paths, and the peer is older than 0.5.0. Update it, or add the rule without the two flags |
+| "the rule lets only this node open the connections (dial self), and this node has no path to peer ..." | the rule has `-dial self` and this node holds no path. Add a path with `tcpraid peers path set`, or add the rule again with another `-dial` |
+| "the rule lets only peer ... open the connections (dial peer), and the peer is not connected to this node" | the rule has `-dial peer` and no control connection with the peer is up. `tcpraid peers` shows the peer as offline. See "The peer is offline" |
+| "the rule lets both nodes open the connections (dial both), which needs a path on each node, and ..." | the rule has `-dial both`, and the message goes on to say which node holds no path to the other, or none of the paths the rule names. Add the path on that node, or add the rule again with another `-dial` |
+| "peer ... does not open connections of a session that the other node opens connections of too (it runs version ...)" | the rule has `-dial both` and the peer is older than 0.6.0. Update it, or use another `-dial` |
 | "nothing arrived from peer ... for the whole grace time" | the line between the two nodes was down for longer than `-grace`. See the next section |
 | "peer ... was restarted while it carried a connection of this rule, and the connection was reset" | the other node came back as a new process (it was restarted, killed, or ran out of memory) and this node reset the connection the old process had been carrying. Start the transfer again. If it keeps happening, look at the other node's log and at its memory limits (`-maxrss`, the limit of its container) |
 
@@ -139,6 +143,14 @@ A node without a path to its peer cannot check, and says `this node has no path 
   bytes sent again point to a path that loses or stalls. A second path with
   the roles `repair` and `control`, or UDP feedback, is what helps there
   (`concepts.md`).
+- A session of a rule with `-dial both` should show sub-connections from both
+  nodes: its `STATE` in `tcpraid sessions` ends with how many each node
+  opened. When it shows those of one node only, the path of the other node
+  is down. When the peer could not open its share at the start of the
+  session, the log of the node with the rule has the line "peer ... could
+  not open its share of the connections of a session", with the reason the
+  peer gave, and the peer is asked again every 20 seconds until its first
+  connection arrives.
 - The speed of the stretch between the application and its node, and between
   the far node and the destination, counts as well, because tcpraid cannot be
   faster than the slower of them, or than the application itself.

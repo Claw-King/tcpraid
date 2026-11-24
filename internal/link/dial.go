@@ -236,6 +236,13 @@ func (d *Dialer) OpenReverse(ctx context.Context, peer node.Peer, path node.Path
 	return d.open(ctx, peer, path, TypeReverse, func(o *Opening) { o.Request, o.Path, o.Role = request, pathIndex, role })
 }
 
+// OpenSpare connects to peer over path and sends the opening of a spare connection
+// (TypeSpare), with the number this node gives the path: the peer may later send the
+// transport's header on the connection it returns. It gives up when ctx is done.
+func (d *Dialer) OpenSpare(ctx context.Context, peer node.Peer, path node.Path, pathIndex byte) (net.Conn, error) {
+	return d.open(ctx, peer, path, TypeSpare, func(o *Opening) { o.Path, o.Role = pathIndex, RoleData })
+}
+
 // OpenControl connects to peer over path and sends the opening of the control
 // connection (TypeControl). It gives up when ctx is done.
 func (d *Dialer) OpenControl(ctx context.Context, peer node.Peer, path node.Path) (net.Conn, error) {

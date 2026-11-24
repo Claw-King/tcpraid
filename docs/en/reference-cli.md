@@ -38,7 +38,7 @@ after telling its peers and resetting the application connections it carries.
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.5.0 (wire protocol 1)
+version      0.6.0 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -91,7 +91,8 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.5.0, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.6.0, last heard 2026-01-15T10:00:05Z
+spares       2 connections wait for a session to begin on them
 
 PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS  MARK
 default  tcp   nas-a.example.org:9851  -      tls       -       -    data   8     -
@@ -103,6 +104,9 @@ $ tcpraid peers remove nas-b
 peer nas-b removed. The other node is not told and still lists this one.
 ```
 
+- `peers show NAME` has a `spares` line while spare connections with the
+  peer wait for a session (`connecting.md`, "Spare connections"). Either
+  node shows the same number.
 - `peers check NAME` opens a connection on every path, in the path's tier,
   and asks the other node to prove that it holds the pairing. A path with
   several addresses is checked at each of them, one line for each. The
@@ -323,6 +327,36 @@ rule pull added: listening, over the paths side, with at most 3 sub-connections 
 `rules enable` and `rules disable` keep both settings. To change them,
 remove the rule and add it again.
 
+`-dial` says which node opens the connections between the two nodes for the
+sessions of the rule:
+
+| Value | Meaning |
+|---|---|
+| `auto` | the default. This node opens them when it holds a path to the peer and the path works. The peer opens them when this node holds no path, or when this node's path is down and the peer's is not |
+| `self` | only this node. This node needs a path to the peer |
+| `peer` | only the peer, also when this node holds a path. The peer needs a path to this node |
+| `both` | both nodes, for the same session. Each node needs a path to the other, and both nodes need version 0.6.0 or later |
+
+With `both`, a session has the sub-connections of this node's paths and
+those of the peer's paths at the same time. When the paths of one node go
+down, the session goes on over the sub-connections of the other node, and
+the missing ones come back when the paths work again. `connecting.md` says
+when that is useful.
+
+When a rule lacks what its `-dial` needs, its connections are reset and the
+state of the rule says what is missing. The node does not open them another
+way instead.
+
+With `-dial peer` the names of `-paths` are the peer's. With `-dial both`
+each node takes the names that it has a path for, and a node that has none
+of them fails the connection. A rule with a `-dial` other than `auto` says
+so in its state, and `rules enable` and `rules disable` keep the setting:
+
+```
+$ tcpraid rules add sync -peer nas-a -listen 0.0.0.0:9803 -dest 192.0.2.10:873 -dial both
+rule sync added: listening, both nodes open the connections
+```
+
 `STATE` is `listening`, `disabled`, or `FAILED:` with the reason the rule
 could not listen. In that case `rules add` exits with status 1, and the rule
 is stored and tried again whenever the rules change. After "last connection:" comes what
@@ -398,6 +432,12 @@ When the time is up, the session ends and the application's connection is
 reset. The session of a path test shows `(path test)` under `RULE` and
 `DESTINATION`.
 
+A session whose sub-connections were opened partly by this node and partly
+by the peer says so at the end of `STATE`, as in `ok, 8 sub-connections
+opened by this node and 8 by the peer`. That is a session of a rule with
+`-dial both`. With `-json`, every session has `subs_dialed`, the number of
+its sub-connections that this node opened.
+
 `-watch` prints the table again every 2 seconds, each time under the time of
 day, until you interrupt it. `-interval DURATION` sets another interval, from
 `1s` to `1h`.
@@ -409,5 +449,5 @@ day, until you interrupt it. `-interval DURATION` sets another interval, from
 
 ```
 $ tcpraid version
-tcpraid 0.5.0 (wire protocol 1)
+tcpraid 0.6.0 (wire protocol 1)
 ```

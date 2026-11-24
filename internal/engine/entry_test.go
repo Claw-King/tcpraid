@@ -412,7 +412,7 @@ func TestReverseJoinsOnlyItsSession(t *testing.T) {
 	a, b := net.Pipe()
 	defer a.Close()
 	done := make(chan bool, 1)
-	go func() { done <- exit.serveSub(b, SubOptions{Keys: k, Peer: "entry"}, nil, s) }()
+	go func() { done <- exit.serveSub(b, SubOptions{Keys: k, Peer: "entry"}, nil, s, nil) }()
 	h := subHeader{isNew: true, id: [16]byte{2}, dstIP: dst.IP, dstPort: dst.Port, idx: 1, unix: time.Now().Unix()}
 	go a.Write(h.marshal(k.ks.hdr))
 	rp := make([]byte, replyLen)

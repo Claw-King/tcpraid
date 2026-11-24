@@ -64,6 +64,13 @@ Rules work on both nodes as soon as one of the two can reach the other.
 So only one node needs a listener (`-listen`) that the other can reach, and
 nothing is relayed through a third machine. If each node can reach the other,
 give each a path to the other, and each rule then uses its own node's paths.
+A rule can also say which node opens its sub-connections, or let both
+nodes open them for the same session, with `-dial` (`reference-cli.md`).
+
+A session whose sub-connections the peer opens begins a little later than
+one the node dials for itself, because the request and the peer's connect
+come first. The peer therefore keeps a few spare connections ready, and such
+a session begins on one of them (`connecting.md`, "Spare connections").
 
 While the peer is offline, a rule on the node without a path resets its
 connections immediately and says why in its status.

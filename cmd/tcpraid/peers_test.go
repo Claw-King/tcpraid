@@ -216,6 +216,8 @@ func TestRunOptionsRefused(t *testing.T) {
 		{[]string{"-key", "k.pem"}, "-cert and -key go together"},
 		{[]string{"-cert", "c.pem", "-key", "k.pem"}, "Set -listen"},
 		{[]string{"-advertise", "no port"}, "-advertise"},
+		{[]string{"-spares", "9"}, "-spares is 9. Give 0 to 8."},
+		{[]string{"-spares", "-1"}, "-spares is -1. Give 0 to 8."},
 	} {
 		code, _, _, stderr := call(append([]string{"run", "-data", dir}, c.args...)...)
 		if code != 2 || !strings.Contains(stderr, c.want) {

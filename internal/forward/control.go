@@ -49,6 +49,10 @@ const MaxOpenRequests = 64
 // asked to open; then its application connection is reset.
 const ReverseWait = 15 * time.Second
 
+// BothAgain is how often a session that both nodes dial for asks the peer again for its
+// share of the sub-connections, as long as none of them has arrived.
+const BothAgain = 20 * time.Second
+
 var (
 	// how long to wait before dialing a control connection again, after one, two, ...
 	// attempts in a row that gave no lasting connection
@@ -64,6 +68,7 @@ type times struct {
 	ping    time.Duration // control.PingInterval
 	timeout time.Duration // control.Timeout
 	wait    time.Duration // ReverseWait
+	reask   time.Duration // BothAgain
 }
 
 func (t *times) fill() {
@@ -76,6 +81,9 @@ func (t *times) fill() {
 	if t.wait == 0 {
 		t.wait = ReverseWait
 	}
+	if t.reask == 0 {
+		t.reask = BothAgain
+	}
 }
 
 // PeerStatus is what the control connections say about a peer.
@@ -86,6 +94,9 @@ type PeerStatus struct {
 	Version string
 	// LastMessage is when the last message from the peer arrived; zero if none has.
 	LastMessage time.Time
+	// Spares is the number of spare connections between the two nodes that wait for a
+	// session, whichever node opened them.
+	Spares int
 }
 
 // peerControl is what the runtime keeps about the control connections with one peer.
@@ -110,6 +121,17 @@ type peerControl struct {
 	lastOf             time.Time
 	// features is what the peer's last hello said it can do (control.FeaturePathTest).
 	features []string
+	// Spare connections (spare.go). spareAsked is how many this node last asked the
+	// peer to keep to it over a control connection that is still up (-1: it has not
+	// asked). spareWant is how many the peer asked this node to keep; spareIdle are the
+	// ones this node keeps that no session has begun on; spareKeeping: keepSpares runs;
+	// spareFails counts the spares in a row that ended young and unused.
+	spareAsked   int
+	spareWant    int
+	spareIdle    []net.Conn
+	spareKeeping bool
+	spareFails   int
+	spareKick    chan struct{}
 }
 
 type ctlConn struct {
@@ -147,13 +169,17 @@ type reverseKey struct {
 
 // reverseEntry is a session this node carries whose sub-connections a peer opens. fail
 // is told why, when the peer answers that it cannot open them.
+// both: this node dials sub-connections of the session too, so a peer that cannot open
+// its share does not end the session. said: that the peer could not was logged.
 type reverseEntry struct {
-	rv   *engine.Reverse
-	fail func(text string)
+	both, said bool
+	rule       string
+	rv         *engine.Reverse
+	fail       func(text string)
 }
 
 // features are what this node says it can do in every hello.
-var features = []string{control.FeaturePathTest, control.FeatureResolve, control.FeatureRulePaths}
+var features = []string{control.FeaturePathTest, control.FeatureResolve, control.FeatureRulePaths, control.FeatureDialBoth, control.FeatureSpare}
 
 // maxFeatures bounds what is kept of the features a peer names.
 const maxFeatures = 16
@@ -163,7 +189,7 @@ const maxFeatures = 16
 func (rt *Runtime) controlLocked(name string) *peerControl {
 	pc := rt.ctl[name]
 	if pc == nil {
-		pc = &peerControl{}
+		pc = &peerControl{spareAsked: -1, spareKick: make(chan struct{}, 1)}
 		pc.ctx, pc.cancel = context.WithCancel(rt.ctx)
 		rt.ctl[name] = pc
 	}
@@ -177,6 +203,7 @@ func (rt *Runtime) superviseControl(ctx context.Context) {
 	defer tick.Stop()
 	for {
 		for _, p := range rt.Node.Peers() {
+			rt.askSpares(p, nil)
 			if len(p.Paths) == 0 {
 				continue
 			}
@@ -301,7 +328,20 @@ func (rt *Runtime) runControl(peer node.Peer, conn net.Conn, dialed bool) {
 			break
 		}
 	}
+	gone := len(pc.conns) == 0
+	if gone {
+		// what this node asked for over them is asked again when one is back
+		pc.spareAsked = -1
+		// and what the peer asked for holds no longer: it says it again when it has
+		// the hello on the next control connection if it still wants spares, and a
+		// peer that comes back wanting none (another setting, an older version) says
+		// nothing
+		pc.spareWant = 0
+	}
 	rt.mu.Unlock()
+	if gone {
+		rt.kickSpares(pc) // the keeper sees that none are wanted and ends
+	}
 	rt.logf("peer %q: control connection with %s is down: %v", peer.Name, conn.RemoteAddr(), why)
 }
 
@@ -311,10 +351,15 @@ func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}
 	hello := control.Message{Type: control.TypeHello, Name: rt.Node.Name(), Version: rt.Version, Protocols: []int{control.Protocol}, Instance: rt.instance}
 	if !rt.noFeatures {
 		hello.Features = features
-		if rt.noResolve {
+		switch {
+		case rt.noResolve:
 			hello.Features = []string{control.FeaturePathTest}
-		} else if rt.noRulePaths {
+		case rt.noRulePaths:
 			hello.Features = []string{control.FeaturePathTest, control.FeatureResolve}
+		case rt.noDialBoth:
+			hello.Features = []string{control.FeaturePathTest, control.FeatureResolve, control.FeatureRulePaths}
+		case rt.noSpare:
+			hello.Features = []string{control.FeaturePathTest, control.FeatureResolve, control.FeatureRulePaths, control.FeatureDialBoth}
 		}
 	}
 	if err := cc.Send(hello); err != nil {
@@ -361,6 +406,14 @@ func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}
 			rt.peerRestarted(cc.peer, oldUntil)
 		}
 		switch m.Type {
+		case control.TypeHello:
+			// what the peer can do is known now, and a peer that has lost every
+			// control connection before this one has dropped what it was asked
+			if p, ok := rt.Node.Peer(cc.peer); ok {
+				rt.askSpares(p, cc)
+			}
+		case control.TypeSpares:
+			rt.sparesAsked(pc, cc.peer, m.Spares)
 		case control.TypePing:
 			if err := cc.Send(control.Message{Type: control.TypePong, Seq: m.Seq}); err != nil {
 				return err
@@ -499,7 +552,7 @@ func (rt *Runtime) PeerStatus(name string) PeerStatus {
 	if pc == nil {
 		return PeerStatus{}
 	}
-	return PeerStatus{Online: len(pc.conns) > 0, Version: pc.version, LastMessage: pc.last}
+	return PeerStatus{Online: len(pc.conns) > 0, Version: pc.version, LastMessage: pc.last, Spares: len(pc.spareIdle) + len(rt.spares[name])}
 }
 
 // dropControlLocked ends everything about the control connections with the peer called name
@@ -516,6 +569,11 @@ func (rt *Runtime) dropControlLocked(name string) {
 // asks the peer to open the sub-connections. It returns when the session has ended.
 func (rt *Runtime) carryReverse(a *attempt, r node.Rule, peer node.Peer, c net.Conn, ip net.IP, port int) {
 	cc := rt.liveControl(peer.Name)
+	if cc == nil && r.DialMode() == node.DialPeer {
+		a.fail(fmt.Sprintf("the rule lets only peer %q open the connections (dial peer), and the peer is not connected to this node.", peer.Name))
+		reset(c)
+		return
+	}
 	if cc == nil && len(peer.Paths) > 0 {
 		// the peer went away between the choice of this way and now
 		a.fail(fmt.Sprintf("this node cannot open connections to peer %q at the moment, and the peer, which would open them, is no longer connected to this node.", peer.Name))
@@ -544,10 +602,77 @@ func (rt *Runtime) carryReverse(a *attempt, r node.Rule, peer node.Peer, c net.C
 		reset(c)
 		return
 	}
-	end, ok := rt.runReverse(cc, peer, keys, c, ip, port, engine.Owner{Peer: peer.Name, Rule: r.Name}, ask, a.fail)
+	// a spare connection the peer keeps is on a path of the peer's choosing, so a rule
+	// that names paths or a number of sub-connections does without one
+	end, ok := rt.runReverse(cc, peer, keys, c, ip, port, engine.Owner{Peer: peer.Name, Rule: r.Name}, ask, a.fail,
+		reverseHow{spare: !r.Narrowed(), rule: r.Name})
 	if ok {
 		rt.ended(a, peer.Name, net.JoinHostPort(ip.String(), strconv.Itoa(port)), end)
 	}
+}
+
+// carryBoth takes one application connection of a rule to ip:port at the rule's peer
+// as a session that both nodes open sub-connections of: this node over its paths, and
+// the peer, which is asked to, over the paths it holds to this node. It returns when
+// the session has ended.
+//
+// It needs a path on each node, and a peer that knows such sessions; without either the
+// connection is reset and the rule's status says what is missing. Once the session
+// runs, it goes on over the sub-connections of one node while those of the other are
+// down.
+func (rt *Runtime) carryBoth(a *attempt, r node.Rule, peer node.Peer, c net.Conn, ip net.IP, port int) {
+	if len(peer.Paths) == 0 {
+		a.fail(fmt.Sprintf("the rule lets both nodes open the connections (dial both), which needs a path on each node, and this node has no path to peer %q. Add one with \"tcpraid peers path set\", or change the rule's dial.", peer.Name))
+		reset(c)
+		return
+	}
+	if err := rt.peerCan(peer.Name, control.FeatureDialBoth, "does not open connections of a session that the other node opens connections of too", "0.6.0",
+		"Until then, set the rule's dial to auto, self or peer."); err != nil {
+		a.fail(err.Error())
+		reset(c)
+		return
+	}
+	cc := rt.liveControl(peer.Name)
+	if cc == nil {
+		a.fail(fmt.Sprintf("peer %q is not connected to this node", peer.Name))
+		reset(c)
+		return
+	}
+	ps, err := rt.peerFor(r.Peer)
+	if err != nil {
+		a.fail(err.Error())
+		reset(c)
+		return
+	}
+	route := ps.route
+	if r.Narrowed() {
+		if route, err = rt.narrowedRoute(ps, r); err != nil {
+			a.fail(err.Error())
+			reset(c)
+			return
+		}
+	}
+	keys, err := pairKeys(peer)
+	if err != nil {
+		a.fail(err.Error())
+		reset(c)
+		return
+	}
+	ask := control.Message{Both: true, RulePaths: r.Paths, RuleSubs: r.Subs}
+	end, ok := rt.runReverse(cc, peer, keys, c, ip, port, engine.Owner{Peer: peer.Name, Rule: r.Name}, ask, a.fail,
+		reverseHow{own: route, rule: r.Name})
+	if ok {
+		rt.ended(a, peer.Name, net.JoinHostPort(ip.String(), strconv.Itoa(port)), end)
+	}
+}
+
+// reverseHow says what a session of runReverse does beyond asking the peer. own: this
+// node dials sub-connections over that route as well. spare: the session may begin on a
+// spare connection the peer keeps. rule: the rule, for the log.
+type reverseHow struct {
+	own   *engine.Route
+	spare bool
+	rule  string
 }
 
 // runReverse carries c to ip:port at a peer that this node cannot dial, as one session
@@ -555,8 +680,12 @@ func (rt *Runtime) carryReverse(a *attempt, r node.Rule, peer node.Peer, c net.C
 // has ended. ask holds what the request says beyond its number and the session. fail is
 // told why the peer did not open them, if it did not. ok is false when no session was
 // created (c is reset then).
+//
+// With how.own the session has sub-connections of this node's own too: then a peer that
+// does not open its share is asked again every now and then, and the session lasts as
+// long as either node's sub-connections carry it.
 func (rt *Runtime) runReverse(cc *ctlConn, peer node.Peer, keys engine.Keys, c net.Conn, ip net.IP, port int, owner engine.Owner,
-	ask control.Message, fail func(text string)) (end engine.End, ok bool) {
+	ask control.Message, fail func(text string), how reverseHow) (end engine.End, ok bool) {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		reset(c)
@@ -567,17 +696,61 @@ func (rt *Runtime) runReverse(cc *ctlConn, peer node.Peer, keys engine.Keys, c n
 	if rv == nil {
 		return end, false // refused and reset: the session limit, or the node is stopping
 	}
+	both := how.own != nil
+	if both {
+		rv.DialOver(how.own)
+	}
 	rt.mu.Lock()
-	rt.reverse[key] = &reverseEntry{rv: rv, fail: fail}
+	rt.reverse[key] = &reverseEntry{rv: rv, fail: fail, both: both, rule: how.rule}
 	rt.mu.Unlock()
 	defer func() {
 		rt.mu.Lock()
 		delete(rt.reverse, key)
 		rt.mu.Unlock()
 	}()
+	if how.spare {
+		// a connection the peer opened earlier: the session begins on it while the
+		// peer is asked for the rest
+		if sp := rt.takeSpare(peer.Name); sp != nil {
+			rv.Attach(sp.conn, sp.path, false, false)
+			rt.mu.Lock()
+			rt.sparesUsed++
+			rt.mu.Unlock()
+			id := rv.ID()
+			rt.logf("rule %q: session %x begins on a spare connection of peer %q", how.rule, id[:3], peer.Name)
+		}
+	}
 	id := rv.ID()
 	ask.Type, ask.Request, ask.Session = control.TypeOpen, key.request, hex.EncodeToString(id[:])
-	if err := cc.Send(ask); err != nil {
+	err := cc.Send(ask)
+	if both {
+		if err != nil {
+			rt.logf("rule %q: peer %q could not be asked for its share of the connections of a session: %v. This node's connections carry the session, and the peer is asked again.", how.rule, peer.Name, err)
+		}
+		// the peer is asked again until a connection of its share has arrived: after
+		// that it keeps its share up by itself
+		stop := make(chan struct{})
+		defer close(stop)
+		go func() {
+			tick := time.NewTicker(rt.times.reask)
+			defer tick.Stop()
+			for {
+				select {
+				case <-stop:
+					return
+				case <-tick.C:
+				}
+				if rv.Attached() || rv.Ended() {
+					return
+				}
+				if again := rt.liveControl(peer.Name); again != nil {
+					again.Send(ask)
+				}
+			}
+		}()
+		return rv.Run(), true
+	}
+	if err != nil {
 		fail(fmt.Sprintf("peer %q could not be asked to open the connections: %v", peer.Name, err))
 		rv.Abort("the request for sub-connections could not be sent")
 		return rv.Run(), true
@@ -616,7 +789,24 @@ func (rt *Runtime) openFailed(peerName string, m control.Message) {
 	if ent == nil {
 		return
 	}
-	ent.fail(fmt.Sprintf("peer %q could not open the connections: %s", peerName, printable(m.Reason, maxReason)))
+	reason := printable(m.Reason, maxReason)
+	if ent.both && m.Code != control.CodeNoPath {
+		// this node's own sub-connections carry the session; the peer is asked again
+		rt.mu.Lock()
+		said := ent.said
+		ent.said = true
+		rt.mu.Unlock()
+		if !said {
+			rt.logf("rule %q: peer %q could not open its share of the connections of a session: %s. This node's connections carry the session, and the peer is asked again.", ent.rule, peerName, reason)
+		}
+		return
+	}
+	if ent.both {
+		// asking again would give the same answer: the rule cannot be kept as it is
+		ent.fail(fmt.Sprintf("the rule lets both nodes open the connections (dial both), which needs a path on each node, and peer %q answered: %s", peerName, reason))
+	} else {
+		ent.fail(fmt.Sprintf("peer %q could not open the connections: %s", peerName, reason))
+	}
 	go ent.rv.Abort("the other end could not open sub-connections")
 }
 
@@ -627,10 +817,14 @@ func (rt *Runtime) serveOpen(pc *peerControl, cc *ctlConn, m control.Message) {
 	fail := func(reason string) {
 		cc.Send(control.Message{Type: control.TypeOpenFail, Request: m.Request, Reason: reason})
 	}
+	// an answer that the same request would get every time
+	failForGood := func(reason string) {
+		cc.Send(control.Message{Type: control.TypeOpenFail, Request: m.Request, Reason: reason, Code: control.CodeNoPath})
+	}
 	ps, err := rt.peerFor(cc.peer)
 	if err != nil {
 		// no path to the peer, or the pairing has just ended
-		fail("the node that was asked has no path to the node that asked")
+		failForGood("the node that was asked has no path to the node that asked")
 		return
 	}
 	rt.mu.Lock()
@@ -657,7 +851,13 @@ func (rt *Runtime) serveOpen(pc *peerControl, cc *ctlConn, m control.Message) {
 		if err != nil {
 			return
 		}
-		groups := rt.reverseGroups(ps, peer, m.Request)
+		// in a session that the asking node dials for too, this node's paths are
+		// numbered apart from the asking node's
+		base := uint8(0)
+		if m.Both {
+			base = control.BothPathBase
+		}
+		groups := rt.reverseGroups(ps, peer, m.Request, base)
 		if m.TestPath != 0 {
 			// a path test of the peer: one path, with as many data sub-connections as it asks for
 			if groups = testGroups(groups, m.TestPath-1, m.TestSubs); groups == nil {
@@ -671,14 +871,22 @@ func (rt *Runtime) serveOpen(pc *peerControl, cc *ctlConn, m control.Message) {
 				fail("the request names more paths or sub-connections than a peer has")
 				return
 			}
-			var missing string
-			if groups, missing = narrow(groups, m.RulePaths, m.RuleSubs); groups == nil {
-				if missing == "" {
-					fail("it has no path that carries data")
-				} else {
-					fail(fmt.Sprintf("it has no path called %q that carries data", printable(missing, node.MaxPathNameLen)))
+			if m.Both {
+				// the names are looked for on both nodes: this one takes those it has
+				if groups = narrowSome(groups, m.RulePaths, m.RuleSubs); groups == nil {
+					failForGood("it has none of the paths the rule names that carry data")
+					return
 				}
-				return
+			} else {
+				var missing string
+				if groups, missing = narrow(groups, m.RulePaths, m.RuleSubs); groups == nil {
+					if missing == "" {
+						failForGood("it has no path that carries data")
+					} else {
+						failForGood(fmt.Sprintf("it has no path called %q that carries data", printable(missing, node.MaxPathNameLen)))
+					}
+					return
+				}
 			}
 		}
 		first := 0
@@ -709,11 +917,14 @@ func (rt *Runtime) serveOpen(pc *peerControl, cc *ctlConn, m control.Message) {
 // this node, with the request, to open the sub-connections of: like groups, but each
 // connection starts with an opening of the reverse type that says the request, the
 // index of the path and the role.
-func (rt *Runtime) reverseGroups(ps *peerState, peer node.Peer, request uint64) []engine.DialGroup {
+//
+// base is added to the number of every path: 0, or control.BothPathBase for a session
+// that the asking node dials sub-connections of as well, whose paths are numbered from 0.
+func (rt *Runtime) reverseGroups(ps *peerState, peer node.Peer, request uint64, base uint8) []engine.DialGroup {
 	var gs []engine.DialGroup
 	for i, path := range peer.Paths {
 		for _, role := range path.Roles {
-			g := engine.DialGroup{Path: uint8(i), Name: path.Name, Want: path.Subs}
+			g := engine.DialGroup{Path: base + uint8(i), Name: path.Name, Want: path.Subs}
 			code := byte(link.RoleData)
 			switch role {
 			case node.RoleControl:
@@ -723,7 +934,7 @@ func (rt *Runtime) reverseGroups(ps *peerState, peer node.Peer, request uint64) 
 			}
 			g.Dial = func() (net.Conn, error) {
 				return ps.dial(func(ctx context.Context) (net.Conn, error) {
-					return rt.Dialer.OpenReverse(ctx, peer, path, request, uint8(i), code)
+					return rt.Dialer.OpenReverse(ctx, peer, path, request, base+uint8(i), code)
 				})
 			}
 			gs = append(gs, g)

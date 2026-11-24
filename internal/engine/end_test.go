@@ -316,3 +316,53 @@ func TestEndTest(t *testing.T) {
 		t.Error("EndTest found the session a second time")
 	}
 }
+
+// A session that ended while one of its sub-connections was still being opened does not
+// announce itself on that connection: the other end would make a session of it that
+// nobody carries, and keep it for the grace time.
+func TestNoHeaderForASessionThatHasEnded(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	got := make(chan int64, 8)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				n, _ := io.Copy(io.Discard, c)
+				c.Close()
+				got <- n
+			}()
+		}
+	}()
+	release := make(chan struct{})
+	dial := func() (net.Conn, error) {
+		<-release
+		return net.Dial("tcp", ln.Addr().String())
+	}
+	entry := New(DefaultConfig())
+	route := entry.NewRoute([]DialGroup{{Name: "p", Want: 1, Dial: dial}}, NewKeys([]byte("key material of the pair, 32 b..")), "")
+	app, done := carry(route, net.IPv4(192, 0, 2, 1), 9, Owner{Peer: "beta", Rule: "r"})
+	defer app.Close()
+	for deadline := time.Now().Add(10 * time.Second); len(entry.SessionList()) != 1; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the session did not begin")
+		}
+	}
+	entry.AbortPeer("beta")
+	ended(t, done)
+	close(release) // the dial that was under way completes now
+	select {
+	case n := <-got:
+		if n != 0 {
+			t.Errorf("the ended session sent %d bytes on the connection that was still being opened, want none", n)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the connection that was being opened never arrived")
+	}
+}

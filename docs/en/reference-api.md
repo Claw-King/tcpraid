@@ -45,7 +45,7 @@ that ran out of time.
 ### GET /api/v1/status
 
 ```
-{"version":"0.5.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.6.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
  "sessions":2,"peers":1,"rules":2}
 ```
@@ -69,7 +69,7 @@ application's connection, and that node also names the `rule`. It is
 ```
 [{"id":"4fce0d73c066738a655b88c7741c2405","destination":"192.0.2.10:7000","role":"client",
   "started":"2026-01-15T10:00:31.329910062Z","tx_bytes":314572800,"rx_bytes":0,"unacked_bytes":130023424,
-  "resent_bytes":0,"subs":8,"peer":"nas-a","rule":"rsync","unsent_bytes":100663296,
+  "resent_bytes":0,"subs":8,"subs_dialed":8,"peer":"nas-a","rule":"rsync","unsent_bytes":100663296,
   "inflight_bytes":29360128,"up":true,"silent_ms":41,"grace_left_ms":899959}]
 ```
 
@@ -89,6 +89,11 @@ The fields after `rule` were added in version 0.3.0:
 | `silent_ms` | how long ago anything arrived from the peer. While a session is connected this stays under about a second, because the two nodes report to each other at least that often |
 | `grace_left_ms` | how much longer the session is kept if nothing arrives. It is the grace time (`-grace`) minus `silent_ms`. At zero the session ends and the application's connection is reset |
 | `test` | present and `true` on the session of a path test (`POST /api/v1/peers/{name}/test`). Such a session has no rule, and its destination reads `0.0.0.0:0` |
+
+`subs_dialed` was added in version 0.6.0. It is the number of the session's
+live sub-connections that this node opened, and the peer opened the rest. In
+a session of a rule with `"dial": "both"` neither number is zero while the
+paths of both nodes work.
 
 ### GET /metrics
 
@@ -137,11 +142,13 @@ code. The answer is the new peer, as below.
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.5.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.6.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
 `online` means that a control connection with the peer is up. `version` and
-`last_message` appear once the peer has been heard from. A peer that joined
+`last_message` appear once the peer has been heard from. `spares`, added in
+version 0.6.0, is the number of spare connections between the two nodes that
+wait for a session to begin on them, and is absent when there is none. A peer that joined
 this node has no `addresses` and no `paths` here. The pair secret is never in
 an answer, and a proxy is shown without its user and password.
 
@@ -167,7 +174,7 @@ peer.
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.5.0",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.6.0",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 
@@ -195,7 +202,7 @@ $ curl -X PUT ... -d '{"subs":4}' http://127.0.0.1:9850/api/v1/peers/nas-a/paths
 {"created":false,"peer":{"name":"nas-a","fingerprint":"e5645f9b...7795ec86","addresses":["nas-a.example.org:9851"],
  "paired_at":"2026-01-15T10:00:20Z",
  "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":4}],
- "allow":"","udp_dial":"","online":true,"version":"0.5.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
+ "allow":"","udp_dial":"","online":true,"version":"0.6.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
 ```
 
 The `DELETE` removes the path and answers with the peer. A peer without that
@@ -301,6 +308,10 @@ rule because this node's own path to the peer is down:
  "enabled":true,"listening":true,"sessions":0,"paths":["side"],"subs":3}
 ```
 
+Version 0.6.0 added `dial`: `"self"`, `"peer"` or `"both"` when the rule says
+which node opens the connections between the nodes (see `POST`). It is absent
+when the rule leaves that to the node, which is `"auto"`.
+
 ### POST /api/v1/rules
 
 Body `{"name", "peer", "listen", "destination"}` or `{"name", "peer",
@@ -315,6 +326,13 @@ connection keeps at most that many data sub-connections on each path. On the
 node that holds the paths, a name that is no path for data is refused with
 `400`. Where the peer holds the paths, the peer checks the names when a
 connection arrives, and it needs version 0.5.0 or later.
+
+Since version 0.6.0 the body may hold `"dial"`, one of `"auto"`, `"self"`,
+`"peer"` and `"both"`, which says which node opens the connections between
+the nodes for the sessions of the rule. `reference-cli.md` describes the four
+under `rules add -dial`. A value that is none of them is refused with `400`.
+What a `dial` needs and the two nodes do not have shows when a connection
+arrives, in the rule's `error`.
 
 ```
 $ curl -X POST ... -d '{"name":"pg","peer":"nas-a","listen":"127.0.0.1:15432","destination":"192.0.2.10:5432"}' http://127.0.0.1:9850/api/v1/rules
@@ -333,10 +351,11 @@ HTTP/1.1 400 Bad Request
 
 ### PUT /api/v1/rules/{name}
 
-Replaces the rule, with the same body. `paths` and `subs` are the exception:
-when the body does not name one of them, the rule keeps what it has, so that
-a caller which does not know the two fields does not take them away. An empty
-list for `paths` and `0` for `subs` take them away. Switching a rule off is a
+Replaces the rule, with the same body. `paths`, `subs` and `dial` are the
+exception: when the body does not name one of them, the rule keeps what it
+has, so that a caller which does not know these fields does not take them
+away. An empty list for `paths`, `0` for `subs` and `"auto"` for `dial` take
+them away. Switching a rule off is a
 `PUT` with `"enabled": false`:
 
 ```

@@ -134,3 +134,35 @@ func TestRulePathsRoutes(t *testing.T) {
 		t.Fatalf("made on the node without a path: %+v", r)
 	}
 }
+
+// The dial of a rule over the API: named when the rule is made, kept by a request that
+// does not name it, changed by one that does, and absent from a rule that has none.
+func TestRuleDialRoutes(t *testing.T) {
+	a, b := newPeerNode(t, "alpha"), newPeerNode(t, "beta")
+	pairOver(t, a, b)
+	in := freePort(t)
+	base := fmt.Sprintf(`"name":"zfs","listen":%q,"destination":"192.0.2.1:873","peer":"alpha"`, in)
+	made := decode[Rule](t, b.send("POST", PathRules, `{`+base+`,"dial":"both"}`), 201)
+	if made.Dial != "both" {
+		t.Fatalf("made %+v", made)
+	}
+	wantError(t, "a word that is none of the four", b.send("PUT", PathRules+"/zfs", `{`+base+`,"dial":"neither"}`), 400)
+	if got := decode[Rule](t, b.send("PUT", PathRules+"/zfs", `{`+base+`,"enabled":false}`), 200); got.Dial != "both" || got.Enabled {
+		t.Fatalf("after a request that does not name dial: %+v", got)
+	}
+	if got := decode[Rule](t, b.send("PUT", PathRules+"/zfs", `{`+base+`,"dial":"peer"}`), 200); got.Dial != "peer" {
+		t.Fatalf("after dial peer: %+v", got)
+	}
+	if r := b.n.Rules()[0]; r.Dial != "peer" {
+		t.Fatalf("stored: %+v", r)
+	}
+	if got := decode[Rule](t, b.send("PUT", PathRules+"/zfs", `{`+base+`,"dial":"auto"}`), 200); got.Dial != "" {
+		t.Fatalf("after dial auto: %+v", got)
+	}
+	if raw := b.send("GET", PathRules, "").Body.String(); strings.Contains(raw, `"dial"`) {
+		t.Errorf("a rule with dial auto shows the field: %s", raw)
+	}
+	if r := b.n.Rules()[0]; r.Dial != "" {
+		t.Fatalf("stored after auto: %+v", r)
+	}
+}

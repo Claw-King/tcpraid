@@ -15,6 +15,7 @@
 | `-udp-listen ADDR` | off | listen address (UDP) for feedback from peers that are told to send it here |
 | `-ui-password-file FILE` | none | file with the password of the web page |
 | `-no-ui` | off | switches the web page off. Its files and the login answer `404` and no password is made. The API with its token works as before |
+| `-spares N` | `2` | spare connections, 0 to 8. A node asks a peer that it holds no path to for this many, and keeps at most this many to a peer that asks. `0` switches them off (`connecting.md`, "Spare connections") |
 | `-stats DURATION` | off | log the node's totals this often, and one line for each session that runs then (`troubleshooting.md` explains the lines) |
 | `-window SIZE` | `128MB` | per session: how much data this node holds that the peer has not yet reported received, and the space it offers the peer for data that arrives out of order. Whole MB |
 | `-budget SIZE` | `256MB` | all sessions together: the most data held unacknowledged, and as much again held out of order |
@@ -26,7 +27,7 @@
 The start-up lines of the log repeat what is in effect:
 
 ```
-node 0.5.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+node 0.6.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
 transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
 ```
 
@@ -131,6 +132,8 @@ drwx------  .
   Another case is what version 0.5.0 added: a path with several addresses or
   a mark, and a rule with `-paths` or `-subs`. Version 0.4.0 and older do not
   take a file that holds one of them, so take them off before you go back.
+  The same goes for a rule with a `-dial` other than `auto`, which version
+  0.5.0 and older do not take.
 
 ## Ports at a glance
 

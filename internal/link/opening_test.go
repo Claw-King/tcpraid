@@ -355,3 +355,57 @@ func TestAcceptorReverseAndControl(t *testing.T) {
 		t.Fatal("an opening of the control type did not reach its handler")
 	}
 }
+
+// An opening of the spare type reaches its handler with the peer and the path; without
+// a handler the connection is closed, as a node does that knows no spare connections.
+func TestAcceptorSpare(t *testing.T) {
+	a, b := startNode(t, "alpha", nil), startNode(t, "beta", nil)
+	_, aOfB := pairNodes(t, a, b)
+	path := aOfB.Paths[0]
+	conn, err := b.svc.Dialer.OpenSpare(bg, aOfB, path, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if !closedUnanswered(conn) {
+		t.Fatal("a spare connection to a node without a handler for it was not closed")
+	}
+	type spare struct {
+		peer string
+		path byte
+	}
+	got := make(chan spare, 1)
+	a.acc.HandleSpare = func(peer node.Peer, path byte, conn net.Conn) {
+		got <- spare{peer.Name, path}
+		conn.Close()
+	}
+	conn, err = b.svc.Dialer.OpenSpare(bg, aOfB, path, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	select {
+	case s := <-got:
+		if want := (spare{"beta", 5}); s != want {
+			t.Fatalf("the spare handler got %+v, want %+v", s, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("an opening of the spare type did not reach its handler")
+	}
+	// one made with another pair secret does not: it never counts as a spare
+	wrong := aOfB
+	wrong.PairSecret = append([]byte{}, aOfB.PairSecret...)
+	wrong.PairSecret[0] ^= 1
+	conn, err = b.svc.Dialer.OpenSpare(bg, wrong, path, 5)
+	if err == nil {
+		defer conn.Close()
+		if !closedUnanswered(conn) {
+			t.Fatal("a spare connection with the wrong pair secret was not closed")
+		}
+	}
+	select {
+	case s := <-got:
+		t.Fatalf("a spare connection with the wrong pair secret reached the handler: %+v", s)
+	case <-time.After(300 * time.Millisecond):
+	}
+}

@@ -50,6 +50,14 @@ func ruleUses(r api.Rule) string {
 	if r.PeerDials {
 		s += ", the peer opens the connections while this node's path is down"
 	}
+	switch r.Dial {
+	case "self":
+		s += ", only this node opens the connections"
+	case "peer":
+		s += ", only the peer opens the connections"
+	case "both":
+		s += ", both nodes open the connections"
+	}
 	return s
 }
 
@@ -77,8 +85,8 @@ func setRuleEnabled(dataDir, name string, enabled bool, stdout io.Writer) error 
 		if r.Name != name {
 			continue
 		}
-		// the paths and sub-connections of the rule are not sent: the node keeps what
-		// the rule has
+		// the paths and sub-connections of the rule and who dials are not sent: the
+		// node keeps what the rule has
 		spec := api.RuleSpec{Name: r.Name, Listen: r.Listen, Destination: r.Destination, Match: r.Match, Peer: r.Peer, Enabled: &enabled}
 		var out api.Rule
 		if err := apiCall(dataDir, http.MethodPut, rulePath(name), spec, &out, shortCall); err != nil {
@@ -93,7 +101,7 @@ func setRuleEnabled(dataDir, name string, enabled bool, stdout io.Writer) error 
 func cmdRules(args []string, stdout, stderr io.Writer) int {
 	var spec api.RuleSpec
 	var disabled bool
-	var paths string
+	var paths, dial string
 	var subs int
 	return dispatch("rules", "list", []string{"list", "add", "remove", "enable", "disable"}, map[string]command{
 		"list": {
@@ -120,7 +128,7 @@ func cmdRules(args []string, stdout, stderr io.Writer) int {
 			},
 		},
 		"add": {
-			name: "rules add", usage: "NAME -peer PEER (-listen IP:PORT[-PORT] -dest IP:PORT[-PORT] | -match NETWORKS) [-paths NAMES] [-subs N]", nargs: 1,
+			name: "rules add", usage: "NAME -peer PEER (-listen IP:PORT[-PORT] -dest IP:PORT[-PORT] | -match NETWORKS) [-paths NAMES] [-subs N] [-dial auto|self|peer|both]", nargs: 1,
 			flags: func(fs *flag.FlagSet) {
 				fs.StringVar(&spec.Peer, "peer", "", "name of the peer the connections go to")
 				fs.StringVar(&spec.Listen, "listen", "", "fixed rule: where this node listens, IP:port or IP:first-last (without the IP: every address)")
@@ -129,6 +137,7 @@ func cmdRules(args []string, stdout, stderr io.Writer) int {
 				fs.BoolVar(&disabled, "disabled", false, "store the rule switched off")
 				fs.StringVar(&paths, "paths", "", "names of the paths the rule's connections use, separated by commas, as the node that holds the paths calls them (\"\": every path)")
 				fs.IntVar(&subs, "subs", 0, "the most data sub-connections a connection of the rule keeps on each path (0: as many as the path has)")
+				fs.StringVar(&dial, "dial", "", "which node opens the connections between the nodes: auto, self, peer or both (default auto: this node where it has a path that works, else the peer)")
 			},
 			run: func(dataDir string, args []string, stdout, _ io.Writer) error {
 				if spec.Peer == "" {
@@ -145,9 +154,12 @@ func cmdRules(args []string, stdout, stderr io.Writer) int {
 				if subs != 0 {
 					spec.Subs = &subs
 				}
+				if dial != "" && dial != "auto" {
+					spec.Dial = &dial
+				}
 				var out api.Rule
 				if err := apiCall(dataDir, http.MethodPost, api.PathRules, spec, &out, shortCall); err != nil {
-					return olderNode(err, map[string]string{"paths": "paths for a rule", "subs": "a number of sub-connections for a rule"})
+					return olderNode(err, map[string]string{"paths": "paths for a rule", "subs": "a number of sub-connections for a rule", "dial": "the dial of a rule"})
 				}
 				fmt.Fprintf(stdout, "rule %s added: %s\n", out.Name, ruleState(out))
 				if out.Enabled && !out.Listening {

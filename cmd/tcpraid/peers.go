@@ -614,6 +614,9 @@ func cmdPeers(args []string, stdout, stderr io.Writer) int {
 				if p.UDPDial != "" {
 					fmt.Fprintf(stdout, "udp feedback %s\n", p.UDPDial)
 				}
+				if p.Spares > 0 {
+					fmt.Fprintf(stdout, "spares       %d connections wait for a session to begin on them\n", p.Spares)
+				}
 				if len(p.Paths) == 0 {
 					fmt.Fprintln(stdout, "paths        none: this node cannot reach it (tcpraid peers path set adds one)")
 					return nil

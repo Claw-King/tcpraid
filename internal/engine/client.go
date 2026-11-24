@@ -96,7 +96,22 @@ func (r *Route) Carry(c net.Conn, ip net.IP, port int, owner Owner, valid func()
 		return End{}, false
 	}
 	id := s.id
-	redial := r.redialer(s, func(g DialGroup) func() {
+	redial := r.redialer(s, r.opener(s, ip, port))
+	redial()
+	log.Printf("session %x %s -> %s", id[:3], c.RemoteAddr(), s.dstAddr)
+	go s.pumpLocal()
+	go s.deliverLocal()
+	s.monitor(redial)
+	return s.end(), true
+}
+
+// opener returns what a redialer of s, a session this end carries to ip:port, starts
+// for each sub-connection that is due: the header is prepared in the order of the
+// calls, and the function it returns dials over the group, sends the header and adds
+// the connection to the session.
+func (r *Route) opener(s *session, ip net.IP, port int) func(g DialGroup) func() {
+	e, ks, id := r.e, r.ks, s.id
+	return func(g DialGroup) func() {
 		s.mu.Lock()
 		s.nextIdx++
 		h := subHeader{isNew: !s.everUp, ctrl: g.Ctrl, repair: g.Repair, id: id, dstIP: ip, dstPort: port, path: g.Path,
@@ -111,6 +126,16 @@ func (r *Route) Carry(c net.Conn, ip net.IP, port int, owner Owner, valid func()
 				time.Sleep(time.Second)
 				return
 			}
+			// The session may have ended while the connection was being opened. Its
+			// header would make the other end hold a session that nobody carries,
+			// for the whole grace time.
+			s.mu.Lock()
+			ended := s.closed
+			s.mu.Unlock()
+			if ended {
+				sc.Close()
+				return
+			}
 			keepAlive(sc)
 			sc.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if _, err := sc.Write(h.marshal(ks.hdr)); err != nil {
@@ -118,15 +143,9 @@ func (r *Route) Carry(c net.Conn, ip net.IP, port int, owner Owner, valid func()
 				return
 			}
 			sc.SetWriteDeadline(time.Time{})
-			s.addSub(sc, h.idx, h.path, h.ctrl, h.repair, true)
+			s.addSub(sc, h.idx, h.path, h.ctrl, h.repair, true, true)
 		}
-	})
-	redial()
-	log.Printf("session %x %s -> %s", id[:3], c.RemoteAddr(), s.dstAddr)
-	go s.pumpLocal()
-	go s.deliverLocal()
-	s.monitor(redial)
-	return s.end(), true
+	}
 }
 
 // begin creates the session that carries the application connection c to ip:port, or
@@ -235,15 +254,17 @@ func (r *Route) redialer(s *session, start func(g DialGroup) func()) func() {
 }
 
 // Reverse is a session that this end carries and whose sub-connections the other end
-// opens: this end has no way to dial the other, so it asks for them (outside the
-// engine) and attaches each one that arrives. It never redials; keeping the number of
-// sub-connections up is the other end's business (Route.ServeReverse).
+// opens: this end asks for them (outside the engine) and attaches each one that
+// arrives. Keeping their number up is the other end's business (Route.ServeReverse).
+// With DialOver the session has sub-connections that this end dials as well, like a
+// session of Route.Carry, and both kinds carry the one session.
 type Reverse struct {
-	e    *Engine
-	s    *session
-	ks   keys
-	ip   net.IP
-	port int
+	e      *Engine
+	s      *session
+	ks     keys
+	ip     net.IP
+	port   int
+	redial func() // set by DialOver
 }
 
 // maxAttached bounds the live sub-connections of a Reverse: more than any set of paths
@@ -290,7 +311,14 @@ func (rv *Reverse) Attach(sc net.Conn, path uint8, ctrl, repair bool) {
 		return
 	}
 	sc.SetWriteDeadline(time.Time{})
-	s.addSub(sc, h.idx, h.path, h.ctrl, h.repair, true)
+	s.addSub(sc, h.idx, h.path, h.ctrl, h.repair, true, false)
+}
+
+// DialOver makes the session dial sub-connections over the groups of r as well, at the
+// numbers they ask for, beside the ones the other end opens. The path numbers of the
+// groups must differ from those that Attach is given. Call it before Run.
+func (rv *Reverse) DialOver(r *Route) {
+	rv.redial = r.redialer(rv.s, r.opener(rv.s, rv.ip, rv.port))
 }
 
 // Up reports whether the other end has answered on a sub-connection: it holds the
@@ -301,6 +329,21 @@ func (rv *Reverse) Up() bool {
 	return rv.s.everUp
 }
 
+// Attached reports whether a connection that the other end opened has become a
+// sub-connection of the session, now or earlier.
+func (rv *Reverse) Attached() bool {
+	rv.s.mu.Lock()
+	defer rv.s.mu.Unlock()
+	return rv.s.attached
+}
+
+// Ended reports whether the session has ended.
+func (rv *Reverse) Ended() bool {
+	rv.s.mu.Lock()
+	defer rv.s.mu.Unlock()
+	return rv.s.closed
+}
+
 // Abort ends the session: the other end is told, if it can be, and the application
 // connection is reset.
 func (rv *Reverse) Abort(why string) { rv.s.abort(why) }
@@ -309,8 +352,11 @@ func (rv *Reverse) Abort(why string) { rv.s.abort(why) }
 // connection is closed then: with a reset unless the stream ended completely in both
 // directions.
 func (rv *Reverse) Run() End {
+	if rv.redial != nil {
+		rv.redial()
+	}
 	go rv.s.pumpLocal()
 	go rv.s.deliverLocal()
-	rv.s.monitor(nil)
+	rv.s.monitor(rv.redial)
 	return rv.s.end()
 }

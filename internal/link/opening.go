@@ -45,6 +45,12 @@ const (
 	// answer is: status (1, zero) | MAC (16) over a label, a zero byte and the nonce of
 	// the opening, under the opening key.
 	TypeCheck = 4
+	// TypeSpare opens a spare connection (since 0.6.0): one that the listening end may
+	// later make a sub-connection of a session it carries, by sending the transport's
+	// header on it, as on a connection of TypeReverse. The path of the opening says
+	// which path of the dialing end it came over; the role is data. A listening end
+	// that did not ask for spare connections closes it.
+	TypeSpare = 5
 
 	checkAnswerLen = 1 + openingMAC
 
@@ -215,6 +221,10 @@ type Acceptor struct {
 	// owns the connection and returns without waiting for it to end. nil: such
 	// connections are closed.
 	HandleControl func(peer node.Peer, conn net.Conn)
+	// HandleSpare gets a connection whose verified opening is of TypeSpare, with the
+	// path of the opening. It owns the connection and returns without waiting for it
+	// to end. nil: such connections are closed.
+	HandleSpare func(peer node.Peer, path byte, conn net.Conn)
 	// LogRefused logs one line about a connection that was refused; it should be a
 	// limited logger (Server.LogRefused). nil: nothing is logged.
 	LogRefused func(format string, args ...any)
@@ -317,6 +327,12 @@ func (a *Acceptor) dispatch(peer node.Peer, o *Opening, conn net.Conn) {
 			return
 		}
 		a.HandleControl(peer, conn)
+	case TypeSpare:
+		if a.HandleSpare == nil {
+			conn.Close()
+			return
+		}
+		a.HandleSpare(peer, o.Path, conn)
 	default:
 		conn.Close()
 	}

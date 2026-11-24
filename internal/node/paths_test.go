@@ -235,3 +235,44 @@ func TestPutPeerAgainKeepsEveryAddress(t *testing.T) {
 		t.Errorf("the default path after pairing again with one address: %+v, %v", stored.Paths, err)
 	}
 }
+
+// What a rule may say about who dials: one of three words, or nothing for auto. A rule
+// that says nothing is the same rule as before the option was there.
+func TestRuleDialCheck(t *testing.T) {
+	base := Rule{Name: "r", Listen: ":5000", Destination: "192.0.2.10:873", Peer: "beta", Enabled: true}
+	for _, dial := range []string{"", DialSelf, DialPeer, DialBoth} {
+		r := base
+		r.Dial = dial
+		if err := r.Check(); err != nil {
+			t.Errorf("dial %q: %v", dial, err)
+		}
+		if want := dial; want == "" && r.DialMode() != DialAuto || want != "" && r.DialMode() != want {
+			t.Errorf("dial %q is the mode %q", dial, r.DialMode())
+		}
+	}
+	for _, dial := range []string{"auto", "Both", "me", " self"} {
+		r := base
+		r.Dial = dial
+		if err := r.Check(); err == nil {
+			t.Errorf("a stored rule with dial %q passed", dial)
+		}
+	}
+	for in, want := range map[string]string{"": "", "auto": "", "self": "self", "peer": "peer", "both": "both"} {
+		if got, err := CheckDial(in); err != nil || got != want {
+			t.Errorf("CheckDial(%q) = %q, %v", in, got, err)
+		}
+	}
+	if _, err := CheckDial("neither"); err == nil || !strings.Contains(err.Error(), "want auto, self, peer or both") {
+		t.Errorf("CheckDial of a word that is none of the four: %v", err)
+	}
+	with := base
+	with.Dial = DialBoth
+	if base.Equal(with) || !with.Equal(with.Clone()) {
+		t.Error("Equal does not tell a rule with dial from one without")
+	}
+	// a rule without the option is written as it always was
+	b, _ := json.Marshal(base)
+	if strings.Contains(string(b), "dial") {
+		t.Errorf("a rule that says nothing about dial is written with it: %s", b)
+	}
+}

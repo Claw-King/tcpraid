@@ -262,7 +262,7 @@ func (rt *Runtime) testRun(ctx context.Context, name string, p pathSpec, subs in
 		}
 		go func() {
 			end, ok := rt.runReverse(cc, peer, keys, gen, engine.SinkIP, engine.SinkPort, owner,
-				control.Message{TestPath: p.index + 1, TestSubs: subs}, fail)
+				control.Message{TestPath: p.index + 1, TestSubs: subs}, fail, reverseHow{})
 			done <- outcome{end, ok}
 		}()
 	} else {

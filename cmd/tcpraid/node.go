@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/Claw-King/tcpraid/internal/api"
+	"github.com/Claw-King/tcpraid/internal/control"
 	"github.com/Claw-King/tcpraid/internal/engine"
 	"github.com/Claw-King/tcpraid/internal/forward"
 	"github.com/Claw-King/tcpraid/internal/link"
@@ -39,6 +40,9 @@ import (
 
 const (
 	defaultAPIAddr = "127.0.0.1:9850"
+	// defaultSpares is how many spare connections a node asks for and keeps when
+	// -spares does not say.
+	defaultSpares = 2
 
 	// shutdownWait is how long a stopping node waits for connections from other nodes
 	// that are still being handled (a pairing, the answer to a path check) before it
@@ -140,6 +144,7 @@ func runFlags(args []string, stderr io.Writer) (o runOptions, code int, done boo
 	fs.Var(&o.advertise, "advertise", "HOST:PORT at which other nodes reach -listen, put into pairing codes (may be given more than once)")
 	fs.StringVar(&o.transparent, "transparent", "", "listen address for connections that an nftables or iptables redirect rule of the host sends to this node, to be routed by transparent rules (empty: off)")
 	fs.StringVar(&o.udpListen, "udp-listen", "", "listen address (UDP) for feedback from peers that are told to send it here (empty: off)")
+	spares := fs.Int("spares", defaultSpares, "spare connections: how many this node asks a peer that it has no path to for, and the most it keeps to a peer that asks (0 to "+strconv.Itoa(control.MaxSpares)+", and 0 for none). A session that the peer opens the connections of begins on one at once.")
 	fs.BoolVar(&o.noUI, "no-ui", false, "switch the web interface off: its pages and the login answer 404, and the local API with its token stays")
 	fs.StringVar(&o.uiPasswordFile, "ui-password-file", "", "file with the password of the web interface (default: the environment variable "+uiPasswordEnv+", or else a password made at the first start and logged once)")
 	transport := defaultTransport()
@@ -152,7 +157,7 @@ func runFlags(args []string, stderr io.Writer) (o runOptions, code int, done boo
 		fmt.Fprintln(stderr, "tcpraid run: -data is empty. Name the data directory.")
 		return o, 2, true
 	}
-	o.dataDir, o.apiAddr, o.name, o.transport = *dataDir, *apiAddr, *name, &transport
+	o.dataDir, o.apiAddr, o.name, o.transport, o.spares = *dataDir, *apiAddr, *name, &transport, spares
 	if err := o.check(); err != nil {
 		fmt.Fprintf(stderr, "tcpraid run: %v\n", err)
 		return o, 2, true
@@ -175,6 +180,7 @@ type runOptions struct {
 	transparent, udpListen string
 	uiPasswordFile         string
 	noUI                   bool              // no web interface
+	spares                 *int              // spare connections asked for and kept; nil: defaultSpares
 	transport              *transportOptions // nil: the defaults
 	stats                  time.Duration     // how often the totals are logged; 0: never
 }
@@ -194,6 +200,9 @@ func (o *runOptions) check() error {
 	}
 	if o.stats < 0 {
 		return errors.New("-stats must not be negative (0: off)")
+	}
+	if o.spares != nil && (*o.spares < 0 || *o.spares > control.MaxSpares) {
+		return fmt.Errorf("-spares is %d. Give 0 to %d.", *o.spares, control.MaxSpares)
 	}
 	if o.noUI && o.uiPasswordFile != "" {
 		return errors.New("-no-ui and -ui-password-file do not go together, because a web interface that is switched off has no password")
@@ -253,7 +262,10 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 	e := engine.New(cfg)
 
 	dialer := &link.Dialer{Identity: n.Identity}
-	rules := &forward.Runtime{Node: n, Engine: e, Dialer: dialer, Version: version, Logf: log.Printf}
+	rules := &forward.Runtime{Node: n, Engine: e, Dialer: dialer, Version: version, Logf: log.Printf, Spares: defaultSpares}
+	if o.spares != nil {
+		rules.Spares = *o.spares
+	}
 	svc := &link.Service{Node: n, Dialer: dialer, Advertise: o.advertise, Logf: log.Printf, PeerRemoved: rules.PeerRemoved}
 	lsrv := &link.Server{
 		Identity:          n.Identity,
@@ -263,7 +275,7 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 		Logf:              log.Printf,
 	}
 	acc := &link.Acceptor{PeerByFingerprint: n.PeerByFingerprint, HandleSub: rules.HandleSub, HandleReverse: rules.HandleReverse,
-		HandleControl: rules.HandleControl, LogRefused: lsrv.LogRefused}
+		HandleControl: rules.HandleControl, HandleSpare: rules.HandleSpare, LogRefused: lsrv.LogRefused}
 	lsrv.HandlePeer, lsrv.HandlePlain = acc.HandlePeer, acc.HandlePlain
 	// lines that anyone who reaches the listener can cause go through the limiter
 	svc.RefusedLogf = lsrv.LogRefused

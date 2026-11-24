@@ -73,6 +73,13 @@ func TestPrintSessions(t *testing.T) {
 	if got := strings.Join(fields(lines[5])[:8], " "); got != "cc0000 client (path test) nas-a (path test) 3s" {
 		t.Errorf("the session of a path test:\n%s", lines[5])
 	}
+	// a session that both nodes opened sub-connections of says so after its state;
+	// one that a single node opened them of reads as it always did
+	for dialed, want := range map[int]string{0: "ok", 8: "ok", 5: "ok, 5 sub-connections opened by this node and 3 by the peer"} {
+		if got := sessionState(api.Session{Up: true, Subs: 8, SubsDialed: dialed}); got != want {
+			t.Errorf("state with %d of 8 sub-connections opened here: %q, want %q", dialed, got, want)
+		}
+	}
 	out.Reset()
 	printSessions(&out, before, nil, time.Second, now)
 	if strings.TrimSpace(out.String()) != "no sessions" {

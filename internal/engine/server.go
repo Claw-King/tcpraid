@@ -201,7 +201,22 @@ func (e *Engine) RunServer() error {
 // the options): a sub-connection of another pair that names it is refused like one for
 // a session this end does not hold.
 func (e *Engine) ServeSub(c net.Conn, opt SubOptions) {
-	e.serveSub(c, opt, nil, nil)
+	e.serveSub(c, opt, nil, nil, nil)
+}
+
+// ServeSpare is ServeSub for a connection that this end dialed ahead of any session, so
+// that the other end, which carries the sessions, can start one on it at once: the
+// other end sends the header when it has a session for it, and until then the call
+// waits, however long that is. used, if not nil, is called when the header begins to
+// arrive. Closing c ends the wait.
+//
+// A session that the call creates is not kept at any number of sub-connections by this
+// end; it is once the other end asks for the rest (Route.ServeReverse).
+func (e *Engine) ServeSpare(c net.Conn, opt SubOptions, used func()) {
+	if used == nil {
+		used = func() {}
+	}
+	e.serveSub(c, opt, nil, nil, used)
 }
 
 // ServeReverse is ServeSub for a connection that this end dialed because the other end,
@@ -210,19 +225,60 @@ func (e *Engine) ServeSub(c net.Conn, opt SubOptions) {
 // numbers the Route's groups ask for, by dialing (a group's Dial returns a connection
 // on which the other end is about to send a header). The keys and the UDP address are
 // the Route's.
+//
+// When the header names a session that this end holds already and that it does not
+// keep at any number of sub-connections (the other end dialed its first sub-connection,
+// or it began on a spare connection), the session is kept at the numbers of the
+// Route's groups from then on, as if the call had created it.
 func (r *Route) ServeReverse(c net.Conn, opt SubOptions) {
 	opt.Keys, opt.UDPDial = Keys{r.ks}, r.udpDial
-	r.e.serveSub(c, opt, r, nil)
+	r.e.serveSub(c, opt, r, nil, nil)
+}
+
+// reverseRedial returns the function that keeps the sub-connections of s, a session the
+// other end carries, at the numbers the groups of r ask for, by dialing: the other end
+// sends the header on each connection.
+func (e *Engine) reverseRedial(s *session, opt SubOptions, r *Route) func() {
+	return r.redialer(s, func(g DialGroup) func() {
+		return func() {
+			sc, err := g.Dial()
+			if err != nil {
+				s.mu.Lock()
+				s.noteFlap(g.Path, g.Ctrl, time.Time{}, true)
+				s.mu.Unlock()
+				time.Sleep(time.Second)
+				return
+			}
+			if !e.serveSub(sc, opt, nil, s, nil) {
+				// the other end did not make it a sub-connection of this session
+				s.mu.Lock()
+				s.noteFlap(g.Path, g.Ctrl, time.Time{}, true)
+				s.mu.Unlock()
+				time.Sleep(time.Second)
+			}
+		}
+	})
 }
 
 // serveSub is ServeSub. With a Route, a session it creates redials over the Route's
-// groups. With join, the header must name that session: anything else is refused. It
-// reports whether c became a sub-connection of a session.
-func (e *Engine) serveSub(c net.Conn, opt SubOptions, r *Route, join *session) bool {
+// groups, and so does one it finds that does not redial yet. With join, the header must
+// name that session: anything else is refused. With spare, c is a spare connection: the
+// header may take any time to begin, and spare is called when it does. It reports
+// whether c became a sub-connection of a session.
+func (e *Engine) serveSub(c net.Conn, opt SubOptions, r *Route, join *session, spare func()) bool {
 	ks := opt.Keys.ks
 	b := make([]byte, headerLen)
+	rest := b
+	if spare != nil {
+		if _, err := io.ReadFull(c, b[:1]); err != nil {
+			c.Close()
+			return false
+		}
+		spare()
+		rest = b[1:]
+	}
 	c.SetReadDeadline(time.Now().Add(15 * time.Second))
-	if _, err := io.ReadFull(c, b); err != nil {
+	if _, err := io.ReadFull(c, rest); err != nil {
 		c.Close()
 		return false
 	}
@@ -245,7 +301,9 @@ func (e *Engine) serveSub(c net.Conn, opt SubOptions, r *Route, join *session) b
 			return false
 		}
 		c.SetWriteDeadline(time.Time{})
-		s.addSub(c, h.idx, h.path, h.ctrl, h.repair, false)
+		// this end dialed c when a session was asked for it, when it joins one that
+		// this end redials, and when it is a spare
+		s.addSub(c, h.idx, h.path, h.ctrl, h.repair, false, r != nil || join != nil || spare != nil)
 		return true
 	}
 	e.smu.Lock()
@@ -255,7 +313,15 @@ func (e *Engine) serveSub(c net.Conn, opt SubOptions, r *Route, join *session) b
 			refuse(c, stGoneBad)
 			return false
 		}
-		return ok(s)
+		added := ok(s)
+		if added && r != nil {
+			// the other end asked for sub-connections of a session that began
+			// another way: this end keeps its share of them up from here on
+			if redial := e.reverseRedial(s, opt, r); s.adopt(redial) {
+				redial()
+			}
+		}
+		return added
 	}
 	end, done := e.ended[h.id]
 	if done && !(end.peer == opt.Peer && bytes.Equal(end.hdr, ks.hdr)) {
@@ -295,6 +361,7 @@ func (e *Engine) serveSub(c net.Conn, opt SubOptions, r *Route, join *session) b
 		s.peerBudget = min(s.peerBudget, pb)
 	}
 	s.everUp = true
+	s.redials = r != nil
 	s.mu.Unlock()
 	e.sess[h.id] = s
 	e.smu.Unlock()
@@ -357,25 +424,7 @@ func (e *Engine) serveSub(c net.Conn, opt SubOptions, r *Route, join *session) b
 	}()
 	var redial func()
 	if r != nil {
-		redial = r.redialer(s, func(g DialGroup) func() {
-			return func() {
-				sc, err := g.Dial()
-				if err != nil {
-					s.mu.Lock()
-					s.noteFlap(g.Path, g.Ctrl, time.Time{}, true)
-					s.mu.Unlock()
-					time.Sleep(time.Second)
-					return
-				}
-				if !e.serveSub(sc, opt, nil, s) {
-					// the other end did not make it a sub-connection of this session
-					s.mu.Lock()
-					s.noteFlap(g.Path, g.Ctrl, time.Time{}, true)
-					s.mu.Unlock()
-					time.Sleep(time.Second)
-				}
-			}
-		})
+		redial = e.reverseRedial(s, opt, r)
 		redial()
 	}
 	s.monitor(redial)

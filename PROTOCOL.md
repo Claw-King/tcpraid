@@ -223,7 +223,7 @@ listening node finds the peer with that fingerprint, checks the MAC, refuses a
 time more than 10 minutes from its own clock and, under TLS, a fingerprint that
 is not the one TLS authenticated. A connection that fails any of this is closed
 without an answer. `request`, `path` and `role` are set in type 2 and zero in
-the others.
+the others, except that type 5 sets `path`.
 
 | Type | Then |
 |---|---|
@@ -231,6 +231,7 @@ the others.
 | 2 | a sub-connection that the listening node asked for (below): the **listening** node sends the 69-byte header |
 | 3 | the control connection (below) |
 | 4 | a check: the listening node answers `status (1) = 0` and `MAC(openingKey, "tcpraid link check v1" \| 0x00 \| nonce)`, 17 bytes in all, and the connection ends |
+| 5 | a spare connection (below, since version 0.6.0): nothing follows until the **listening** node sends the 69-byte header of a session on it, as on type 2. A node that does not know the type, or did not ask for spare connections, closes the connection |
 
 A session belongs to the pair of nodes that created it. A sub-connection from
 another peer that names its id is answered like one for a session the server
@@ -255,20 +256,22 @@ field that the receiving end does not know is ignored.
 | `hello` | by both ends, first | `name`, `version`, `protocols` (list of numbers; this document is 1), `instance` (text; optional), `features` (list of text; optional) | who is there |
 | `ping` | by both ends, every 10 s | `seq` | the connection is alive |
 | `pong` | in answer to a `ping` | `seq` | |
-| `open` | by the end that carries a session | `request` (number, not zero), `session` (the id in hex), `test_path` and `test_subs` (numbers; optional), `rule_paths` (list of text; optional) and `rule_subs` (number; optional) | open the sub-connections of this session from your end |
-| `open_fail` | in answer to an `open` | `request`, `reason` (text) | it cannot be done |
+| `open` | by the end that carries a session | `request` (number, not zero), `session` (the id in hex), `test_path` and `test_subs` (numbers; optional), `rule_paths` (list of text; optional), `rule_subs` (number; optional) and `both` (true or absent) | open the sub-connections of this session from your end |
+| `open_fail` | in answer to an `open` | `request`, `reason` (text), `code` (`nopath`; optional) | it cannot be done |
 | `session_fail` | by the exit end of a session | `session` (the id in hex), `code` (`allow` or `dial`), `reason` (text) | the session could not be connected to its destination, and why |
 | `paths` | by an end that runs a path test | `request` | name the paths you hold to me |
 | `paths_reply` | in answer to a `paths` | `request`, `paths` (list of `name`, `subs`, `data`) | the paths, in their order, without addresses |
 | `test_end` | by an end that runs a path test | `session` (the id in hex) | I have ended this session of the test |
 | `resolve` | by an end that is about to carry a session | `request`, `host` (text), `port` (number) | which address does this host name stand for at your end? |
 | `resolve_reply` | in answer to a `resolve` | `request`, and either `addr` (an IP address as text) or `code` (`lookup`, `allow` or `busy`) with `reason` (text; optional) | the address, or why there is none |
+| `spares` | by an end that holds no path to the other | `spares` (number; absent means 0) | keep this many spare connections to me |
 
 The types from `session_fail` to `test_end`, and the fields `features`,
 `test_path` and `test_subs`, were added in version 0.3.0. The types `resolve`
 and `resolve_reply` were added in version 0.4.0, and the fields `rule_paths`
-and `rule_subs` in version 0.5.0. Older versions ignore what they do not
-know.
+and `rule_subs` in version 0.5.0. Version 0.6.0 added the type `spares`, the
+field `both` of an `open` and the field `code` of an `open_fail`. Older
+versions ignore what they do not know.
 
 An end that receives nothing for 30 seconds takes the connection for dead. The
 end that dialed dials again after 1, 2, 4, then every 8 seconds.
@@ -389,3 +392,57 @@ them to a peer that does not, because that peer would open every path. A
 name that fits none of the dialing node's paths for data is answered with
 `open_fail`, and so is a request with more than 16 names or with a number
 outside 0 to 64.
+
+**A session that both nodes open sub-connections of.** Since version 0.6.0 a
+node that holds a path to its peer can dial the sub-connections of a session
+over its own paths and send `open` with `both` for the same session, so that
+the peer opens sub-connections of it too, over the paths the peer holds. A
+node that takes such requests says so with the text `dial-both` in the
+`features` of its `hello`, and none is sent to a peer that does not. A node
+that is asked this way differs from the ordinary case in three ways.
+
+- It numbers its paths from 128 in the openings of type 2, so that in the
+  header of every sub-connection the `path` of a connection it opened differs
+  from the `path` of one that the asking node opened, whose paths are numbered
+  from 0. Each end keeps the sub-connections it opened at their numbers and
+  leaves the others alone.
+- It keeps its share of the sub-connections up whichever end's connection
+  created the session at its end. A node of an older version does that only
+  for a session that its own connection created.
+- With `rule_paths` it takes the names that it has a path for and passes over
+  the others, because the names are looked for on both nodes.
+
+An `open_fail` carries the `code` `nopath` when the answer would be the same
+every time: the node holds no path to the asking node, or none of the paths
+that `rule_paths` names. The asking node then resets the application
+connection. After any other `open_fail` to a request with `both`, and when
+the request could not be sent, the session goes on over the sub-connections
+the asking node opened, and the asking node sends the same `open` again every
+20 seconds until a connection of the peer has arrived. When the paths of one
+node fail later, the session goes on over the sub-connections of the other.
+
+**Spare connections.** A session whose sub-connections the exit end opens
+begins later than one that the client dials for, by the request, the connect
+and the opening. Since version 0.6.0 a node that holds no path to a peer can
+ask that peer for connections that are opened ahead of any session. Both say
+so with the text `spare` in the `features` of their `hello`. The node without
+a path sends `spares` with the number it wants after every `hello` of the
+peer while that number is above 0, and again when the number changes. The
+dialing node keeps that many connections of type 5 to it, 8 at most and never
+more than it is set to, on its first path that carries data, with the number
+of that path in the opening. It opens one in the place of each that is used
+or ends, after 1, 2, 4, then every 8 seconds while they end unused within 5
+seconds or cannot be opened, and it opens none while no control connection
+with the peer is up. It drops the number when the last control connection is
+gone.
+
+The asking node takes a connection of type 5 only from a peer that it
+asked and only as many as it asked for, and closes any other. Nothing is
+sent on a spare connection while it waits. When the node has a session whose
+sub-connections the peer is to open, it sends the 69-byte header on one spare
+connection immediately, as on a connection of type 2 with the role data, and
+sends the ordinary `open` for the other sub-connections. The dialing node
+answers the header with the ordinary reply. Its `open` then finds the session
+there and keeps it at its numbers of sub-connections, and the sub-connection
+on the spare connection counts among those of its path. A session of a rule that names
+paths or a number of sub-connections does not begin on a spare connection.

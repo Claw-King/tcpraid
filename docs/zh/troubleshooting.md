@@ -31,7 +31,7 @@ taken  0.0.0.0:9700  nas-a  192.0.2.10:873  0         FAILED: listening on 0.0.0
 | "peer ... looks up as many host names as it does at a time, and did not look up NAME" | 远端节点正忙着解析别的名字。稍后再试 |
 | "peer ... is not connected to this node, so it cannot be asked which address NAME stands for" | 主机名要经两个节点之间的连接去问，而这条连接断着。`tcpraid peers` 会显示对端离线。见“对端离线” |
 | "peer ... could not connect to ADDRESS. Its log says why." | 还是上面两种情况，但远端节点的版本早于 0.3.0，不会把原因报回来。它的日志里有 `dial ADDRESS: ... connection refused`，或者 `dial ADDRESS: not in the allow list of the peer` |
-| 15 秒后被重置，规则在没有路径的节点上 | 已经请对端连过来，但什么都没到：对端已经连不到本节点的监听了 |
+| 15 秒后被重置，规则在没有路径的节点上 | 已经请对端连过来，但什么都没到：对端已经连不到本节点的监听了。对端的控制连接断开而本节点还没有发现时也会这样，因为请求发在了旧的那条连接上，最长持续 30 秒 |
 | "peer ... does not answer on the connections this node opens"，30 秒后变成 "peer ... answered on none of the connections within 30 seconds" | 子连接一条都没建起来，后面的文字说明那些尝试碰到了什么。原因之一：另一个节点上已经解除了配对。这时规则会说 "the other node does not accept this node, which is not paired with it or no longer is"，另一个节点的日志里有 "refused a connection from ...: not a peer of this node" 这样的行。重新配对 |
 | "the connections to peer ... cannot be opened"，后面带一个错误 | 本节点根本连不上对端的监听。用 `tcpraid peers check NAME` 逐条试路径 |
 | "none of the path's N addresses gave a connection"，后面是每个地址和它的错误 | 这条路径写了多个地址，一个都没连通。用 `tcpraid peers check NAME` 逐个地址试 |
@@ -39,6 +39,10 @@ taken  0.0.0.0:9700  nas-a  192.0.2.10:873  0         FAILED: listening on 0.0.0
 | "the rule names the path NAME, and this node has no path of that name to peer ... that carries data" | 规则的 `-paths` 里有一个名字，在本节点上不是一条承载数据的路径。`tcpraid peers show PEER` 列出各条路径 |
 | "peer ... could not open the connections: it has no path called NAME that carries data" | 同样的情况，只是路径由对端持有：规则的 `-paths` 里的名字不是对端的一条承载数据的路径。到对端上看它的路径 |
 | "peer ... does not keep a rule to the paths it names (it runs version ...)" | 规则带了 `-paths` 或 `-subs`，路径由对端持有，而对端的版本早于 0.5.0。升级它，或者不带这两个参数添加规则 |
+| "the rule lets only this node open the connections (dial self), and this node has no path to peer ..." | 规则带了 `-dial self`，而本节点没有路径。用 `tcpraid peers path set` 加一条路径，或者换一个 `-dial` 重新添加规则 |
+| "the rule lets only peer ... open the connections (dial peer), and the peer is not connected to this node" | 规则带了 `-dial peer`，而和对端之间没有控制连接连着。`tcpraid peers` 会显示对端离线。见“对端离线” |
+| "the rule lets both nodes open the connections (dial both), which needs a path on each node, and ..." | 规则带了 `-dial both`，报错的后半句说明是哪个节点没有通往另一个节点的路径，或者没有规则点名的任何一条路径。在那个节点上加路径，或者换一个 `-dial` 重新添加规则 |
+| "peer ... does not open connections of a session that the other node opens connections of too (it runs version ...)" | 规则带了 `-dial both`，而对端的版本早于 0.6.0。升级它，或者换一个 `-dial` |
 | "nothing arrived from peer ... for the whole grace time" | 两个节点之间的线路断开的时间超过了 `-grace`。见下一节 |
 | "peer ... was restarted while it carried a connection of this rule, and the connection was reset" | 另一个节点作为新的进程回来了(它被重启、被杀掉，或者内存耗尽)，本节点把旧进程承载着的那条连接重置了。重新开始传输即可。如果反复出现，去看另一个节点的日志和它的内存上限(`-maxrss`、它所在容器的上限) |
 
@@ -94,6 +98,7 @@ default  nas-a.example.org:9851 (tls): ok
 
 - 用 `tcpraid peers test NAME` 测一下子连接带来了多少(见 `reference-cli.md`)。它在每条路径上发测试数据，一次只用一条子连接，一次用全部。如果全部合起来并不明显比一条快，tcpraid 在这条路径上就没有什么可以提升的。要么一条连接已经占满了线路，要么路径上有东西把这几条连接合进了一条，`connecting.md` 讲了怎么分辨。用 `iperf3` 分别跑一条流和八条流，可以在不用 tcpraid 的情况下测同一件事。
 - 在“会话”页、用 `tcpraid sessions` 或 `GET /api/v1/sessions` 看会话。`subs` 应该等于各条路径的连接数之和(默认 8)，`resent_bytes` 应该只占 `tx_bytes` 的一小部分，命令里的 `SENT AGAIN` 一列显示的就是这个比例。重发的字节很多，说明路径在丢包或者卡顿。这时有帮助的是第二条承担 `repair` 和 `control`(网页上勾“补发”和“回执”)的路径，或者 UDP 回执(见 `concepts.md`)。
+- 带 `-dial both` 的规则，会话里应该有两个节点各自打开的子连接：`tcpraid sessions` 里它的 `STATE` 末尾写着两边各打开了几条。只看到一个节点的，说明另一个节点的路径不通。如果对端在会话开始时就没能打开它那一份，规则所在节点的日志里有一行 "peer ... could not open its share of the connections of a session"，后面是对端给的原因，并且每 20 秒再请求对端一次，直到它的第一条连接到达。
 - 应用和它的节点之间、远端节点和目的地之间这两段的速度同样算数，因为 tcpraid 快不过其中较慢的一段，也快不过应用本身。
 - 会话结束时，两个节点各自会为它记两行日志：字节数、重发的块数、被换掉的子连接数、卡住的时间。用 `-timeline` 启动的节点在会话进行中也会记同一类数字。下一节解释这些数字，以及怎样从中看出要不要改 `-window` 或 `-hol`(`reference-files.md`)。
 

@@ -87,6 +87,8 @@ const (
 	// since 0.4.0
 	TypeResolve      = "resolve"
 	TypeResolveReply = "resolve_reply"
+	// since 0.6.0
+	TypeSpares = "spares"
 )
 
 // FeaturePathTest in a hello says that the sending node takes the sessions of a path
@@ -102,6 +104,31 @@ const FeatureResolve = "resolve"
 // sub-connections of a session (open), keeps to the paths and to the number of data
 // sub-connections that the request names (rule_paths, rule_subs).
 const FeatureRulePaths = "rule-paths"
+
+// FeatureDialBoth in a hello says that the sending node, asked to open sub-connections
+// (open) of a session that it holds already because the asking node dialed some itself,
+// or that the asking node is about to dial for too (both), keeps its share of the
+// session's sub-connections up, and numbers its paths from BothPathBase in such a
+// session. It also says that an open_fail of the node carries a code.
+const FeatureDialBoth = "dial-both"
+
+// FeatureSpare in a hello says that the sending node keeps spare connections to a peer
+// that asks for them (spares) and uses the ones a peer keeps to it.
+const FeatureSpare = "spare"
+
+// BothPathBase is where the path numbers begin that the node asked with an open that
+// says both gives the sub-connections it opens: the paths of the asking node, which
+// dials sub-connections of the same session, are numbered from 0.
+const BothPathBase = 0x80
+
+// MaxSpares is the most spare connections a node asks a peer for, and the most it
+// keeps to one peer.
+const MaxSpares = 8
+
+// CodeNoPath is the code of an open_fail (since 0.6.0) that will be the same however
+// often the request is made again: the node that was asked holds no path to the asking
+// node, or none of the paths the request names.
+const CodeNoPath = "nopath"
 
 // The codes of a session_fail.
 const (
@@ -157,9 +184,17 @@ type Message struct {
 	// and the most data sub-connections to keep on each (0: as many as the path has)
 	RulePaths []string `json:"rule_paths,omitempty"`
 	RuleSubs  int      `json:"rule_subs,omitempty"`
+	// open (since 0.6.0): the asking node dials sub-connections of the session itself
+	// as well. The node that is asked numbers its paths from BothPathBase, takes the
+	// names in rule_paths that it has and passes over the others, and keeps its share
+	// of the sub-connections up whichever end's connection began the session
+	Both bool `json:"both,omitempty"`
 	// session_fail: CodeAllow or CodeDial. resolve_reply without an address: CodeLookup,
-	// CodeAllow or CodeBusy
+	// CodeAllow or CodeBusy. open_fail (since 0.6.0): CodeNoPath, or empty
 	Code string `json:"code,omitempty"`
+	// spares (since 0.6.0): how many spare connections the sending node would like the
+	// receiving node to keep to it; 0 for none
+	Spares int `json:"spares,omitempty"`
 	// resolve: the host name to look up, and the port the session will go to (the
 	// allow list of the answering node may depend on it)
 	Host string `json:"host,omitempty"`
