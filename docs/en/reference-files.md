@@ -26,7 +26,7 @@
 The start-up lines of the log repeat what is in effect:
 
 ```
-node 0.4.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+node 0.5.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
 transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
 ```
 
@@ -128,6 +128,9 @@ drwx------  .
   it cannot make sense of is refused and left as it is. One case of that is a
   rule whose destination is a host name, which version 0.3.0 and older do not
   take. Remove such rules before you go back to one of those versions.
+  Another case is what version 0.5.0 added: a path with several addresses or
+  a mark, and a rule with `-paths` or `-subs`. Version 0.4.0 and older do not
+  take a file that holds one of them, so take them off before you go back.
 
 ## Ports at a glance
 
@@ -150,7 +153,7 @@ rules are what the container image and the templates in `deploy/` use.
 | sessions a node carries for its rules | 64 |
 | sessions a node is the exit for | 64 |
 | rules | 256, each over at most 1024 ports |
-| paths to one peer | 16, each with 1 to 64 sub-connections |
+| paths to one peer | 16, each with 1 to 64 sub-connections and up to 8 addresses |
 | handshakes in progress with one peer | 32 |
 | unused pairing codes' validity | 1 second to 30 days, default 1 hour |
 | worst-case memory for stream data | twice `-budget`: about 512 MB with the default |

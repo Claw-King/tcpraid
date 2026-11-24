@@ -155,7 +155,7 @@ func TestRuleStore(t *testing.T) {
 	if err := n.ReplaceRule("r1", r1b); err != nil {
 		t.Fatal(err)
 	}
-	if got := n.Rules(); len(got) != 2 || got[0] != r1b || got[1] != t1 {
+	if got := n.Rules(); len(got) != 2 || !got[0].Equal(r1b) || !got[1].Equal(t1) {
 		t.Fatalf("rules after replace: %+v", got)
 	}
 	if err := n.ReplaceRule("r1-new", Rule{Name: "t1", Listen: ":1", Destination: "192.0.2.1:1", Peer: "beta"}); !errors.Is(err, ErrInvalid) {
@@ -175,7 +175,7 @@ func TestRuleStore(t *testing.T) {
 	dir := n.Dir
 	n.Close()
 	n2 := mustOpen(t, dir, "")
-	if got := n2.Rules(); len(got) != 2 || got[0].Name != "r1-new" || got[1] != t1 {
+	if got := n2.Rules(); len(got) != 2 || got[0].Name != "r1-new" || !got[1].Equal(t1) {
 		t.Fatalf("rules after reopening: %+v", got)
 	}
 	// removing the peer leaves the rules: they name a peer that is gone

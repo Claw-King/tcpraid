@@ -30,7 +30,9 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -89,8 +91,10 @@ type Runtime struct {
 	// noFeatures: the hello names no features (tests set it before Start to be a
 	// version before 0.3.0). noResolve: it does not name the resolve feature (to be
 	// 0.3.0).
-	noFeatures bool
-	noResolve  bool
+	// noRulePaths: nor the rule-paths feature (to be 0.4.0).
+	noFeatures  bool
+	noResolve   bool
+	noRulePaths bool
 	// Lookup returns the IP addresses of a host name, for a peer that asks. nil: the
 	// system's resolver.
 	Lookup func(ctx context.Context, host string) ([]net.IP, error)
@@ -110,6 +114,11 @@ type peerState struct {
 	peer   node.Peer     // the record that route was made from
 	route  *engine.Route
 	valid  func() bool
+
+	mu sync.Mutex
+	// narrowed are the routes of rules that use only some of the paths or fewer
+	// sub-connections, by what they use (narrowKey); made when first needed.
+	narrowed map[string]*engine.Route
 }
 
 // RuleStatus is a rule and how it is doing.
@@ -125,6 +134,9 @@ type RuleStatus struct {
 	ErrorAt time.Time
 	// Sessions is the number of live sessions the rule carries.
 	Sessions int
+	// PeerDials: new connections of the rule are opened by the peer for now, although
+	// this node has a path to it, because that path is down.
+	PeerDials bool
 }
 
 func (rt *Runtime) logf(format string, args ...any) {
@@ -196,7 +208,7 @@ func (rt *Runtime) Apply() {
 		}
 	}
 	for name, rr := range rt.running {
-		if r, ok := want[name]; !ok || r != rr.rule {
+		if r, ok := want[name]; !ok || !r.Equal(rr.rule) {
 			rr.close()
 			delete(rt.running, name)
 			rt.logf("rule %q: stopped listening on %s", name, rr.rule.Listen)
@@ -353,6 +365,11 @@ func (rt *Runtime) carryAttempt(a *attempt, r node.Rule, c net.Conn, ip net.IP, 
 		// no way to dial the peer: it is asked to dial
 		rt.carryReverse(a, r, peer, c, ip, port)
 		return
+	} else if ok && !r.Narrowed() && rt.peerDials(peer.Name) {
+		// this node's own path is down and the peer's is not: the peer dials for now.
+		// A rule that names paths means this node's paths and stays with them.
+		rt.carryReverse(a, r, peer, c, ip, port)
+		return
 	}
 	ps, err := rt.peerFor(r.Peer)
 	if err != nil {
@@ -360,7 +377,15 @@ func (rt *Runtime) carryAttempt(a *attempt, r node.Rule, c net.Conn, ip net.IP, 
 		reset(c)
 		return
 	}
-	if end, ok := ps.route.Carry(c, ip, port, engine.Owner{Peer: r.Peer, Rule: r.Name}, ps.valid); ok {
+	route := ps.route
+	if r.Narrowed() {
+		if route, err = rt.narrowedRoute(ps, r); err != nil {
+			a.fail(err.Error())
+			reset(c)
+			return
+		}
+	}
+	if end, ok := route.Carry(c, ip, port, engine.Owner{Peer: r.Peer, Rule: r.Name}, ps.valid); ok {
 		rt.ended(a, r.Peer, net.JoinHostPort(ip.String(), strconv.Itoa(port)), end)
 	}
 }
@@ -401,6 +426,100 @@ func (rt *Runtime) peerFor(name string) (*peerState, error) {
 	next.route = rt.Engine.NewRoute(rt.groups(next, peer), keys, peer.UDPDial)
 	rt.peers[name] = next
 	return next, nil
+}
+
+// narrow returns, of the dial groups of a peer, the ones a connection of a rule uses
+// that names paths and a number of sub-connections: the data groups of the paths that
+// names holds (none named: all of them), each with at most subs sub-connections (0: as
+// many as it has), and every control and repair group as it is. When a name fits no
+// path that carries data, it returns nil and that name.
+func narrow(groups []engine.DialGroup, names []string, subs int) (out []engine.DialGroup, missing string) {
+	found := map[string]bool{}
+	for _, g := range groups {
+		switch {
+		case g.Ctrl || g.Repair:
+			out = append(out, g)
+		case len(names) == 0 || slices.Contains(names, g.Name):
+			if subs > 0 {
+				g.Want = min(subs, g.Want)
+			}
+			out = append(out, g)
+			found[g.Name] = true
+		}
+	}
+	for _, name := range names {
+		if !found[name] {
+			return nil, name
+		}
+	}
+	if len(found) == 0 {
+		return nil, ""
+	}
+	return out, ""
+}
+
+// narrowKey names what a rule uses of a peer's paths.
+func narrowKey(r node.Rule) string {
+	return strconv.Itoa(r.Subs) + "\x00" + strings.Join(r.Paths, "\x00")
+}
+
+// narrowedRoute returns the route for the connections of a rule that names paths or a
+// number of sub-connections, over the paths this node holds to the rule's peer.
+func (rt *Runtime) narrowedRoute(ps *peerState, r node.Rule) (*engine.Route, error) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	key := narrowKey(r)
+	if route := ps.narrowed[key]; route != nil {
+		return route, nil
+	}
+	groups, missing := narrow(rt.groups(ps, ps.peer), r.Paths, r.Subs)
+	if groups == nil {
+		return nil, noSuchPath(ps.peer.Name, missing)
+	}
+	keys, err := pairKeys(ps.peer)
+	if err != nil {
+		return nil, err
+	}
+	route := rt.Engine.NewRoute(groups, keys, ps.peer.UDPDial)
+	if ps.narrowed == nil {
+		ps.narrowed = map[string]*engine.Route{}
+	}
+	ps.narrowed[key] = route
+	return route, nil
+}
+
+// noSuchPath is the error of a rule that names a path its peer's record does not have
+// for data.
+func noSuchPath(peer, path string) error {
+	if path == "" {
+		return fmt.Errorf("this node has no path to peer %q that carries data", peer)
+	}
+	return fmt.Errorf("the rule names the path %q, and this node has no path of that name to peer %q that carries data. \"tcpraid peers show %s\" lists the paths.", path, peer, peer)
+}
+
+// checkNarrowing reports whether the paths a rule names are there, where that can be
+// told when the rule is stored: this node holds the paths to the rule's peer. Where
+// the peer holds them, it says so when a connection comes.
+func (rt *Runtime) checkNarrowing(r node.Rule) error {
+	if len(r.Paths) == 0 {
+		return nil
+	}
+	peer, ok := rt.Node.Peer(r.Peer)
+	if !ok || len(peer.Paths) == 0 {
+		return nil
+	}
+	for _, name := range r.Paths {
+		data := false
+		for _, p := range peer.Paths {
+			if p.Name == name && slices.Contains(p.Roles, node.RoleData) {
+				data = true
+			}
+		}
+		if !data {
+			return fmt.Errorf("%w: rule %q: %w", node.ErrInvalid, r.Name, noSuchPath(peer.Name, name))
+		}
+	}
+	return nil
 }
 
 // pairKeys returns the transport keys of the pairing with peer.
@@ -520,12 +639,18 @@ func (rt *Runtime) Rules() []RuleStatus {
 		}
 	}
 	rules := rt.Node.Rules()
+	// the peers this node holds a path to: only for them can a path be down
+	holds := map[string]bool{}
+	for _, p := range rt.Node.Peers() {
+		holds[p.Name] = len(p.Paths) > 0
+	}
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	out := make([]RuleStatus, 0, len(rules))
 	for _, r := range rules {
 		p := rt.problems[r.Name]
 		st := RuleStatus{Rule: r, Sessions: sessions[r.Name], Error: p.text, ErrorAt: p.at}
+		st.PeerDials = r.Enabled && !r.Narrowed() && holds[r.Peer] && rt.pathDownLocked(r.Peer)
 		switch {
 		case !r.Enabled:
 			st.Error, st.ErrorAt = "", time.Time{}
@@ -553,6 +678,9 @@ func (rt *Runtime) Rules() []RuleStatus {
 
 // AddRule stores a new rule and starts it if it is enabled.
 func (rt *Runtime) AddRule(r node.Rule) error {
+	if err := rt.checkNarrowing(r); err != nil {
+		return err
+	}
 	if err := rt.Node.AddRule(r); err != nil {
 		return err
 	}
@@ -563,6 +691,9 @@ func (rt *Runtime) AddRule(r node.Rule) error {
 
 // ReplaceRule puts r in the place of the rule called name and applies the change.
 func (rt *Runtime) ReplaceRule(name string, r node.Rule) error {
+	if err := rt.checkNarrowing(r); err != nil {
+		return err
+	}
 	if err := rt.Node.ReplaceRule(name, r); err != nil {
 		return err
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -181,14 +182,25 @@ func (s *Service) Join(ctx context.Context, codeText, address string) (node.Peer
 		}
 		return node.Peer{}, err
 	}
+	// the address that worked comes first; the others the code names are kept as further
+	// addresses of the path, to be tried when that one fails
+	known := []string{used}
+	for _, addr := range addrs {
+		if addr != used && !slices.Contains(known, addr) && node.CheckAddr(addr) == nil && len(known) < node.MaxPathAddrs {
+			known = append(known, addr)
+		}
+	}
+	first := node.Path{Name: node.DefaultPathName, Type: "tcp", Addr: used, Security: node.SecurityTLS, Roles: []string{"data"}, Subs: 8}
+	if len(known) > 1 {
+		first.Addrs = known[1:]
+	}
 	peer, err := s.Node.PutPeer(node.Peer{
 		Name:        res.Name,
 		Fingerprint: res.Fingerprint,
 		PairSecret:  res.Secret,
-		Addresses:   []string{used},
+		Addresses:   known,
 		PairedAt:    s.now().UTC().Truncate(time.Second),
-		Paths: []node.Path{{Name: node.DefaultPathName, Type: "tcp", Addr: used, Security: node.SecurityTLS,
-			Roles: []string{"data"}, Subs: 8}},
+		Paths:       []node.Path{first},
 	})
 	if err != nil {
 		s.logf("joining with %s failed: the other node accepted, but the peer could not be stored: %v", code, err)
@@ -392,7 +404,7 @@ func (s *Service) RemovePath(name, path string) (node.Peer, error) {
 func (s *Service) logPaths(name string, stored node.Peer) {
 	var desc []string
 	for _, p := range stored.Paths {
-		desc = append(desc, fmt.Sprintf("%s to %s (%s)", p.Name, p.Addr, p.Security))
+		desc = append(desc, fmt.Sprintf("%s to %s (%s)", p.Name, strings.Join(p.Addresses(), " or "), p.Security))
 	}
 	s.logf("peer %q: paths set: %s", name, strings.Join(desc, ", "))
 }
@@ -447,13 +459,23 @@ func (s *Service) CheckPeer(ctx context.Context, name string) ([]PathResult, err
 	}
 	results := []PathResult{}
 	for _, path := range peer.Paths {
-		r := PathResult{Name: path.Name, Addr: path.Addr, Security: path.Security, OK: true}
-		pctx, cancel := context.WithTimeout(ctx, CheckTimeout)
-		if err := s.Dialer.Check(pctx, peer, path); err != nil {
-			r.OK, r.Error = false, err.Error()
+		// every address of the path on its own: one that is down must show, although
+		// the path works through another
+		// an address of several gets the time a dial gives it, so that a path with
+		// many silent addresses does not outlast the caller
+		limit := CheckTimeout
+		if len(path.Addrs) > 0 {
+			limit = min(limit, addrTimeout)
 		}
-		cancel()
-		results = append(results, r)
+		for _, addr := range path.Addresses() {
+			r := PathResult{Name: path.Name, Addr: addr, Security: path.Security, OK: true}
+			pctx, cancel := context.WithTimeout(ctx, limit)
+			if err := s.Dialer.CheckAt(pctx, peer, path, addr); err != nil {
+				r.OK, r.Error = false, err.Error()
+			}
+			cancel()
+			results = append(results, r)
+		}
 	}
 	return results, nil
 }

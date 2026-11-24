@@ -23,8 +23,8 @@ import (
 	"github.com/Claw-King/tcpraid/internal/engine"
 )
 
-// version is set at build time: go build -ldflags "-X main.version=0.4.0"
-var version = "0.4.0-dev"
+// version is set at build time: go build -ldflags "-X main.version=0.5.0"
+var version = "0.5.0-dev"
 
 var (
 	showVer   = flag.Bool("version", false, "print the version and exit")

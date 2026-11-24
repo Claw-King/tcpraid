@@ -38,7 +38,7 @@ after telling its peers and resetting the application connections it carries.
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.4.0 (wire protocol 1)
+version      0.5.0 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -53,7 +53,7 @@ exits with status 1.
 | Command | Does |
 |---|---|
 | `pair create [-addr HOST:PORT]... [-ttl DURATION]` | makes a pairing code and prints it. `-addr`: where the other node reaches this one (default: the node's `-advertise`); may be given more than once, up to 8. `-ttl`: how long it is valid (default `1h`, at most 30 days) |
-| `pair join [CODE] [-addr HOST:PORT]` | pairs with the node that made the code. Without `CODE` it reads the code from standard input. `-addr`: connect there instead of to the addresses in the code |
+| `pair join [CODE] [-addr HOST:PORT]` | pairs with the node that made the code. Without `CODE` it reads the code from standard input. `-addr`: connect there instead of to the addresses in the code. The path to the new peer keeps every address the code names, with the one that answered first |
 | `pair list` | the codes that have not expired |
 | `pair revoke ID` | makes a code worthless |
 
@@ -91,10 +91,10 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.4.0, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.5.0, last heard 2026-01-15T10:00:05Z
 
-PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS
-default  tcp   nas-a.example.org:9851  -      tls       -       -    data   8
+PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS  MARK
+default  tcp   nas-a.example.org:9851  -      tls       -       -    data   8     -
 
 $ tcpraid peers check nas-a
 default  nas-a.example.org:9851 (tls): ok
@@ -104,9 +104,11 @@ peer nas-b removed. The other node is not told and still lists this one.
 ```
 
 - `peers check NAME` opens a connection on every path, in the path's tier,
-  and asks the other node to prove that it holds the pairing. It exits with
-  status 1 if a path fails. A node without a path to the peer has nothing to
-  check.
+  and asks the other node to prove that it holds the pairing. A path with
+  several addresses is checked at each of them, one line for each. The
+  command exits with status 1 if a path or an address fails, and its last
+  line says whether every path still has an address that works. A node
+  without a path to the peer has nothing to check.
 - `peers remove NAME` ends the pairing on this node. The sessions with that
   peer are reset, in both directions, and its connections are refused from
   then on. The command then lists the rules that still name the peer. They
@@ -175,7 +177,7 @@ changes.
 
 | Flag | Meaning | A new path gets |
 |---|---|---|
-| `-addr HOST:PORT` | the address to dial: the peer's listener, or the entry that leads to it (a port forward, a tunnel); through SOCKS5, the address the proxy is to connect to | (required) |
+| `-addr HOST:PORT[,HOST:PORT...]` | the address to dial: the peer's listener, or the entry that leads to it (a port forward, a tunnel); through SOCKS5, the address the proxy is to connect to. Up to 8 addresses, separated by commas, are tried in that order (see below) | (required) |
 | `-type tcp\|socks5` | direct, or through a SOCKS5 proxy | `tcp` |
 | `-proxy socks5://[user:pass@]host:port` | the proxy, with `-type socks5` | |
 | `-security tls\|owncert\|off` | the tier | `tls` |
@@ -183,13 +185,14 @@ changes.
 | `-pin FINGERPRINT` | with `owncert` and `pin`: fingerprint of the certificate's key, 64 hex digits | |
 | `-roles data,repair,control` | what the path carries; not `data` and `repair` together | `data` |
 | `-subs N` | sub-connections, 1 to 64 | 8 |
+| `-mark N` | the socket mark of the path's connections, for the routing rules of the host. Linux only, and the node needs the capability `CAP_NET_ADMIN`. `0`: none | none |
 
 ```
 $ tcpraid peers path set nas-a side -addr 192.0.2.10:9851 -type socks5 -proxy socks5://user:pass@127.0.0.1:1080 -roles repair,control -subs 2
 path side of nas-a added
-PATH     TYPE    ADDRESS                 PROXY                    SECURITY  VERIFY  PIN  ROLES           SUBS
-default  tcp     nas-a.example.org:9851  -                        tls       -       -    data            8
-side     socks5  192.0.2.10:9851         socks5://127.0.0.1:1080  tls       -       -    repair,control  2
+PATH     TYPE    ADDRESS                 PROXY                    SECURITY  VERIFY  PIN  ROLES           SUBS  MARK
+default  tcp     nas-a.example.org:9851  -                        tls       -       -    data            8     -
+side     socks5  192.0.2.10:9851         socks5://127.0.0.1:1080  tls       -       -    repair,control  2     -
 
 $ tcpraid peers path remove nas-a side
 path side of nas-a removed
@@ -202,6 +205,32 @@ without its user and password.
 The node changes that path in a single step. Two of these commands that
 run at the same time for two paths of one peer both take effect, and so does
 a `peers set` that runs beside them.
+
+**Several addresses.** A path can name up to 8 addresses of the same
+listener, for example its IPv6 address and then a forwarded IPv4 port. The
+node tries them in the order given whenever it opens a connection, and gives
+each at most 8 seconds. It remembers which one worked and begins there the
+next time, until the node restarts. `-addr` always sets the whole list, so
+one address alone takes the others away.
+
+```
+$ tcpraid peers path set nas-a default -addr [2001:db8::10]:9851,203.0.113.7:9851
+path default of nas-a changed
+PATH     TYPE  ADDRESS                               PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS  MARK
+default  tcp   [2001:db8::10]:9851,203.0.113.7:9851  -      tls       -       -    data   8     -
+
+$ tcpraid peers check nas-a
+default  [2001:db8::10]:9851 (tls): FAILED: dial tcp [2001:db8::10]:9851: connect: network is unreachable
+default  203.0.113.7:9851 (tls): ok
+tcpraid peers check: 1 of 2 address(es) to nas-a failed. Every path still has an address that works.
+```
+
+**The mark.** A path with a mark sets it on every connection it opens, so
+that the host's routing rules can send those connections out by another
+way than the rest. Setting a mark needs the capability `CAP_NET_ADMIN`, and
+since Linux 5.17 `CAP_NET_RAW` is enough as well. Without it the connections
+of the path fail, and `peers check` says that the capability is missing. On macOS and
+Windows a mark is refused when it is set.
 
 ### peers set
 
@@ -272,6 +301,28 @@ rule rsync removed. Connections it carries now run to their end.
 `-disabled` stores the rule switched off. A node has at most 256 rules, and a
 rule's name is up to 64 bytes without spaces.
 
+Two more flags narrow what the connections of a rule use:
+
+| Flag | Meaning |
+|---|---|
+| `-paths NAME[,NAME...]` | the connections of the rule use only these paths, of the paths between the two nodes that carry data. Without it they use every path |
+| `-subs N` | a connection of the rule keeps at most `N` data sub-connections on each path, and never more than the path is set to. Without it, as many as the path has |
+
+The names are the ones that the node holding the paths gives them. On that
+node `tcpraid peers show` lists them, and a name that is not there is refused
+when the rule is added. On a node whose peer holds the paths, the peer
+checks the names when a connection arrives, and both nodes need version
+0.5.0 or later. Sub-connections for control and repair are not affected. A
+rule that is narrowed says so in its state:
+
+```
+$ tcpraid rules add pull -peer nas-a -listen 0.0.0.0:9802 -dest 192.0.2.10:873 -paths side -subs 3
+rule pull added: listening, over the paths side, with at most 3 sub-connections on a path
+```
+
+`rules enable` and `rules disable` keep both settings. To change them,
+remove the rule and add it again.
+
 `STATE` is `listening`, `disabled`, or `FAILED:` with the reason the rule
 could not listen. In that case `rules add` exits with status 1, and the rule
 is stored and tried again whenever the rules change. After "last connection:" comes what
@@ -290,6 +341,13 @@ does not report it, and the rule then says to look at the peer's log. While
 a connection waits because the peer does not answer, the rule says what the
 attempts run into, without a time. The next connection of the rule clears
 the state.
+
+When both nodes hold a path to each other and this node's own path is down,
+the peer opens the connections of new sessions for as long as that lasts
+(`connecting.md`). The state of the rule then reads `listening, the peer
+opens the connections while this node's path is down`. A rule with `-paths`
+or `-subs` does not change over, because the names it holds are those of
+this node's paths.
 
 A rule whose destination is a host name also says when the name gave no
 address: the peer does not know the name, the peer is not connected, its
@@ -351,5 +409,5 @@ day, until you interrupt it. `-interval DURATION` sets another interval, from
 
 ```
 $ tcpraid version
-tcpraid 0.4.0 (wire protocol 1)
+tcpraid 0.5.0 (wire protocol 1)
 ```

@@ -34,6 +34,11 @@ taken  0.0.0.0:9700  nas-a  192.0.2.10:873  0         FAILED: listening on 0.0.0
 | 15 秒后被重置，规则在没有路径的节点上 | 已经请对端连过来，但什么都没到：对端已经连不到本节点的监听了 |
 | "peer ... does not answer on the connections this node opens"，30 秒后变成 "peer ... answered on none of the connections within 30 seconds" | 子连接一条都没建起来，后面的文字说明那些尝试碰到了什么。原因之一：另一个节点上已经解除了配对。这时规则会说 "the other node does not accept this node, which is not paired with it or no longer is"，另一个节点的日志里有 "refused a connection from ...: not a peer of this node" 这样的行。重新配对 |
 | "the connections to peer ... cannot be opened"，后面带一个错误 | 本节点根本连不上对端的监听。用 `tcpraid peers check NAME` 逐条试路径 |
+| "none of the path's N addresses gave a connection"，后面是每个地址和它的错误 | 这条路径写了多个地址，一个都没连通。用 `tcpraid peers check NAME` 逐个地址试 |
+| "the path's socket mark N could not be set, because the node lacks the capability CAP_NET_ADMIN" | 这条路径带了标记，而节点没有权限设置它。给节点这项权限，或者用 `tcpraid peers path set NAME PATH -mark 0` 去掉标记 |
+| "the rule names the path NAME, and this node has no path of that name to peer ... that carries data" | 规则的 `-paths` 里有一个名字，在本节点上不是一条承载数据的路径。`tcpraid peers show PEER` 列出各条路径 |
+| "peer ... could not open the connections: it has no path called NAME that carries data" | 同样的情况，只是路径由对端持有：规则的 `-paths` 里的名字不是对端的一条承载数据的路径。到对端上看它的路径 |
+| "peer ... does not keep a rule to the paths it names (it runs version ...)" | 规则带了 `-paths` 或 `-subs`，路径由对端持有，而对端的版本早于 0.5.0。升级它，或者不带这两个参数添加规则 |
 | "nothing arrived from peer ... for the whole grace time" | 两个节点之间的线路断开的时间超过了 `-grace`。见下一节 |
 | "peer ... was restarted while it carried a connection of this rule, and the connection was reset" | 另一个节点作为新的进程回来了(它被重启、被杀掉，或者内存耗尽)，本节点把旧进程承载着的那条连接重置了。重新开始传输即可。如果反复出现，去看另一个节点的日志和它的内存上限(`-maxrss`、它所在容器的上限) |
 

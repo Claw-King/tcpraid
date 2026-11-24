@@ -13,6 +13,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/Claw-King/tcpraid/internal/engine"
 )
 
 // SchemaVersion is the version of the state file layout this program writes. It reads
@@ -69,15 +71,29 @@ const (
 
 // Path is one way to reach a peer.
 type Path struct {
-	Name     string   `json:"name"`
-	Type     string   `json:"type"`            // "tcp" or "socks5"
-	Addr     string   `json:"addr"`            // host:port of the peer's listener as seen from the end of the path
+	Name string `json:"name"`
+	Type string `json:"type"` // "tcp" or "socks5"
+	Addr string `json:"addr"` // host:port of the peer's listener as seen from the end of the path
+	// Addrs are further addresses of the same listener, tried in their order after
+	// Addr when a connection cannot be made (since 0.5.0). With Addr they are at most
+	// MaxPathAddrs.
+	Addrs    []string `json:"addrs,omitempty"`
 	Proxy    string   `json:"proxy,omitempty"` // socks5://[user:pass@]host:port (type socks5)
 	Security string   `json:"security"`        // SecurityTLS, SecurityOwnCert or SecurityOff
 	Verify   string   `json:"verify,omitempty"`
 	Pin      string   `json:"pin,omitempty"` // owncert with VerifyPin: fingerprint of the listener's certificate key
 	Roles    []string `json:"roles"`         // data, repair, control
 	Subs     int      `json:"subs"`
+	// Mark is the socket mark (SO_MARK) of the connections this node opens on the path
+	// (since 0.5.0); 0 means none. Only Linux has it, and setting it needs the
+	// capability CAP_NET_ADMIN.
+	Mark int `json:"mark,omitempty"`
+}
+
+// Addresses returns every address of the path in the order they are tried: Addr, then
+// Addrs.
+func (p Path) Addresses() []string {
+	return append([]string{p.Addr}, p.Addrs...)
 }
 
 // PairingCode is what the node keeps of a pairing code it handed out. The one-time
@@ -135,7 +151,10 @@ func (s *State) clone() *State {
 		pc.SecretHash = bytes.Clone(pc.SecretHash)
 		c.PairingCodes[i] = pc
 	}
-	c.Rules = append([]Rule{}, s.Rules...)
+	c.Rules = make([]Rule, len(s.Rules))
+	for i, r := range s.Rules {
+		c.Rules[i] = r.Clone()
+	}
 	return &c
 }
 
@@ -145,6 +164,9 @@ func (p Peer) clone() Peer {
 	paths := make([]Path, len(p.Paths))
 	for i, path := range p.Paths {
 		path.Roles = append([]string{}, path.Roles...)
+		if path.Addrs != nil {
+			path.Addrs = append([]string{}, path.Addrs...)
+		}
 		paths[i] = path
 	}
 	p.Paths = paths
@@ -294,6 +316,8 @@ const (
 	MaxPathNameLen = 32 // bytes
 	MaxSubs        = 64 // sub-connections of one path
 	MaxAddrLen     = 255
+	MaxPathAddrs   = 8         // addresses of one path, as many as a pairing code carries
+	MaxMark        = 1<<31 - 1 // the largest socket mark a path can have
 )
 
 // Roles of a path.
@@ -344,10 +368,9 @@ func checkProxy(proxy string) error {
 	return nil
 }
 
-// Check reports whether the path can be stored and dialed: a name, a type, an address, a
-// proxy where the type needs one, a security tier with what goes with it, roles and a
-// number of sub-connections. No message it returns holds the proxy.
-func (p Path) Check() error {
+// checkName reports whether the path's name can be one: 1 to MaxPathNameLen bytes of
+// printable characters without white space.
+func (p Path) checkName() error {
 	switch {
 	case p.Name == "":
 		return errors.New("the path has no name")
@@ -360,6 +383,19 @@ func (p Path) Check() error {
 		if !unicode.IsPrint(r) || unicode.IsSpace(r) {
 			return errors.New("the path's name holds a space or a character that is not printable")
 		}
+	}
+	return nil
+}
+
+// MarkSupported: a path can have a socket mark on this system (Linux only).
+var MarkSupported = engine.MarkSupported
+
+// Check reports whether the path can be stored and dialed: a name, a type, an address, a
+// proxy where the type needs one, a security tier with what goes with it, roles and a
+// number of sub-connections. No message it returns holds the proxy.
+func (p Path) Check() error {
+	if err := p.checkName(); err != nil {
+		return err
 	}
 	switch p.Type {
 	case "tcp":
@@ -381,6 +417,25 @@ func (p Path) Check() error {
 	}
 	if err := CheckAddr(p.Addr); err != nil {
 		return err
+	}
+	if 1+len(p.Addrs) > MaxPathAddrs {
+		return fmt.Errorf("%d addresses (at most %d)", 1+len(p.Addrs), MaxPathAddrs)
+	}
+	seenAddr := map[string]bool{p.Addr: true}
+	for _, a := range p.Addrs {
+		if err := CheckAddr(a); err != nil {
+			return err
+		}
+		if seenAddr[a] {
+			return fmt.Errorf("address %q is there twice", a)
+		}
+		seenAddr[a] = true
+	}
+	switch {
+	case p.Mark < 0 || p.Mark > MaxMark:
+		return fmt.Errorf("mark %d (want 0 for none, or a number up to %d)", p.Mark, MaxMark)
+	case p.Mark != 0 && !MarkSupported:
+		return errors.New("a socket mark can only be set on Linux. Take the mark off the path.")
 	}
 	switch p.Security {
 	case SecurityTLS, SecurityOff:

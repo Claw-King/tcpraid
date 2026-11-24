@@ -41,7 +41,16 @@ func NewDial(addr, proxy string, mark int) (func() (net.Conn, error), error) {
 // DialContext opens one TCP connection to addr like the function NewDial returns,
 // directly or through the SOCKS5 proxy, and gives up when ctx is done.
 func DialContext(ctx context.Context, addr, proxy string) (net.Conn, error) {
-	d := &net.Dialer{Timeout: 10 * time.Second}
+	return DialContextMark(ctx, addr, proxy, 0)
+}
+
+// DialContextMark is DialContext with a socket mark, as NewDial sets it: a non-zero
+// mark is an error where MarkSupported is false.
+func DialContextMark(ctx context.Context, addr, proxy string, mark int) (net.Conn, error) {
+	if mark != 0 && !MarkSupported {
+		return nil, errors.New("a socket mark (SO_MARK) can only be set on Linux")
+	}
+	d := &net.Dialer{Timeout: 10 * time.Second, Control: markControl(mark)}
 	px, err := parseSocks(proxy)
 	if err != nil {
 		return nil, err

@@ -124,6 +124,50 @@ What this way costs:
 - Keep the tier at `tls`, the default. The two nodes then encrypt from one to
   the other, and the forwarding host passes on data it cannot read.
 
+## More than one way at a time
+
+Two of the ways above can be set up together, so that one takes over when
+the other fails.
+
+**Several addresses on one path.** A path can name up to 8 addresses of the
+same listener, and the dialing node tries them in order whenever it opens a
+connection. Put the address you prefer first, for example the IPv6 address,
+and the forwarding host after it:
+
+```
+nas-a$ tcpraid peers path set nas-b default -addr [2001:db8:1::10]:9851,vps.example.org:19851
+```
+
+A pairing code that carries several addresses gives the new path all of
+them. An address that does not answer costs up to 8 seconds for each
+connection that tries it, until one address has worked. The node then
+begins with that one. `tcpraid peers check` shows how each address does.
+All the addresses of a path share its settings, so they must lead to the
+same listener in the same security tier. Sessions that are running keep the
+connections they have.
+
+**A path in each direction.** When each site can be reached from the other,
+give each node a path to the other one. `tcpraid peers path set` adds the
+path on the node that created the pairing code, which has none after the
+pairing. Each node then opens the connections for the rules it holds, as
+before. While a node cannot open connections over its path and the other
+node is still connected to it,
+the other node opens the connections of new sessions instead. The node
+changes back by itself when its path works again.
+
+A node notices that its path is down by the control connection it keeps
+over it. With several paths to the peer, that is the first path with the
+control role, or the first path if none has that role, and the other paths
+are not watched. The path counts as down once that connection has broken
+and cannot be opened again. When the connections on the path are cut and
+new ones are refused, that takes about ten seconds at most. When the path
+stops carrying
+traffic without refusing anything, it can take up to a minute, and a
+connection that arrives in that time waits 30 seconds and is reset.
+Sessions that are running are not moved. A session that was using the
+broken path waits for it, as it does on a node with one path only. A rule
+with `-paths` or `-subs` keeps to its node's paths.
+
 ## Tool by tool
 
 Only tools whose behaviour we could read in their own documentation are

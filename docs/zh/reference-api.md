@@ -34,7 +34,7 @@ Www-Authenticate: Bearer
 ### GET /api/v1/status
 
 ```
-{"version":"0.4.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.5.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
  "sessions":2,"peers":1,"rules":2}
 ```
@@ -115,10 +115,16 @@ Cache-Control: no-store
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.4.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.5.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
 `online` 表示和这个对端之间有一条控制连接连着。`version` 和 `last_message` 在收到过对端的消息之后才出现。加入到本节点的对端，在这里没有 `addresses`，也没有 `paths`。配对密钥绝不会出现在回答里，显示代理时不带它的用户名和密码。
+
+从 0.5.0 版起，路径可以多两个字段。`addrs` 是同一个监听的其余地址，节点在 `addr` 之后按顺序尝试它们，连同 `addr` 最多 8 个。`mark` 是这条路径的连接带的套接字标记，只在 Linux 上有。只有一个地址、不带标记的路径没有这两个字段：
+
+```
+{"name":"default","type":"tcp","addr":"[2001:db8::10]:9851","addrs":["203.0.113.7:9851"],"security":"tls","roles":["data"],"subs":8,"mark":7}
+```
 
 ### PUT /api/v1/peers/{name}
 
@@ -127,7 +133,7 @@ Cache-Control: no-store
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.4.0",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.5.0",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 
@@ -135,14 +141,14 @@ $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","u
 
 ### PUT /api/v1/peers/{name}/paths/{path}, DELETE /api/v1/peers/{name}/paths/{path}
 
-0.4.0 版新增。`PUT` 修改对端的一条路径，对端没有这个名字的路径时就新建。请求体里可以有 `addr`、`type`、`proxy`、`security`、`verify`、`pin`、`roles`、`subs` 中的任意几项，至少一项。请求体没有提到的设置保持原样。新路径必须给 `addr`，没有提到的设置取 `tcp`、`tls`、`data` 角色和 8 条子连接。回答是 `{"created": ..., "peer": {...}}`，里面是保存之后的对端。新建时状态是 `201`，修改时是 `200`。
+0.4.0 版新增。`PUT` 修改对端的一条路径，对端没有这个名字的路径时就新建。请求体里可以有 `addr`、`type`、`proxy`、`security`、`verify`、`pin`、`roles`、`subs` 中的任意几项，至少一项。从 0.5.0 版起还可以有 `addrs` 和 `mark`。只给 `addr` 而不给 `addrs` 的请求会去掉其余的地址，`addrs` 给空列表也一样，`"mark": 0` 去掉标记。请求体没有提到的设置保持原样。新路径必须给 `addr`，没有提到的设置取 `tcp`、`tls`、`data` 角色和 8 条子连接。回答是 `{"created": ..., "peer": {...}}`，里面是保存之后的对端。新建时状态是 `201`，修改时是 `200`。
 
 ```
 $ curl -X PUT ... -d '{"subs":4}' http://127.0.0.1:9850/api/v1/peers/nas-a/paths/default
 {"created":false,"peer":{"name":"nas-a","fingerprint":"e5645f9b...7795ec86","addresses":["nas-a.example.org:9851"],
  "paired_at":"2026-01-15T10:00:20Z",
  "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":4}],
- "allow":"","udp_dial":"","online":true,"version":"0.4.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
+ "allow":"","udp_dial":"","online":true,"version":"0.5.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
 ```
 
 `DELETE` 删除这条路径，回答是对端。对端没有这条路径时是 `404`。
@@ -157,7 +163,7 @@ $ curl -X PUT ... -d '{"subs":4}' http://127.0.0.1:9850/api/v1/peers/nas-a/paths
 {"peer":"nas-a","paths":[{"name":"default","addr":"nas-a.example.org:9851","security":"tls","ok":true}]}
 ```
 
-不通的路径是 `"ok": false`，并带一个 `"error"`。
+不通的路径是 `"ok": false`，并带一个 `"error"`。从 0.5.0 版起，有多个地址的路径每个地址各有一项，按地址的顺序排列，`name` 相同。
 
 ### POST /api/v1/peers/{name}/test
 
@@ -214,9 +220,18 @@ $ curl -X DELETE ... 'http://127.0.0.1:9850/api/v1/peers/nas-a?rules=remove'
 
 `error` 说的是眼下的状态而不是一件已经发生的事时，没有 `error_at`，例如规则的一条连接还在等对端应答。这条规则的下一条连接到来时，两个字段都会清掉。
 
+0.5.0 版新增了三个字段，没有内容时都不出现。`paths` 和 `subs` 是规则被限定用的路径和子连接数(见 `POST`)。本节点自己通往对端的路径不通、规则的连接改由对端打开的期间，`peer_dials` 是 `true`：
+
+```
+{"name":"pull","listen":"0.0.0.0:9802","destination":"192.0.2.10:873","peer":"nas-a",
+ "enabled":true,"listening":true,"sessions":0,"paths":["side"],"subs":3}
+```
+
 ### POST /api/v1/rules
 
 请求体 `{"name", "peer", "listen", "destination"}` 或 `{"name", "peer", "match"}`，还可以带 `"enabled": false`。从 0.4.0 版起，目的地里 IP 地址的位置可以写主机名，例如 `"nas.lan:873"`，由对端在每条连接到来时解析。
+
+从 0.5.0 版起，请求体里可以有 `"paths": ["NAME", ...]` 和 `"subs": N`。给了 `paths`，规则的连接只用这些名字的路径，名字以持有路径的节点起的为准。给了 `subs`，每条连接在每条路径上最多保持这么多条数据子连接。在持有路径的节点上，名字不是一条承载数据的路径时回答 `400`。由对端持有路径时，名字由对端在连接到来时核对，对端要是 0.5.0 或更新的版本。
 
 ```
 $ curl -X POST ... -d '{"name":"pg","peer":"nas-a","listen":"127.0.0.1:15432","destination":"192.0.2.10:5432"}' http://127.0.0.1:9850/api/v1/rules
@@ -235,7 +250,7 @@ HTTP/1.1 400 Bad Request
 
 ### PUT /api/v1/rules/{name}
 
-替换这条规则，请求体相同。停用一条规则就是带 `"enabled": false` 的 `PUT`：
+替换这条规则，请求体相同。`paths` 和 `subs` 是例外：请求体没有提到其中哪一项，规则就保留原有的那一项，这样不认识这两个字段的调用方不会把它们去掉。`paths` 给空列表、`subs` 给 `0` 才是去掉。停用一条规则就是带 `"enabled": false` 的 `PUT`：
 
 ```
 {"name":"pg","listen":"127.0.0.1:15432","destination":"192.0.2.10:5432","peer":"nas-a","enabled":false,"listening":false,"sessions":0}

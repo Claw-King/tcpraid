@@ -177,8 +177,8 @@ This is a first version, made by one developer in spare time. What is known:
   (Apple silicon) and a Windows machine (amd64) on one local network were
   paired through the web page, and 1 GiB went from one to the other with the
   same checksum at both ends. These exist only on Linux: transparent rules
-  (`-transparent`), `-maxrss`, a socket mark on a path of the manual mode,
-  the container image and the systemd unit.
+  (`-transparent`), `-maxrss`, a socket mark on a path, the container image
+  and the systemd unit.
 - **Tested on few machines.** The tutorials were run in containers with
   ordinary programs standing in for a NAS. After version 0.1.0 was released,
   its first user ran it on real machines: on amd64 and arm64 hosts, and in
@@ -214,8 +214,11 @@ This is a first version, made by one developer in spare time. What is known:
   node at the other site holds its sessions as described in the previous
   point.
 - **One of the two nodes has to be reachable from the other.** Nothing is
-  relayed through a third machine. A node that holds a path to its peer does
-  not fall back to asking the peer to connect when that path fails.
+  relayed through a third machine. A path can name several addresses, which
+  are tried in order. A node whose path to its peer fails asks the peer to
+  open the connections only when the peer holds a path to it too. That
+  change takes from a few seconds to about a minute, and sessions that are
+  running are not moved (`docs/en/connecting.md`).
 - **The systemd unit was checked by `systemd-analyze` only.** It runs the node
   as a separate user with a set of restrictions, and it has not been
   installed or started on a machine.

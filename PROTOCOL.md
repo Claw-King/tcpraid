@@ -255,7 +255,7 @@ field that the receiving end does not know is ignored.
 | `hello` | by both ends, first | `name`, `version`, `protocols` (list of numbers; this document is 1), `instance` (text; optional), `features` (list of text; optional) | who is there |
 | `ping` | by both ends, every 10 s | `seq` | the connection is alive |
 | `pong` | in answer to a `ping` | `seq` | |
-| `open` | by the end that carries a session | `request` (number, not zero), `session` (the id in hex), `test_path` and `test_subs` (numbers; optional) | open the sub-connections of this session from your end |
+| `open` | by the end that carries a session | `request` (number, not zero), `session` (the id in hex), `test_path` and `test_subs` (numbers; optional), `rule_paths` (list of text; optional) and `rule_subs` (number; optional) | open the sub-connections of this session from your end |
 | `open_fail` | in answer to an `open` | `request`, `reason` (text) | it cannot be done |
 | `session_fail` | by the exit end of a session | `session` (the id in hex), `code` (`allow` or `dial`), `reason` (text) | the session could not be connected to its destination, and why |
 | `paths` | by an end that runs a path test | `request` | name the paths you hold to me |
@@ -266,8 +266,9 @@ field that the receiving end does not know is ignored.
 
 The types from `session_fail` to `test_end`, and the fields `features`,
 `test_path` and `test_subs`, were added in version 0.3.0. The types `resolve`
-and `resolve_reply` were added in version 0.4.0. Older versions ignore what
-they do not know.
+and `resolve_reply` were added in version 0.4.0, and the fields `rule_paths`
+and `rule_subs` in version 0.5.0. Older versions ignore what they do not
+know.
 
 An end that receives nothing for 30 seconds takes the connection for dead. The
 end that dialed dials again after 1, 2, 4, then every 8 seconds.
@@ -367,3 +368,24 @@ never dials. A connection of type 2 whose `request` the listening node did not
 make to that peer, or whose session has ended, is closed. If no sub-connection
 arrives within 15 seconds of the `open`, or an `open_fail` arrives, the node
 that asked resets the application connection.
+
+Since version 0.5.0 a node that holds a path to its peer asks in the same
+way while its own path is down and the peer's path to it is up. It takes its
+path for down when the last control connection it tried to open to the peer
+failed and none that it opened is up, and the peer's path for up when a
+control connection that the peer opened is. Nothing in the messages differs,
+and the peer needs no particular version for it.
+
+**A session that uses some of the paths.** Since version 0.5.0 an `open` may
+carry `rule_paths`, the names of the paths to dial as the dialing node calls
+them, and `rule_subs`, the most data sub-connections to keep on each. The
+dialing node then opens data sub-connections on the named paths only, at
+most `rule_subs` on each and never more than the path is set to, and the
+control and repair sub-connections of all its paths as usual. An absent or
+empty `rule_paths` means every path, and an absent `rule_subs` or 0 means as
+many as each path has. A node that keeps to these fields says so with the
+text `rule-paths` in the `features` of its `hello`, and a node does not send
+them to a peer that does not, because that peer would open every path. A
+name that fits none of the dialing node's paths for data is answered with
+`open_fail`, and so is a request with more than 16 names or with a number
+outside 0 to 64.

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -31,7 +32,32 @@ type Rule struct {
 	Match       string `json:"match,omitempty"`       // transparent: networks in the form of engine.ParseAllow
 	Peer        string `json:"peer"`                  // name of the peer the connections go to
 	Enabled     bool   `json:"enabled"`
+	// Paths names the paths the rule's connections use, of the paths between this node
+	// and the peer that carry data (since 0.5.0): the names are the ones the node that
+	// holds the paths gives them. Empty means every path. Subs, if not 0, is the most
+	// data sub-connections a connection of the rule keeps on each path; a path never
+	// keeps more than it is set to. Sub-connections for control and repair are not
+	// affected by either.
+	Paths []string `json:"paths,omitempty"`
+	Subs  int      `json:"subs,omitempty"`
 }
+
+// Clone returns a copy that shares no memory with r.
+func (r Rule) Clone() Rule {
+	if r.Paths != nil {
+		r.Paths = append([]string{}, r.Paths...)
+	}
+	return r
+}
+
+// Equal reports whether the two rules say the same.
+func (r Rule) Equal(o Rule) bool {
+	return r.Name == o.Name && r.Listen == o.Listen && r.Destination == o.Destination && r.Match == o.Match &&
+		r.Peer == o.Peer && r.Enabled == o.Enabled && r.Subs == o.Subs && slices.Equal(r.Paths, o.Paths)
+}
+
+// Narrowed reports whether the rule names paths or a number of sub-connections.
+func (r Rule) Narrowed() bool { return len(r.Paths) > 0 || r.Subs != 0 }
 
 // Limits of rules.
 const (
@@ -187,6 +213,9 @@ func (r Rule) Check() error {
 	if r.Peer == "" {
 		return errors.New("the rule names no peer")
 	}
+	if err := r.checkNarrowing(); err != nil {
+		return err
+	}
 	if r.Transparent() {
 		if r.Listen != "" || r.Destination != "" {
 			return errors.New("a rule has either match (transparent) or listen and destination (fixed), not both")
@@ -205,6 +234,28 @@ func (r Rule) Check() error {
 	}
 	_, _, err := r.Ranges()
 	return err
+}
+
+// checkNarrowing reports whether Paths and Subs are well-formed: names that a path can
+// have, each once, and a number of sub-connections a path can have.
+func (r Rule) checkNarrowing() error {
+	if len(r.Paths) > MaxPaths {
+		return fmt.Errorf("the rule names %d paths (at most %d)", len(r.Paths), MaxPaths)
+	}
+	seen := map[string]bool{}
+	for _, name := range r.Paths {
+		if err := (Path{Name: name}).checkName(); err != nil {
+			return fmt.Errorf("paths: %w", err)
+		}
+		if seen[name] {
+			return fmt.Errorf("paths: %q is there twice", name)
+		}
+		seen[name] = true
+	}
+	if r.Subs < 0 || r.Subs > MaxSubs {
+		return fmt.Errorf("%d sub-connections for each path (want 1 to %d, or 0 for as many as the path has)", r.Subs, MaxSubs)
+	}
+	return nil
 }
 
 // Ranges returns the listen and destination ranges of a fixed rule.
@@ -280,7 +331,11 @@ func checkPeerOptions(allow, udpDial string) error {
 func (n *Node) Rules() []Rule {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return append([]Rule{}, n.state.Rules...)
+	rules := make([]Rule, len(n.state.Rules))
+	for i, r := range n.state.Rules {
+		rules[i] = r.Clone()
+	}
+	return rules
 }
 
 // AddRule stores a new rule at the end of the list. A rule that is not well-formed,
@@ -290,7 +345,7 @@ func (n *Node) AddRule(r Rule) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.update(func(st *State) error {
-		st.Rules = append(st.Rules, r)
+		st.Rules = append(st.Rules, r.Clone())
 		return checkRulesFor(st, r)
 	})
 }
@@ -303,7 +358,7 @@ func (n *Node) ReplaceRule(name string, r Rule) error {
 	return n.update(func(st *State) error {
 		for i := range st.Rules {
 			if st.Rules[i].Name == name {
-				st.Rules[i] = r
+				st.Rules[i] = r.Clone()
 				return checkRulesFor(st, r)
 			}
 		}

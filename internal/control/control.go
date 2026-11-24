@@ -15,7 +15,7 @@
 //	hello         both ways, once, first       name, version, protocols, instance, features
 //	ping          both ways                    seq
 //	pong          the answer to a ping         seq
-//	open          to the end with the path     request, session, test_path, test_subs
+//	open          to the end with the path     request, session, test_path, test_subs, rule_paths, rule_subs
 //	open_fail     the answer when it fails     request, reason
 //	session_fail  to the end that carries      session, code, reason
 //	paths         to the end with the paths    request
@@ -33,6 +33,10 @@
 // resolve asks the other end which address a host name stands for in its network, for
 // a session that the asking end is about to carry to that name (FeatureResolve). The
 // answer names one IP address, or says why there is none.
+//
+// An open with rule_paths or rule_subs asks for the sub-connections of a session of a
+// rule that uses only some of the paths, or fewer data sub-connections on each
+// (FeatureRulePaths).
 //
 // A message longer than MaxMessage, or one whose MAC is wrong, ends the connection.
 package control
@@ -94,6 +98,11 @@ const FeaturePathTest = "path-test"
 // host name for a peer that carries a connection to it.
 const FeatureResolve = "resolve"
 
+// FeatureRulePaths in a hello says that the sending node, asked to open the
+// sub-connections of a session (open), keeps to the paths and to the number of data
+// sub-connections that the request names (rule_paths, rule_subs).
+const FeatureRulePaths = "rule-paths"
+
 // The codes of a session_fail.
 const (
 	CodeAllow = "allow" // the destination is not in the allow list kept for the other node
@@ -143,6 +152,11 @@ type Message struct {
 	// keep on it (0: as many as the path has)
 	TestPath int `json:"test_path,omitempty"`
 	TestSubs int `json:"test_subs,omitempty"`
+	// open, for a session of a rule that does not use everything (since 0.5.0): the
+	// names of the paths to dial, as the dialing end calls them (absent: every path),
+	// and the most data sub-connections to keep on each (0: as many as the path has)
+	RulePaths []string `json:"rule_paths,omitempty"`
+	RuleSubs  int      `json:"rule_subs,omitempty"`
 	// session_fail: CodeAllow or CodeDial. resolve_reply without an address: CodeLookup,
 	// CodeAllow or CodeBusy
 	Code string `json:"code,omitempty"`

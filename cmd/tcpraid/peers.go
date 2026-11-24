@@ -368,7 +368,7 @@ func peerState(p api.Peer) string {
 // printPaths writes a table of paths.
 func printPaths(w io.Writer, paths []api.Path) error {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "PATH\tTYPE\tADDRESS\tPROXY\tSECURITY\tVERIFY\tPIN\tROLES\tSUBS")
+	fmt.Fprintln(tw, "PATH\tTYPE\tADDRESS\tPROXY\tSECURITY\tVERIFY\tPIN\tROLES\tSUBS\tMARK")
 	dash := func(s string) string {
 		if s == "" {
 			return "-"
@@ -376,10 +376,33 @@ func printPaths(w io.Writer, paths []api.Path) error {
 		return s
 	}
 	for _, p := range paths {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\n", p.Name, p.Type, p.Addr, dash(p.Proxy), p.Security, dash(p.Verify), dash(p.Pin),
-			strings.Join(p.Roles, ","), p.Subs)
+		mark := "-"
+		if p.Mark != 0 {
+			mark = strconv.Itoa(p.Mark)
+		}
+		// a path with several addresses shows them in the order they are tried
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n", p.Name, p.Type, pathAddrs(p), dash(p.Proxy), p.Security, dash(p.Verify), dash(p.Pin),
+			strings.Join(p.Roles, ","), p.Subs, mark)
 	}
 	return tw.Flush()
+}
+
+// olderNode says, for a request that a node refused because it does not know one of the
+// fields (their JSON names, each with what it is for), that the node runs an older
+// version than this command: the binary was replaced and the node not restarted yet.
+// Any other error is returned as it is.
+func olderNode(err error, fields map[string]string) error {
+	for field, what := range fields {
+		if strings.Contains(err.Error(), fmt.Sprintf("unknown field %q", field)) {
+			return fmt.Errorf("the running node is older than this command and does not know %s. Restart the node to finish an update. (%w)", what, err)
+		}
+	}
+	return err
+}
+
+// pathAddrs writes the addresses of a path, in the order they are tried.
+func pathAddrs(p api.Path) string {
+	return strings.Join(append([]string{p.Addr}, p.Addrs...), ",")
 }
 
 // cmdPeersPath is "tcpraid peers path set|remove". Each asks the node to change the one
@@ -389,7 +412,7 @@ func cmdPeersPath(args []string, stdout, stderr io.Writer) int {
 	var set *flag.FlagSet
 	var f struct {
 		addr, typ, proxy, security, verify, pin, roles string
-		subs                                           int
+		subs, mark                                     int
 	}
 	// pathURL is the path of one path of a peer in an API request.
 	pathURL := func(peer, path string) string { return peerPath(peer) + "/paths/" + url.PathEscape(path) }
@@ -398,7 +421,8 @@ func cmdPeersPath(args []string, stdout, stderr io.Writer) int {
 			name: "peers path set", usage: "NAME PATH", nargs: 2,
 			flags: func(fs *flag.FlagSet) {
 				set = fs
-				fs.StringVar(&f.addr, "addr", "", "HOST:PORT of the peer's listener as seen from the end of the path (needed for a new path)")
+				fs.StringVar(&f.addr, "addr", "", "HOST:PORT of the peer's listener as seen from the end of the path (needed for a new path). Several, separated by commas, are tried in that order when a connection cannot be made.")
+				fs.IntVar(&f.mark, "mark", 0, "socket mark of the path's connections, on Linux only and with the capability CAP_NET_ADMIN (0: none)")
 				fs.StringVar(&f.typ, "type", "", "tcp or socks5 (a new path: tcp)")
 				fs.StringVar(&f.proxy, "proxy", "", "socks5://[user:pass@]host:port, with -type socks5")
 				fs.StringVar(&f.security, "security", "", "tls, owncert or off (a new path: tls)")
@@ -414,7 +438,16 @@ func cmdPeersPath(args []string, stdout, stderr io.Writer) int {
 				set.Visit(func(fl *flag.Flag) {
 					switch fl.Name {
 					case "addr":
-						req.Addr = &f.addr
+						// the first is the path's address, the others its further ones. One
+						// address alone is sent as before: the node then takes any further
+						// ones away itself.
+						addrs := strings.Split(f.addr, ",")
+						req.Addr = &addrs[0]
+						if rest := addrs[1:]; len(rest) > 0 {
+							req.Addrs = &rest
+						}
+					case "mark":
+						req.Mark = &f.mark
 					case "type":
 						req.Type = &f.typ
 					case "proxy":
@@ -452,7 +485,7 @@ func cmdPeersPath(args []string, stdout, stderr io.Writer) int {
 					if strings.Contains(err.Error(), "a new path needs an address") {
 						return needsAddr // in the words of this command
 					}
-					return err
+					return olderNode(err, map[string]string{"addrs": "several addresses for a path", "mark": "a socket mark for a path"})
 				}
 				verb := "changed"
 				if done.Created {
@@ -605,7 +638,7 @@ func cmdPeers(args []string, stdout, stderr io.Writer) int {
 				for _, p := range list {
 					var paths []string
 					for _, path := range p.Paths {
-						paths = append(paths, fmt.Sprintf("%s (%s, %s)", path.Addr, path.Security, strings.Join(path.Roles, "+")))
+						paths = append(paths, fmt.Sprintf("%s (%s, %s)", pathAddrs(path), path.Security, strings.Join(path.Roles, "+")))
 					}
 					if paths == nil {
 						paths = []string{"none: this node cannot reach it"}
@@ -660,19 +693,40 @@ func cmdPeers(args []string, stdout, stderr io.Writer) int {
 				if len(chk.Paths) == 0 {
 					return fmt.Errorf("this node has no path to %s and can only be reached by it", chk.Peer)
 				}
+				// one line for each address of each path; a path with several addresses
+				// works while one of them does
 				failed := 0
+				addrs, works := map[string]int{}, map[string]bool{}
+				var names []string
 				for _, p := range chk.Paths {
+					if addrs[p.Name] == 0 {
+						names = append(names, p.Name)
+					}
+					addrs[p.Name]++
 					if p.OK {
+						works[p.Name] = true
 						fmt.Fprintf(stdout, "%s  %s (%s): ok\n", p.Name, p.Addr, p.Security)
 					} else {
 						failed++
 						fmt.Fprintf(stdout, "%s  %s (%s): FAILED: %s\n", p.Name, p.Addr, p.Security, p.Error)
 					}
 				}
-				if failed > 0 {
+				if failed == 0 {
+					return nil
+				}
+				if len(names) == len(chk.Paths) {
 					return fmt.Errorf("%d of %d path(s) to %s failed", failed, len(chk.Paths), chk.Peer)
 				}
-				return nil
+				dead := 0
+				for _, name := range names {
+					if !works[name] {
+						dead++
+					}
+				}
+				if dead == 0 {
+					return fmt.Errorf("%d of %d address(es) to %s failed. Every path still has an address that works.", failed, len(chk.Paths), chk.Peer)
+				}
+				return fmt.Errorf("%d of %d address(es) to %s failed, and %d of %d path(s) have no address that works", failed, len(chk.Paths), chk.Peer, dead, len(names))
 			},
 		},
 	}, args, stdout, stderr)

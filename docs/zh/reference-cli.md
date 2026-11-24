@@ -27,7 +27,7 @@ tcpraid version
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.4.0 (wire protocol 1)
+version      0.5.0 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -41,7 +41,7 @@ rules        0
 | 命令 | 作用 |
 |---|---|
 | `pair create [-addr HOST:PORT]... [-ttl DURATION]` | 生成一个配对码并输出。`-addr`：另一个节点用什么地址连到本节点(默认：节点的 `-advertise`)；可以给多次，最多 8 个。`-ttl`：有效期多长(默认 `1h`，最长 30 天) |
-| `pair join [CODE] [-addr HOST:PORT]` | 和生成配对码的节点配对。不带 `CODE` 时从标准输入读配对码。`-addr`：改连这个地址，而不是配对码里的地址 |
+| `pair join [CODE] [-addr HOST:PORT]` | 和生成配对码的节点配对。不带 `CODE` 时从标准输入读配对码。`-addr`：改连这个地址，而不是配对码里的地址。通往新对端的路径会记下配对码里的每一个地址，先应答的排在最前 |
 | `pair list` | 尚未过期的配对码 |
 | `pair revoke ID` | 让一个配对码作废 |
 
@@ -76,10 +76,10 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.4.0, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.5.0, last heard 2026-01-15T10:00:05Z
 
-PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS
-default  tcp   nas-a.example.org:9851  -      tls       -       -    data   8
+PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS  MARK
+default  tcp   nas-a.example.org:9851  -      tls       -       -    data   8     -
 
 $ tcpraid peers check nas-a
 default  nas-a.example.org:9851 (tls): ok
@@ -88,7 +88,7 @@ $ tcpraid peers remove nas-b
 peer nas-b removed. The other node is not told and still lists this one.
 ```
 
-- `peers check NAME` 在每条路径上按该路径的档位打开一条连接，并让另一个节点证明它持有这个配对。有路径不通时以状态 1 退出。没有通往对端路径的节点没有可检查的。
+- `peers check NAME` 在每条路径上按该路径的档位打开一条连接，并让另一个节点证明它持有这个配对。路径有多个地址时，每个地址各查一次，各占一行。有路径或地址不通时以状态 1 退出，最后一行会说明是不是每条路径都还有一个能用的地址。没有通往对端路径的节点没有可检查的。
 - `peers remove NAME` 在本节点上解除配对。和这个对端之间两个方向上的会话都被重置，它的连接从此被拒绝。命令随后列出仍然指向这个对端的规则。这些规则会保留，以后用同一个名字配对的节点会接手它们。带上 `-with-rules` 时，这些规则和对端一起删除。
 
 ```
@@ -134,7 +134,7 @@ default: 8 sub-connections together carried little more than one alone. Either o
 
 | 参数 | 含义 | 新建路径时的取值 |
 |---|---|---|
-| `-addr HOST:PORT` | 拨出时要连的地址：对端的监听，或者通往它的入口(端口转发、隧道)；经 SOCKS5 时是代理要去连的地址 | (必须给) |
+| `-addr HOST:PORT[,HOST:PORT...]` | 拨出时要连的地址：对端的监听，或者通往它的入口(端口转发、隧道)；经 SOCKS5 时是代理要去连的地址。最多 8 个地址，用逗号分隔，按这个顺序尝试(见下文) | (必须给) |
 | `-type tcp\|socks5` | 直连，或者经 SOCKS5 代理 | `tcp` |
 | `-proxy socks5://[user:pass@]host:port` | 代理，配合 `-type socks5` | |
 | `-security tls\|owncert\|off` | 档位 | `tls` |
@@ -142,13 +142,14 @@ default: 8 sub-connections together carried little more than one alone. Either o
 | `-pin FINGERPRINT` | `owncert` 档且用 `pin` 时：证书密钥的指纹，64 位十六进制 | |
 | `-roles data,repair,control` | 路径承担什么；`data` 和 `repair` 不能同时有 | `data` |
 | `-subs N` | 子连接数，1 到 64 | 8 |
+| `-mark N` | 这条路径的连接带的套接字标记，供主机的路由规则使用。只在 Linux 上有，节点需要 `CAP_NET_ADMIN` 权限。`0`：不带 | 不带 |
 
 ```
 $ tcpraid peers path set nas-a side -addr 192.0.2.10:9851 -type socks5 -proxy socks5://user:pass@127.0.0.1:1080 -roles repair,control -subs 2
 path side of nas-a added
-PATH     TYPE    ADDRESS                 PROXY                    SECURITY  VERIFY  PIN  ROLES           SUBS
-default  tcp     nas-a.example.org:9851  -                        tls       -       -    data            8
-side     socks5  192.0.2.10:9851         socks5://127.0.0.1:1080  tls       -       -    repair,control  2
+PATH     TYPE    ADDRESS                 PROXY                    SECURITY  VERIFY  PIN  ROLES           SUBS  MARK
+default  tcp     nas-a.example.org:9851  -                        tls       -       -    data            8     -
+side     socks5  192.0.2.10:9851         socks5://127.0.0.1:1080  tls       -       -    repair,control  2     -
 
 $ tcpraid peers path remove nas-a side
 path side of nas-a removed
@@ -157,6 +158,22 @@ path side of nas-a removed
 一个对端最多有 16 条路径。路径的名字最长 32 字节，不能有空格。不合规定的路径会被拒绝，什么都不会改变。显示代理时不带它的用户名和密码。
 
 节点对这一条路径的修改是一步完成的。两条这样的命令同时运行、改的是同一个对端的两条路径时，两处修改都生效。同时运行的 `peers set` 也一样。
+
+**多个地址。** 一条路径可以写同一个监听的最多 8 个地址，比如先写它的 IPv6 地址，再写一个转发出来的 IPv4 端口。节点每次打开连接时按给出的顺序尝试，每个地址最多等 8 秒。它会记住哪个地址连通了，下次从那个地址开始，直到节点重启。`-addr` 每次设置的都是整个列表，所以只给一个地址就会去掉其余的。
+
+```
+$ tcpraid peers path set nas-a default -addr [2001:db8::10]:9851,203.0.113.7:9851
+path default of nas-a changed
+PATH     TYPE  ADDRESS                               PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS  MARK
+default  tcp   [2001:db8::10]:9851,203.0.113.7:9851  -      tls       -       -    data   8     -
+
+$ tcpraid peers check nas-a
+default  [2001:db8::10]:9851 (tls): FAILED: dial tcp [2001:db8::10]:9851: connect: network is unreachable
+default  203.0.113.7:9851 (tls): ok
+tcpraid peers check: 1 of 2 address(es) to nas-a failed. Every path still has an address that works.
+```
+
+**标记。** 带标记的路径会给它打开的每条连接设上这个标记，这样主机的路由规则可以让这些连接走另一个出口。设置标记需要 `CAP_NET_ADMIN` 权限，从 Linux 5.17 起有 `CAP_NET_RAW` 也可以。没有权限时，这条路径的连接会失败，`peers check` 会说明缺的是这项权限。在 macOS 和 Windows 上，设置标记时会被拒绝。
 
 ### peers set
 
@@ -211,6 +228,22 @@ rule rsync removed. Connections it carries now run to their end.
 
 `-disabled` 把规则以停用状态保存。一个节点最多有 256 条规则，规则的名字最长 64 字节，不能有空格。
 
+另有两个参数用来限定规则的连接用什么：
+
+| 参数 | 含义 |
+|---|---|
+| `-paths NAME[,NAME...]` | 规则的连接只用这几条路径，它们必须是两个节点之间承载数据的路径。不给时用全部路径 |
+| `-subs N` | 规则的每条连接在每条路径上最多保持 `N` 条数据子连接，并且不超过路径自己设的条数。不给时用路径设的条数 |
+
+路径的名字以持有路径的节点起的为准。在持有路径的节点上，`tcpraid peers show` 会列出它们，添加规则时写了不存在的名字会被拒绝。在由对端持有路径的节点上，名字由对端在连接到来时核对，而且两个节点都要是 0.5.0 或更新的版本。控制和补发用的子连接不受这两个参数影响。被限定的规则会在状态里写明：
+
+```
+$ tcpraid rules add pull -peer nas-a -listen 0.0.0.0:9802 -dest 192.0.2.10:873 -paths side -subs 3
+rule pull added: listening, over the paths side, with at most 3 sub-connections on a path
+```
+
+`rules enable` 和 `rules disable` 会保留这两项设置。要修改它们，就删掉规则再重新添加。
+
 `STATE` 是 `listening`、`disabled`，或者 `FAILED:` 加上规则没能监听的原因。这时 `rules add` 以状态 1 退出，规则已经保存，规则有变动时会再试。"last connection:" 后面是这条规则最近一条没能承载的连接出了什么问题，以及那是多久以前：
 
 ```
@@ -220,6 +253,8 @@ rsync  0.0.0.0:9801  nas-a  192.0.2.10:873  0         listening, last connection
 ```
 
 对端连不上目的地，或者对端的允许列表里没有这个目的地时，对端会把原因报回来，规则把它显示出来。0.3.0 之前的对端不会报，这时规则会让你去看对端的日志。连接因为对端不应答而等着的时候，规则会说明那些尝试碰到了什么，这种情况不带时间。这条规则的下一条连接到来时，上一条留下的内容会被清掉。
+
+两个节点各自持有通往对方的路径、而本节点自己的路径不通时，新会话的连接改由对端打开，直到本节点的路径恢复(见 `connecting.md`)。这期间规则的状态是 `listening, the peer opens the connections while this node's path is down`。带 `-paths` 或 `-subs` 的规则不会这样切换，因为它写的名字是本节点的路径。
 
 目的地是主机名的规则，在名字没有解析出地址时也会写明原因，比如对端不认识这个名字、对端没有连上、对端的允许列表里没有这个名字的任何地址，或者对端的版本不解析名字。
 
@@ -266,5 +301,5 @@ ID      ROLE    RULE   PEER   DESTINATION     AGE    SENT     RECEIVED  AVERAGE 
 
 ```
 $ tcpraid version
-tcpraid 0.4.0 (wire protocol 1)
+tcpraid 0.5.0 (wire protocol 1)
 ```

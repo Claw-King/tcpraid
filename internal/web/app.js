@@ -399,7 +399,12 @@ function pathSummary(p) {
 
 function apiPaths(paths) {
   return paths.map(function (p) {
-    return { name: p.name, type: p.type, addr: p.addr, proxy: p.proxy || '', security: p.security, verify: p.verify || '', pin: p.pin || '', roles: p.roles, subs: p.subs };
+    var out = { name: p.name, type: p.type, addr: p.addr, proxy: p.proxy || '', security: p.security, verify: p.verify || '', pin: p.pin || '', roles: p.roles, subs: p.subs };
+    // what this page has no field for goes back as it came: the further addresses of
+    // a path and its mark are set with the command line
+    if (p.addrs && p.addrs.length) out.addrs = p.addrs;
+    if (p.mark) out.mark = p.mark;
+    return out;
   });
 }
 
@@ -451,7 +456,8 @@ function pathForm(peer, index) {
         verify: security.value === 'owncert' ? verify.value : '',
         pin: security.value === 'owncert' && verify.value === 'pin' ? pin.value.trim() : '',
         roles: roles.filter(function (c) { return c.box.checked; }).map(function (c) { return c.role; }),
-        subs: Number(subs.value)
+        subs: Number(subs.value),
+        addrs: old.addrs, mark: old.mark
       };
       var paths = peer.paths.slice();
       if (index >= 0) paths[index] = p; else paths.push(p);
@@ -474,7 +480,7 @@ function renderPeerDetail() {
   var rows = peer.paths.map(function (p, i) {
     return h('tr', {},
       h('td', { text: p.name }),
-      h('td', { class: 'wrap', text: p.addr + (p.type === 'socks5' ? ' (' + t('paths.via', p.proxy || 'socks5') + ')' : '') }),
+      h('td', { class: 'wrap', text: [p.addr].concat(p.addrs || []).join(', ') + (p.type === 'socks5' ? ' (' + t('paths.via', p.proxy || 'socks5') + ')' : '') }),
       h('td', { text: pathSummary(p) }),
       h('td', { text: p.roles.join(', ') }),
       num(String(p.subs)),

@@ -26,6 +26,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -94,9 +95,13 @@ type peerControl struct {
 	conns   []*ctlConn // the control connections that are up
 	dialing bool       // dialControl runs
 	greeted bool       // a hello of the peer has arrived
-	version string
-	last    time.Time
-	serving int // sessions this node serves because the peer asked (see MaxOpenRequests)
+	// dialFailed: the last attempt of this node to open a control connection to the
+	// peer over its own path failed. fellBack: connections of rules are, for that
+	// reason, being opened by the peer (see pathDownLocked); kept to log the change once.
+	dialFailed, fellBack bool
+	version              string
+	last                 time.Time
+	serving              int // sessions this node serves because the peer asked (see MaxOpenRequests)
 	// instance is the number the peer's process said in the hello that counted last;
 	// empty before one did. previous is the one before it: a hello with it is a late
 	// one of the process that is gone. lastOf is when the last message arrived on a
@@ -110,6 +115,7 @@ type peerControl struct {
 type ctlConn struct {
 	*control.Conn
 	peer     string // name of the peer at the other end
+	dialed   bool   // this node opened it, over a path of its own
 	instance string // what the hello on this connection said (rt.mu)
 }
 
@@ -147,7 +153,7 @@ type reverseEntry struct {
 }
 
 // features are what this node says it can do in every hello.
-var features = []string{control.FeaturePathTest, control.FeatureResolve}
+var features = []string{control.FeaturePathTest, control.FeatureResolve, control.FeatureRulePaths}
 
 // maxFeatures bounds what is kept of the features a peer names.
 const maxFeatures = 16
@@ -218,16 +224,24 @@ func (rt *Runtime) dialControl(name string, pc *peerControl) {
 	for pc.ctx.Err() == nil {
 		ps, err := rt.peerFor(name)
 		if err != nil {
-			return // no path any more, or the pairing has ended
+			// no path any more, or the pairing has ended: nothing is known about a path
+			rt.mu.Lock()
+			pc.dialFailed = false
+			rt.mu.Unlock()
+			return
 		}
 		peer := ps.peer
 		// the handshake takes one of the peer's MaxHandshakes places, like any other
 		conn, err := ps.dial(func(ctx context.Context) (net.Conn, error) {
 			return rt.Dialer.OpenControl(ctx, peer, controlPath(peer))
 		})
+		// whether this node's own path works, as far as this connection shows it
+		rt.mu.Lock()
+		pc.dialFailed = err != nil && pc.ctx.Err() == nil
+		rt.mu.Unlock()
 		if err == nil {
 			began := time.Now()
-			rt.runControl(peer, conn)
+			rt.runControl(peer, conn, true)
 			if time.Since(began) > rt.times.timeout {
 				fails = 0 // it was a connection that worked
 			}
@@ -245,18 +259,18 @@ func (rt *Runtime) dialControl(name string, pc *peerControl) {
 // HandleControl takes a control connection that a peer opened (link.Acceptor.HandleControl).
 // It returns at once.
 func (rt *Runtime) HandleControl(peer node.Peer, conn net.Conn) {
-	go rt.runControl(peer, conn)
+	go rt.runControl(peer, conn, false)
 }
 
 // runControl serves one control connection with the peer of the record, whichever end
-// opened it, and returns when it is gone; it closes conn.
-func (rt *Runtime) runControl(peer node.Peer, conn net.Conn) {
+// opened it (dialed: this one), and returns when it is gone; it closes conn.
+func (rt *Runtime) runControl(peer node.Peer, conn net.Conn, dialed bool) {
 	key, err := control.Key(peer.PairSecret)
 	if err != nil {
 		conn.Close()
 		return
 	}
-	cc := &ctlConn{Conn: control.NewConn(conn, key), peer: peer.Name}
+	cc := &ctlConn{Conn: control.NewConn(conn, key), peer: peer.Name, dialed: dialed}
 	rt.mu.Lock()
 	// the pairing that the record stands for may have ended since the opening was made
 	// or checked: the same test as for a new session, under the lock PeerRemoved takes
@@ -299,6 +313,8 @@ func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}
 		hello.Features = features
 		if rt.noResolve {
 			hello.Features = []string{control.FeaturePathTest}
+		} else if rt.noRulePaths {
+			hello.Features = []string{control.FeaturePathTest, control.FeatureResolve}
 		}
 	}
 	if err := cc.Send(hello); err != nil {
@@ -405,6 +421,66 @@ func printable(s string, max int) string {
 	}, s)
 }
 
+// peerCan reports whether the peer called name said in its hello that it has the
+// feature. The error, for a rule's status, says what the peer does not do (lacks), from
+// which version on a node does it (since), and what to do until then (meanwhile).
+func (rt *Runtime) peerCan(name, feature, lacks, since, meanwhile string) error {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	pc := rt.ctl[name]
+	switch {
+	case pc == nil || len(pc.conns) == 0:
+		return fmt.Errorf("peer %q is not connected to this node", name)
+	case !pc.greeted:
+		return fmt.Errorf("the connection with peer %q has only just come up, and what it can do is not known yet. Try again in a moment.", name)
+	case !slices.Contains(pc.features, feature):
+		return fmt.Errorf("peer %q %s (it runs version %q). Both nodes need tcpraid %s or later. %s", name, lacks, pc.version, since, meanwhile)
+	}
+	return nil
+}
+
+// pathDownLocked reports whether this node's own way to the peer called name is down
+// while the peer's way to this node is up (rt.mu held): the last control connection
+// this node tried to open over its path failed, none that it opened is up, and one that
+// the peer opened is. Connections of rules are then opened by the peer, as for a peer
+// this node has no path to.
+//
+// The signal is the control connection, which this node keeps dialing anyway. A path
+// that stops carrying traffic without refusing connections shows only when the control
+// connection on it times out and the next dial fails.
+func (rt *Runtime) pathDownLocked(name string) bool {
+	pc := rt.ctl[name]
+	if pc == nil || !pc.dialFailed {
+		return false
+	}
+	theirs := false
+	for _, cc := range pc.conns {
+		if cc.dialed {
+			return false
+		}
+		theirs = true
+	}
+	return theirs
+}
+
+// peerDials reports whether a new connection of a rule to peer, which this node has
+// paths to, is to be opened by the peer for now (pathDownLocked), and logs when that
+// changes.
+func (rt *Runtime) peerDials(peer string) bool {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	down := rt.pathDownLocked(peer)
+	if pc := rt.ctl[peer]; pc != nil && pc.fellBack != down {
+		pc.fellBack = down
+		if down {
+			rt.logf("peer %q: this node cannot open connections to it at the moment, and it is connected to this node, so it is asked to open the connections of rules", peer)
+		} else {
+			rt.logf("peer %q: this node opens the connections of rules itself again", peer)
+		}
+	}
+	return down
+}
+
 // liveControl returns a control connection with the peer called name that is up, or nil.
 func (rt *Runtime) liveControl(name string) *ctlConn {
 	rt.mu.Lock()
@@ -436,14 +512,31 @@ func (rt *Runtime) dropControlLocked(name string) {
 }
 
 // carryReverse takes one application connection of a rule to ip:port at a peer that
-// this node has no path to: it asks the peer to open the sub-connections. It returns
-// when the session has ended.
+// this node has no path to, or whose path is down for the moment (pathDownLocked): it
+// asks the peer to open the sub-connections. It returns when the session has ended.
 func (rt *Runtime) carryReverse(a *attempt, r node.Rule, peer node.Peer, c net.Conn, ip net.IP, port int) {
 	cc := rt.liveControl(peer.Name)
+	if cc == nil && len(peer.Paths) > 0 {
+		// the peer went away between the choice of this way and now
+		a.fail(fmt.Sprintf("this node cannot open connections to peer %q at the moment, and the peer, which would open them, is no longer connected to this node.", peer.Name))
+		reset(c)
+		return
+	}
 	if cc == nil {
 		a.fail(fmt.Sprintf("this node has no path to peer %q, and the peer, which would open the connections, is not connected to this node. Start the peer, or add a path with \"tcpraid peers path set\".", peer.Name))
 		reset(c)
 		return
+	}
+	var ask control.Message
+	if r.Narrowed() {
+		// the paths are the peer's: it is the one to keep to the rule's choice
+		if err := rt.peerCan(peer.Name, control.FeatureRulePaths, "does not keep a rule to the paths it names", "0.5.0",
+			"Until then, take the paths and the number of sub-connections off the rule."); err != nil {
+			a.fail(err.Error())
+			reset(c)
+			return
+		}
+		ask.RulePaths, ask.RuleSubs = r.Paths, r.Subs
 	}
 	keys, err := pairKeys(peer)
 	if err != nil {
@@ -451,7 +544,7 @@ func (rt *Runtime) carryReverse(a *attempt, r node.Rule, peer node.Peer, c net.C
 		reset(c)
 		return
 	}
-	end, ok := rt.runReverse(cc, peer, keys, c, ip, port, engine.Owner{Peer: peer.Name, Rule: r.Name}, control.Message{}, a.fail)
+	end, ok := rt.runReverse(cc, peer, keys, c, ip, port, engine.Owner{Peer: peer.Name, Rule: r.Name}, ask, a.fail)
 	if ok {
 		rt.ended(a, peer.Name, net.JoinHostPort(ip.String(), strconv.Itoa(port)), end)
 	}
@@ -569,6 +662,22 @@ func (rt *Runtime) serveOpen(pc *peerControl, cc *ctlConn, m control.Message) {
 			// a path test of the peer: one path, with as many data sub-connections as it asks for
 			if groups = testGroups(groups, m.TestPath-1, m.TestSubs); groups == nil {
 				fail("it has no such path for data")
+				return
+			}
+		} else if len(m.RulePaths) > 0 || m.RuleSubs != 0 {
+			// a rule of the peer that does not use everything; what it names is checked
+			// like anything a peer sends
+			if len(m.RulePaths) > node.MaxPaths || m.RuleSubs < 0 || m.RuleSubs > node.MaxSubs {
+				fail("the request names more paths or sub-connections than a peer has")
+				return
+			}
+			var missing string
+			if groups, missing = narrow(groups, m.RulePaths, m.RuleSubs); groups == nil {
+				if missing == "" {
+					fail("it has no path that carries data")
+				} else {
+					fail(fmt.Sprintf("it has no path called %q that carries data", printable(missing, node.MaxPathNameLen)))
+				}
 				return
 			}
 		}

@@ -361,7 +361,10 @@ func TestPeerPathRoutes(t *testing.T) {
 		"no subs":         `{"paths":[{"name":"p","type":"tcp","addr":"192.0.2.9:1","security":"off","roles":["data"]}]}`,
 		"unknown role":    `{"paths":[{"name":"p","type":"tcp","addr":"192.0.2.9:1","security":"off","roles":["bulk"],"subs":4}]}`,
 		"unknown tier":    `{"paths":[{"name":"p","type":"tcp","addr":"192.0.2.9:1","security":"none","roles":["data"],"subs":4}]}`,
-		"unknown field":   `{"paths":[{"name":"p","type":"tcp","addr":"192.0.2.9:1","security":"off","roles":["data"],"subs":4,"mark":7}]}`,
+		"unknown field":   `{"paths":[{"name":"p","type":"tcp","addr":"192.0.2.9:1","security":"off","roles":["data"],"subs":4,"weight":7}]}`,
+		"negative mark":   `{"paths":[{"name":"p","type":"tcp","addr":"192.0.2.9:1","security":"off","roles":["data"],"subs":4,"mark":-1}]}`,
+		"address twice":   `{"paths":[{"name":"p","type":"tcp","addr":"192.0.2.9:1","addrs":["192.0.2.9:1"],"security":"off","roles":["data"],"subs":4}]}`,
+		"nine addresses":  `{"paths":[{"name":"p","type":"tcp","addr":"192.0.2.9:1","addrs":["192.0.2.9:2","192.0.2.9:3","192.0.2.9:4","192.0.2.9:5","192.0.2.9:6","192.0.2.9:7","192.0.2.9:8","192.0.2.9:9"],"security":"off","roles":["data"],"subs":4}]}`,
 	} {
 		w := b.send("PUT", PathPeers+"/alpha", body)
 		wantError(t, name, w, 400)

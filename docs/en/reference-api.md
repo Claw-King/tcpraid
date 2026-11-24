@@ -45,7 +45,7 @@ that ran out of time.
 ### GET /api/v1/status
 
 ```
-{"version":"0.4.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.5.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
  "sessions":2,"peers":1,"rules":2}
 ```
@@ -137,13 +137,23 @@ code. The answer is the new peer, as below.
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.4.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.5.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
 `online` means that a control connection with the peer is up. `version` and
 `last_message` appear once the peer has been heard from. A peer that joined
 this node has no `addresses` and no `paths` here. The pair secret is never in
 an answer, and a proxy is shown without its user and password.
+
+Since version 0.5.0 a path may have two more fields. `addrs` holds further
+addresses of the same listener, which the node tries in their order after
+`addr`, up to 8 addresses in all. `mark` is the socket mark of the path's
+connections, on Linux only. Both are absent from a path that has one address
+and no mark:
+
+```
+{"name":"default","type":"tcp","addr":"[2001:db8::10]:9851","addrs":["203.0.113.7:9851"],"security":"tls","roles":["data"],"subs":8,"mark":7}
+```
 
 ### PUT /api/v1/peers/{name}
 
@@ -157,7 +167,7 @@ peer.
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.4.0",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.5.0",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 
@@ -171,6 +181,9 @@ peer. Empty means none.
 Added in version 0.4.0. The `PUT` changes one path of a peer, or adds it if
 the peer has none of that name. Its body holds any of `addr`, `type`,
 `proxy`, `security`, `verify`, `pin`, `roles` and `subs`, and at least one.
+Since version 0.5.0 it may also hold `addrs` and `mark`. A body that sets
+`addr` without `addrs` takes the further addresses away, an empty list for
+`addrs` does the same, and `"mark": 0` takes the mark away.
 What the body does not name stays as it is. A new path needs `addr`, and
 what the body does not name is then `tcp`, `tls`, the role `data` and 8
 sub-connections. The answer is `{"created": ..., "peer": {...}}` with the
@@ -182,7 +195,7 @@ $ curl -X PUT ... -d '{"subs":4}' http://127.0.0.1:9850/api/v1/peers/nas-a/paths
 {"created":false,"peer":{"name":"nas-a","fingerprint":"e5645f9b...7795ec86","addresses":["nas-a.example.org:9851"],
  "paired_at":"2026-01-15T10:00:20Z",
  "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":4}],
- "allow":"","udp_dial":"","online":true,"version":"0.4.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
+ "allow":"","udp_dial":"","online":true,"version":"0.5.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
 ```
 
 The `DELETE` removes the path and answers with the peer. A peer without that
@@ -202,7 +215,9 @@ Tries every path to the peer.
 {"peer":"nas-a","paths":[{"name":"default","addr":"nas-a.example.org:9851","security":"tls","ok":true}]}
 ```
 
-A path that fails has `"ok": false` and an `"error"`.
+A path that fails has `"ok": false` and an `"error"`. Since version 0.5.0 a
+path with several addresses has one entry for each address, in their order,
+with the same `name`.
 
 ### POST /api/v1/peers/{name}/test
 
@@ -276,12 +291,30 @@ happened:
 a rule whose connection is still waiting for the peer to answer. The next
 connection of the rule clears both fields.
 
+Three fields were added in version 0.5.0, and each is absent when it has
+nothing to say. `paths` and `subs` are what the rule is narrowed to (see
+`POST`). `peer_dials` is `true` while the peer opens the connections of the
+rule because this node's own path to the peer is down:
+
+```
+{"name":"pull","listen":"0.0.0.0:9802","destination":"192.0.2.10:873","peer":"nas-a",
+ "enabled":true,"listening":true,"sessions":0,"paths":["side"],"subs":3}
+```
+
 ### POST /api/v1/rules
 
 Body `{"name", "peer", "listen", "destination"}` or `{"name", "peer",
 "match"}`, and optionally `"enabled": false`. Since version 0.4.0 the
 destination may hold a host name in the place of the IP address, as in
 `"nas.lan:873"`. The peer looks it up for every connection.
+
+Since version 0.5.0 the body may hold `"paths": ["NAME", ...]` and
+`"subs": N`. With `paths` the connections of the rule use only the paths of
+those names, as the dialing node calls them. With `subs` a
+connection keeps at most that many data sub-connections on each path. On the
+node that holds the paths, a name that is no path for data is refused with
+`400`. Where the peer holds the paths, the peer checks the names when a
+connection arrives, and it needs version 0.5.0 or later.
 
 ```
 $ curl -X POST ... -d '{"name":"pg","peer":"nas-a","listen":"127.0.0.1:15432","destination":"192.0.2.10:5432"}' http://127.0.0.1:9850/api/v1/rules
@@ -300,8 +333,11 @@ HTTP/1.1 400 Bad Request
 
 ### PUT /api/v1/rules/{name}
 
-Replaces the rule, with the same body. Switching a rule off is a `PUT` with
-`"enabled": false`:
+Replaces the rule, with the same body. `paths` and `subs` are the exception:
+when the body does not name one of them, the rule keeps what it has, so that
+a caller which does not know the two fields does not take them away. An empty
+list for `paths` and `0` for `subs` take them away. Switching a rule off is a
+`PUT` with `"enabled": false`:
 
 ```
 {"name":"pg","listen":"127.0.0.1:15432","destination":"192.0.2.10:5432","peer":"nas-a","enabled":false,"listening":false,"sessions":0}

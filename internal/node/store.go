@@ -159,6 +159,10 @@ func putPeer(st *State, self string, p Peer) (Peer, error) {
 			for j := range old.Paths {
 				if old.Paths[j].Name == DefaultPathName {
 					old.Paths[j].Addr = p.Addresses[0]
+					old.Paths[j].Addrs = nil
+					if len(p.Addresses) > 1 {
+						old.Paths[j].Addrs = append([]string{}, p.Addresses[1:]...)
+					}
 				}
 			}
 		}
@@ -191,15 +195,19 @@ func withSuffix(name, suffix string) string {
 
 // PathChange says what to set on one path of a peer. A nil field leaves that setting as
 // it is.
+//
+// Addr sets the address of the path and takes its further addresses away, unless Addrs
+// is set too. Addrs sets the further addresses (an empty list: none).
 type PathChange struct {
 	Addr, Type, Proxy, Security, Verify, Pin *string
-	Roles                                    *[]string
-	Subs                                     *int
+	Addrs, Roles                             *[]string
+	Subs, Mark                               *int
 }
 
 // Empty reports whether the change sets nothing.
 func (c PathChange) Empty() bool {
-	return c.Addr == nil && c.Type == nil && c.Proxy == nil && c.Security == nil && c.Verify == nil && c.Pin == nil && c.Roles == nil && c.Subs == nil
+	return c.Addr == nil && c.Addrs == nil && c.Type == nil && c.Proxy == nil && c.Security == nil && c.Verify == nil && c.Pin == nil &&
+		c.Roles == nil && c.Subs == nil && c.Mark == nil
 }
 
 // Apply sets on p what the change names. What only goes with a setting that the change
@@ -209,6 +217,18 @@ func (c PathChange) Empty() bool {
 func (c PathChange) Apply(p *Path) {
 	if c.Addr != nil {
 		p.Addr = *c.Addr
+		if c.Addrs == nil {
+			p.Addrs = nil
+		}
+	}
+	if c.Addrs != nil {
+		p.Addrs = nil
+		if len(*c.Addrs) > 0 {
+			p.Addrs = append([]string{}, *c.Addrs...)
+		}
+	}
+	if c.Mark != nil {
+		p.Mark = *c.Mark
 	}
 	if c.Type != nil {
 		p.Type = *c.Type

@@ -211,16 +211,21 @@ type Peer struct {
 }
 
 // Path describes one way to a peer. A proxy is shown without its user and password.
+// Addrs (since 0.5.0) are further addresses of the same listener, tried in their order
+// after Addr; absent when the path has one address. Mark (since 0.5.0) is the socket
+// mark of the path's connections; absent when it has none.
 type Path struct {
 	Name     string   `json:"name"`
 	Type     string   `json:"type"`
 	Addr     string   `json:"addr"`
+	Addrs    []string `json:"addrs,omitempty"`
 	Proxy    string   `json:"proxy,omitempty"`
 	Security string   `json:"security"`
 	Verify   string   `json:"verify,omitempty"`
 	Pin      string   `json:"pin,omitempty"`
 	Roles    []string `json:"roles"`
 	Subs     int      `json:"subs"`
+	Mark     int      `json:"mark,omitempty"`
 }
 
 // PeerUpdate is the body of PUT /api/v1/peers/{name}. A field that is absent leaves
@@ -241,8 +246,16 @@ type PeerUpdate struct {
 // The node changes the one path in one step, so requests for two paths of a peer that
 // arrive at the same time both take effect, which a PUT of the whole list cannot
 // promise.
+//
+// Since 0.5.0: addrs sets the further addresses of the path (an empty list: none), and
+// a request that sets addr without addrs takes them away. mark sets the socket mark (0:
+// none).
 type PathUpdate struct {
-	Addr     *string   `json:"addr"`
+	Addr *string `json:"addr"`
+	// left out of a request that does not set them, so that a node from before 0.5.0
+	// takes a request that only names what it knows
+	Addrs    *[]string `json:"addrs,omitempty"`
+	Mark     *int      `json:"mark,omitempty"`
 	Type     *string   `json:"type"`
 	Proxy    *string   `json:"proxy"`
 	Security *string   `json:"security"`
@@ -265,13 +278,20 @@ type PathSet struct {
 // 0.4.0 the destination may have a host name in the place of the IP, which the peer
 // looks up for every connection. Enabled is true when absent. In a PUT, an absent name
 // means the name in the path.
+//
+// Since 0.5.0: paths names the paths the rule's connections use (an empty list: every
+// path), and subs the most data sub-connections on each (0: as many as the path has).
+// In a PUT, either one that is absent stays as the stored rule has it, so that a
+// caller that does not know the two fields does not take them away.
 type RuleSpec struct {
-	Name        string `json:"name"`
-	Listen      string `json:"listen,omitempty"`
-	Destination string `json:"destination,omitempty"`
-	Match       string `json:"match,omitempty"`
-	Peer        string `json:"peer"`
-	Enabled     *bool  `json:"enabled,omitempty"`
+	Name        string    `json:"name"`
+	Listen      string    `json:"listen,omitempty"`
+	Destination string    `json:"destination,omitempty"`
+	Match       string    `json:"match,omitempty"`
+	Peer        string    `json:"peer"`
+	Enabled     *bool     `json:"enabled,omitempty"`
+	Paths       *[]string `json:"paths,omitempty"`
+	Subs        *int      `json:"subs,omitempty"`
 }
 
 // Rule describes a forwarding rule and how it is doing.
@@ -288,6 +308,13 @@ type Rule struct {
 	// ErrorAt is when what Error says happened (since 0.3.0); absent where Error is a
 	// state that holds now and not an event.
 	ErrorAt *time.Time `json:"error_at,omitempty"`
+	// Paths and Subs (since 0.5.0): the paths the rule's connections use and the most
+	// data sub-connections on each; absent when the rule uses everything.
+	Paths []string `json:"paths,omitempty"`
+	Subs  int      `json:"subs,omitempty"`
+	// PeerDials (since 0.5.0): new connections of the rule are opened by the peer for
+	// now, because this node's own path to the peer is down. Absent otherwise.
+	PeerDials bool `json:"peer_dials,omitempty"`
 }
 
 // PeerRemoval is the answer of DELETE /api/v1/peers/{name} when the request has the
@@ -309,7 +336,8 @@ type PeerCheck struct {
 	Paths []PathCheck `json:"paths"` // empty: this node has no path to the peer
 }
 
-// PathCheck is the outcome of the check of one path.
+// PathCheck is the outcome of the check of one path at one address. Since 0.5.0 a path
+// with several addresses has one entry for each, in the order of the path.
 type PathCheck struct {
 	Name     string `json:"name"`
 	Addr     string `json:"addr"`
@@ -716,10 +744,14 @@ func (s *Server) putPeer(w http.ResponseWriter, r *http.Request, arg map[string]
 	if req.Paths != nil {
 		list := make([]node.Path, 0, len(*req.Paths))
 		for _, p := range *req.Paths {
-			list = append(list, node.Path{
+			path := node.Path{
 				Name: p.Name, Type: p.Type, Addr: p.Addr, Proxy: p.Proxy, Security: p.Security,
-				Verify: p.Verify, Pin: p.Pin, Roles: append([]string{}, p.Roles...), Subs: p.Subs,
-			})
+				Verify: p.Verify, Pin: p.Pin, Roles: append([]string{}, p.Roles...), Subs: p.Subs, Mark: p.Mark,
+			}
+			if len(p.Addrs) > 0 {
+				path.Addrs = append([]string{}, p.Addrs...)
+			}
+			list = append(list, path)
 		}
 		paths = &list
 	}
@@ -736,9 +768,9 @@ func (s *Server) putPath(w http.ResponseWriter, r *http.Request, arg map[string]
 	if !readBody(w, r, &req) {
 		return
 	}
-	c := node.PathChange{Addr: req.Addr, Type: req.Type, Proxy: req.Proxy, Security: req.Security, Verify: req.Verify, Pin: req.Pin, Roles: req.Roles, Subs: req.Subs}
+	c := node.PathChange{Addr: req.Addr, Addrs: req.Addrs, Mark: req.Mark, Type: req.Type, Proxy: req.Proxy, Security: req.Security, Verify: req.Verify, Pin: req.Pin, Roles: req.Roles, Subs: req.Subs}
 	if c.Empty() {
-		writeError(w, http.StatusBadRequest, "the request changes nothing, because it has none of the fields \"addr\", \"type\", \"proxy\", \"security\", \"verify\", \"pin\", \"roles\", \"subs\"")
+		writeError(w, http.StatusBadRequest, "the request changes nothing, because it has none of the fields \"addr\", \"addrs\", \"mark\", \"type\", \"proxy\", \"security\", \"verify\", \"pin\", \"roles\", \"subs\"")
 		return
 	}
 	p, created, err := s.cfg.Node.SetPath(arg["name"], arg["path"], c)
@@ -849,7 +881,10 @@ func (s *Server) testPeer(w http.ResponseWriter, r *http.Request, arg map[string
 func apiRule(st forward.RuleStatus) Rule {
 	r := st.Rule
 	out := Rule{Name: r.Name, Listen: r.Listen, Destination: r.Destination, Match: r.Match, Peer: r.Peer, Enabled: r.Enabled,
-		Listening: st.Listening, Error: st.Error, Sessions: st.Sessions}
+		Listening: st.Listening, Error: st.Error, Sessions: st.Sessions, Subs: r.Subs, PeerDials: st.PeerDials}
+	if len(r.Paths) > 0 {
+		out.Paths = append([]string{}, r.Paths...)
+	}
 	if st.Error != "" && !st.ErrorAt.IsZero() {
 		at := st.ErrorAt.UTC()
 		out.ErrorAt = &at
@@ -878,9 +913,25 @@ func (s *Server) ruleStatus(w http.ResponseWriter, code int, name string) {
 	writeError(w, http.StatusNotFound, fmt.Sprintf("rule %q: not found", name))
 }
 
-func nodeRule(spec RuleSpec) node.Rule {
-	return node.Rule{Name: spec.Name, Listen: spec.Listen, Destination: spec.Destination, Match: spec.Match, Peer: spec.Peer,
+// nodeRule makes the rule a request describes. was, if not nil, is the stored rule that
+// the request replaces: what the request does not say about paths and sub-connections
+// stays as was has it.
+func nodeRule(spec RuleSpec, was *node.Rule) node.Rule {
+	r := node.Rule{Name: spec.Name, Listen: spec.Listen, Destination: spec.Destination, Match: spec.Match, Peer: spec.Peer,
 		Enabled: spec.Enabled == nil || *spec.Enabled}
+	if was != nil {
+		r.Paths, r.Subs = was.Clone().Paths, was.Subs
+	}
+	if spec.Paths != nil {
+		r.Paths = nil
+		if len(*spec.Paths) > 0 {
+			r.Paths = append([]string{}, *spec.Paths...)
+		}
+	}
+	if spec.Subs != nil {
+		r.Subs = *spec.Subs
+	}
+	return r
 }
 
 func (s *Server) addRule(w http.ResponseWriter, r *http.Request, _ map[string]string) {
@@ -888,7 +939,7 @@ func (s *Server) addRule(w http.ResponseWriter, r *http.Request, _ map[string]st
 	if !readBody(w, r, &spec) {
 		return
 	}
-	if err := s.cfg.Rules.AddRule(nodeRule(spec)); err != nil {
+	if err := s.cfg.Rules.AddRule(nodeRule(spec, nil)); err != nil {
 		fail(w, err, false)
 		return
 	}
@@ -903,7 +954,14 @@ func (s *Server) putRule(w http.ResponseWriter, r *http.Request, arg map[string]
 	if spec.Name == "" {
 		spec.Name = arg["name"]
 	}
-	if err := s.cfg.Rules.ReplaceRule(arg["name"], nodeRule(spec)); err != nil {
+	var was *node.Rule
+	for _, st := range s.cfg.Rules.Rules() {
+		if st.Rule.Name == arg["name"] {
+			was = &st.Rule
+			break
+		}
+	}
+	if err := s.cfg.Rules.ReplaceRule(arg["name"], nodeRule(spec, was)); err != nil {
 		fail(w, err, false)
 		return
 	}
@@ -938,10 +996,14 @@ func apiPeer(p node.Peer) Peer {
 	out := Peer{Name: p.Name, Fingerprint: p.Fingerprint, Addresses: append([]string{}, p.Addresses...), PairedAt: p.PairedAt.UTC(), Paths: []Path{},
 		Allow: p.Allow, UDPDial: p.UDPDial}
 	for _, path := range p.Paths {
-		out.Paths = append(out.Paths, Path{
+		shown := Path{
 			Name: path.Name, Type: path.Type, Addr: path.Addr, Proxy: withoutUser(path.Proxy), Security: path.Security,
-			Verify: path.Verify, Pin: path.Pin, Roles: append([]string{}, path.Roles...), Subs: path.Subs,
-		})
+			Verify: path.Verify, Pin: path.Pin, Roles: append([]string{}, path.Roles...), Subs: path.Subs, Mark: path.Mark,
+		}
+		if len(path.Addrs) > 0 {
+			shown.Addrs = append([]string{}, path.Addrs...)
+		}
+		out.Paths = append(out.Paths, shown)
 	}
 	return out
 }

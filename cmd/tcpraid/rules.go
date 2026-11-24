@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -25,13 +26,31 @@ func ruleState(r api.Rule) string {
 	case r.Error != "" && !r.Listening:
 		return "FAILED: " + r.Error
 	case r.Error != "" && r.ErrorAt != nil:
-		return "listening, last connection: " + r.Error + " (" + ago(time.Since(*r.ErrorAt)) + ")"
+		return "listening" + ruleUses(r) + ", last connection: " + r.Error + " (" + ago(time.Since(*r.ErrorAt)) + ")"
 	case r.Error != "":
-		return "listening, last connection: " + r.Error
+		return "listening" + ruleUses(r) + ", last connection: " + r.Error
 	case r.Listening:
-		return "listening"
+		return "listening" + ruleUses(r)
 	}
 	return "not listening"
+}
+
+// ruleUses says, after the word "listening", what is particular about the way the
+// rule's connections go: the paths and sub-connections it keeps to, and that the peer
+// opens the connections for now. It is empty for a rule that uses everything in the
+// usual way, so that the state of such a rule reads as it always did.
+func ruleUses(r api.Rule) string {
+	s := ""
+	if len(r.Paths) > 0 {
+		s += ", over the paths " + strings.Join(r.Paths, ",")
+	}
+	if r.Subs > 0 {
+		s += fmt.Sprintf(", with at most %d sub-connections on a path", r.Subs)
+	}
+	if r.PeerDials {
+		s += ", the peer opens the connections while this node's path is down"
+	}
+	return s
 }
 
 // ago writes how long ago something happened, to the unit that matters.
@@ -58,6 +77,8 @@ func setRuleEnabled(dataDir, name string, enabled bool, stdout io.Writer) error 
 		if r.Name != name {
 			continue
 		}
+		// the paths and sub-connections of the rule are not sent: the node keeps what
+		// the rule has
 		spec := api.RuleSpec{Name: r.Name, Listen: r.Listen, Destination: r.Destination, Match: r.Match, Peer: r.Peer, Enabled: &enabled}
 		var out api.Rule
 		if err := apiCall(dataDir, http.MethodPut, rulePath(name), spec, &out, shortCall); err != nil {
@@ -72,6 +93,8 @@ func setRuleEnabled(dataDir, name string, enabled bool, stdout io.Writer) error 
 func cmdRules(args []string, stdout, stderr io.Writer) int {
 	var spec api.RuleSpec
 	var disabled bool
+	var paths string
+	var subs int
 	return dispatch("rules", "list", []string{"list", "add", "remove", "enable", "disable"}, map[string]command{
 		"list": {
 			name: "rules",
@@ -97,13 +120,15 @@ func cmdRules(args []string, stdout, stderr io.Writer) int {
 			},
 		},
 		"add": {
-			name: "rules add", usage: "NAME -peer PEER (-listen IP:PORT[-PORT] -dest IP:PORT[-PORT] | -match NETWORKS)", nargs: 1,
+			name: "rules add", usage: "NAME -peer PEER (-listen IP:PORT[-PORT] -dest IP:PORT[-PORT] | -match NETWORKS) [-paths NAMES] [-subs N]", nargs: 1,
 			flags: func(fs *flag.FlagSet) {
 				fs.StringVar(&spec.Peer, "peer", "", "name of the peer the connections go to")
 				fs.StringVar(&spec.Listen, "listen", "", "fixed rule: where this node listens, IP:port or IP:first-last (without the IP: every address)")
 				fs.StringVar(&spec.Destination, "dest", "", "fixed rule: where the connections go at the peer's end, HOST:port or HOST:first-last, with an IP address or a host name that the peer looks up (same number of ports as -listen)")
 				fs.StringVar(&spec.Match, "match", "", "transparent rule: original destinations it takes, networks with optional ports such as 192.0.2.0/24:873,[2001:db8::/32]:5000-5010 (needs tcpraid run -transparent)")
 				fs.BoolVar(&disabled, "disabled", false, "store the rule switched off")
+				fs.StringVar(&paths, "paths", "", "names of the paths the rule's connections use, separated by commas, as the node that holds the paths calls them (\"\": every path)")
+				fs.IntVar(&subs, "subs", 0, "the most data sub-connections a connection of the rule keeps on each path (0: as many as the path has)")
 			},
 			run: func(dataDir string, args []string, stdout, _ io.Writer) error {
 				if spec.Peer == "" {
@@ -112,9 +137,17 @@ func cmdRules(args []string, stdout, stderr io.Writer) int {
 				spec.Name = args[0]
 				enabled := !disabled
 				spec.Enabled = &enabled
+				// sent only when given: a node of an older version does not know them
+				if paths != "" {
+					names := strings.Split(paths, ",")
+					spec.Paths = &names
+				}
+				if subs != 0 {
+					spec.Subs = &subs
+				}
 				var out api.Rule
 				if err := apiCall(dataDir, http.MethodPost, api.PathRules, spec, &out, shortCall); err != nil {
-					return err
+					return olderNode(err, map[string]string{"paths": "paths for a rule", "subs": "a number of sub-connections for a rule"})
 				}
 				fmt.Fprintf(stdout, "rule %s added: %s\n", out.Name, ruleState(out))
 				if out.Enabled && !out.Listening {
