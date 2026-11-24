@@ -491,6 +491,11 @@ func (s *session) reader(sb *sub, awaitReply bool) {
 			why := "the answer was not one of tcpraid"
 			if err != nil {
 				why = err.Error()
+				if isReset(err) {
+					// the same words on every system, for whoever reads them
+					// (the systems word a reset differently)
+					why = "connection reset by peer"
+				}
 			}
 			s.mu.Lock()
 			s.noReply = why

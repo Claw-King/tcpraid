@@ -45,13 +45,18 @@ func TestRuleSaysWhyThePeerCouldNotConnect(t *testing.T) {
 			if _, err := send(t, loop(in), 5000); err == nil {
 				t.Fatal("a connection to a destination that refuses ended cleanly")
 			}
-			want := fmt.Sprintf("peer %q could not connect to %s: connect: connection refused", exit.n.Name(), loop(dst))
+			// the reason after the colon is the system's own, and each system has
+			// its words for a refused connection: all of them say "refused"
+			want := fmt.Sprintf("peer %q could not connect to %s: ", exit.n.Name(), loop(dst))
+			saysWhy := func(s string) bool {
+				return strings.HasPrefix(s, want) && strings.Contains(s[len(want):], "refused")
+			}
 			t.Cleanup(func() {
 				if t.Failed() {
 					t.Logf("the rule says %q\nentry:\n%s\nexit:\n%s", statusOf(t, entry, "r").Error, entry.logs, exit.logs)
 				}
 			})
-			eventually(t, "the rule says why", func() bool { return statusOf(t, entry, "r").Error == want })
+			eventually(t, "the rule says why", func() bool { return saysWhy(statusOf(t, entry, "r").Error) })
 			st := statusOf(t, entry, "r")
 			if st.ErrorAt.Before(before) || st.ErrorAt.After(time.Now()) {
 				t.Errorf("the failure is dated %v, want between %v and now", st.ErrorAt, before)
@@ -119,9 +124,20 @@ func TestRuleSaysThePeerDoesNotAcceptIt(t *testing.T) {
 		_, err := send(t, loop(in), 5000)
 		done <- err
 	}()
-	want := `peer "alpha" does not answer on the connections this node opens: the other node does not accept this node, which is not paired with it or no longer is`
+	// What the listener says before it closes the connection reaches this end on some
+	// systems and is lost on others, where only the reset arrives. The rule names the
+	// refusal in the first case and its possible causes in the second.
+	said := `peer "alpha" does not answer on the connections this node opens: `
+	refused := said + `the other node does not accept this node, which is not paired with it or no longer is`
+	closed := said + `the other end closed the connection without answering. Either the address is not a tcpraid listener, or the other node is not paired with this one, or their pair secrets differ.`
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("the rule says %q", statusOf(t, entry, "r").Error)
+		}
+	})
 	eventually(t, "the rule says that the peer does not accept the connections", func() bool {
-		return statusOf(t, entry, "r").Error == want
+		got := statusOf(t, entry, "r").Error
+		return got == refused || got == closed
 	})
 	// a state that holds now, not something that happened at a time
 	if at := statusOf(t, entry, "r").ErrorAt; !at.IsZero() {

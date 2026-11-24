@@ -78,7 +78,7 @@ func TestCarrySaysHowTheSessionEnded(t *testing.T) {
 	mu.Lock()
 	f := failures[end.ID]
 	mu.Unlock()
-	if f.code != DialError || !strings.Contains(f.reason, "connection refused") {
+	if f.code != DialError || !strings.Contains(f.reason, "refused") {
 		t.Errorf("what the exit end was told about %x: %+v", end.ID[:3], f)
 	}
 	// the destination is not in the allow list

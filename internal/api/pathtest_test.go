@@ -129,9 +129,10 @@ func TestRuleErrorHasATime(t *testing.T) {
 			t.Fatal("the rule does not say why its connection failed")
 		}
 	}
-	want := fmt.Sprintf("peer \"alpha\" could not connect to %s: connect: connection refused", nowhere)
-	if r.Error != want {
-		t.Errorf("the rule says %q, want %q", r.Error, want)
+	// the reason after the colon is the system's own; every system says "refused"
+	want := fmt.Sprintf("peer \"alpha\" could not connect to %s: ", nowhere)
+	if !strings.HasPrefix(r.Error, want) || !strings.Contains(r.Error[len(want):], "refused") {
+		t.Errorf("the rule says %q, want %q and that the connection was refused", r.Error, want)
 	}
 	if r.ErrorAt == nil || r.ErrorAt.Before(before) || r.ErrorAt.After(time.Now().Add(time.Second)) {
 		t.Errorf("dated %v", r.ErrorAt)
