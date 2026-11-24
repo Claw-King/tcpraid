@@ -301,7 +301,7 @@ func TestBothTakesTheNamesEachNodeHas(t *testing.T) {
 		Dial: node.DialBoth, Paths: []string{"mine", "default"}, Subs: 1}); err != nil {
 		t.Fatal(err)
 	}
-	h := hold(t, loop(in), 1<<20)
+	h := holdCarried(t, a, "one", loop(in), 1<<20)
 	session(t, a, 2, 1) // one sub-connection on "mine", one that beta opened on its "default"
 	if err := h.finish(); err != nil {
 		t.Fatal(err)
@@ -316,7 +316,7 @@ func TestBothTakesTheNamesEachNodeHas(t *testing.T) {
 		Dial: node.DialPeer, Paths: []string{"default"}}); err != nil {
 		t.Fatalf("a rule with dial peer that names a path of the peer: %v", err)
 	}
-	h = hold(t, loop(in+1), 1<<20)
+	h = holdCarried(t, a, "theirs", loop(in+1), 1<<20)
 	session(t, a, 2, 0)
 	if err := h.finish(); err != nil {
 		t.Fatal(err)

@@ -85,6 +85,41 @@ func hold(t *testing.T, addr string, size int) *held {
 	return &held{t: t, c: c, hash: sha256.Sum256(data), rest: data[size/2:]}
 }
 
+// holdCarried is hold for a rule of tn called rule whose connection may be reset before
+// the peer has answered, as happens while a control connection is being opened or a
+// request on it is lost. It tries connections until tn has a session that the peer
+// has answered, and reports what the rule said about each one that was reset.
+func holdCarried(t *testing.T, tn *testNode, rule, addr string, size int) *held {
+	t.Helper()
+	data := make([]byte, size)
+	rand.Read(data)
+	var said []string
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		c, err := net.Dial("tcp", addr)
+		if err == nil {
+			_, err = c.Write(data[:size/2])
+		}
+		if err == nil {
+			for until := time.Now().Add(2 * time.Second); time.Now().Before(until); time.Sleep(10 * time.Millisecond) {
+				if list := tn.e.SessionList(); len(list) == 1 && list[0].Up {
+					t.Cleanup(func() { c.Close() })
+					if len(said) > 0 {
+						t.Logf("%d connections to %s were reset before one was carried; the rule said: %q", len(said), addr, said)
+					}
+					return &held{t: t, c: c, hash: sha256.Sum256(data), rest: data[size/2:]}
+				}
+			}
+		}
+		if c != nil {
+			c.Close()
+		}
+		said = append(said, fmt.Sprintf("%v / %s", err, statusOf(t, tn, rule).Error))
+		if time.Now().After(deadline) {
+			t.Fatalf("no connection to %s was carried. The rule said: %q\n%s", addr, said, tn.logs)
+		}
+	}
+}
+
 // finish sends the rest, closes this side and returns the error the connection ended
 // with (nil: the far end closed cleanly).
 func (h *held) finish() error {
