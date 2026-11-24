@@ -330,11 +330,27 @@ func TestRuleNamesAPathThatIsNotThere(t *testing.T) {
 	if err := a.rt.AddRule(far); err != nil {
 		t.Fatalf("a rule whose peer holds the paths: %v", err)
 	}
-	if _, err := send(t, loop(in+1), 1000); err == nil {
-		t.Fatal("a connection over a path the peer does not have ended cleanly")
-	}
+	// Beta's paths were changed above, so beta opens its control connection afresh, and
+	// for a moment alpha has none to ask beta over: a connection that comes in that
+	// moment fails for that reason. Connections are tried until one gets as far as the
+	// peer's answer.
 	want := `peer "beta" could not open the connections: it has no path called "nope" that carries data`
-	eventually(t, "the rule says which path the peer does not have", func() bool { return statusOf(t, a, "far").Error == want })
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("the rule says %q", statusOf(t, a, "far").Error)
+		}
+	})
+	eventually(t, "the rule says which path the peer does not have", func() bool {
+		if _, err := send(t, loop(in+1), 1000); err == nil {
+			t.Fatal("a connection over a path the peer does not have ended cleanly")
+		}
+		for until := time.Now().Add(time.Second); time.Now().Before(until); time.Sleep(10 * time.Millisecond) {
+			if statusOf(t, a, "far").Error == want {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // A peer of a version that does not keep to a rule's paths: the connection is reset
