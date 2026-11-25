@@ -40,7 +40,7 @@ func standInWith(session string, endStatus int, end client.SessionEnd) (dataDir 
 	}
 	mux.HandleFunc(client.PathStatus, func(w http.ResponseWriter, r *http.Request) {
 		if authorized(w, r) {
-			json.NewEncoder(w).Encode(client.Status{Version: "0.11.0", Node: client.StatusNode{Name: "nas-a"}, Peers: 1, Rules: 1})
+			json.NewEncoder(w).Encode(client.Status{Version: "0.11.1", Node: client.StatusNode{Name: "nas-a"}, Peers: 1, Rules: 1})
 		}
 	})
 	mux.HandleFunc(client.PathRules, func(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +106,7 @@ func Example() {
 		fmt.Printf("rule %s: %s -> %s at %s, listening=%v\n", r.Name, r.Listen, r.Destination, r.Peer, r.Listening)
 	}
 	// Output:
-	// node nas-a, version 0.11.0, 1 peer(s)
+	// node nas-a, version 0.11.1, 1 peer(s)
 	// rule zfs: 127.0.0.1:5000 -> 192.0.2.10:5000 at nas-b, listening=true
 }
 

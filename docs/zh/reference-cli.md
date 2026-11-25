@@ -30,7 +30,7 @@ tcpraid version
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.11.0 (wire protocol 1)
+version      0.11.1 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -79,7 +79,7 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.11.0, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.11.1, last heard 2026-01-15T10:00:05Z
 features     path-test, resolve, rule-paths, dial-both, spare, held, session-ok
 spares       2 connections wait for a session to begin on them
 
@@ -473,7 +473,7 @@ $ ssh -o ProxyCommand='tcpraid connect -peer nas-a %h:%p' admin@192.0.2.10
 
 目的地不会在只收到一部分输入之后读到“完整结束”，例外是 README“已知限制”里写的那种少见情况。被切断时它收到的是重置。
 
-从 0.11.0 版起，命令要等节点说出这条连接是怎么结束的才结束。两个方向都结束之后，它去问节点，节点在两个节点之间的会话结束时回答，大约晚一秒。状态 0 表示对端把全部输入写进了它通往目的地的连接，并按顺序结束了那个方向。它不表示目的地的程序已经读了这些数据，README 的“已知限制”里还写了一种目的地没有全部收到的情况。在这之前被切断的连接以状态 4 结束，目的地那一侧先结束的情况也一样。另一个节点还没说它已经把数据全部写出去就不在了，或者命令去问的时候节点已经不认得这条连接，也以状态 4 结束。目的地不读数据的时候会话不会结束，命令跟着等。
+从 0.11.0 版起，命令要等节点说出这条连接是怎么结束的才结束。两个方向都结束之后，它去问节点，节点在两个节点之间的会话结束时回答，大约晚一秒。状态 0 表示对端把全部输入写进了它通往目的地的连接，并按顺序结束了那个方向。它不表示目的地的程序已经读了这些数据。在这之前被切断的连接以状态 4 结束，目的地那一侧先结束的情况也一样。另一个节点还没说它已经把数据全部写出去就不在了，或者命令去问的时候节点已经不认得这条连接，也以状态 4 结束。目的地不读数据的时候会话不会结束，命令跟着等。
 
 0.11.0 之前的节点不说连接是怎么结束的。对这样的节点，命令照以前的办法结束：状态 0 表示节点收下了全部输入，而这时这些输入可能还在节点里。
 
@@ -525,5 +525,5 @@ changed: rule "zfs": changed
 
 ```
 $ tcpraid version
-tcpraid 0.11.0 (wire protocol 1)
+tcpraid 0.11.1 (wire protocol 1)
 ```

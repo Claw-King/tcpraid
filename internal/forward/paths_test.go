@@ -360,10 +360,22 @@ func TestRuleNamesAPathThatIsNotThere(t *testing.T) {
 		t.Fatalf("a rule that names a path without the data role: %v", err)
 	}
 
-	// on alpha, whose peer holds the paths: stored, and the peer says it for a connection
+	// on alpha, whose peer holds the paths: stored, and the peer says it for a connection.
+	// The port was free when it was picked, and something else may have taken it since
+	// (Windows hands out the ports after it in turn to new connections): the rule is
+	// given another one until it listens.
 	far := node.Rule{Name: "far", Listen: loop(in + 1), Destination: loop(dst), Peer: "beta", Enabled: true, Paths: []string{"nope"}}
 	if err := a.rt.AddRule(far); err != nil {
 		t.Fatalf("a rule whose peer holds the paths: %v", err)
+	}
+	for try := 1; !statusOf(t, a, "far").Listening; try++ {
+		if try == 5 {
+			t.Fatalf("the rule does not listen: %q", statusOf(t, a, "far").Error)
+		}
+		far.Listen = loop(freePorts(t, 1))
+		if err := a.rt.ReplaceRule("far", far); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// Beta's paths were changed above, so beta opens its control connection afresh, and
 	// for a moment alpha has none to ask beta over: a connection that comes in that
@@ -376,7 +388,7 @@ func TestRuleNamesAPathThatIsNotThere(t *testing.T) {
 		}
 	})
 	eventually(t, "the rule says which path the peer does not have", func() bool {
-		if _, err := send(t, loop(in+1), 1000); err == nil {
+		if _, err := send(t, far.Listen, 1000); err == nil {
 			t.Fatal("a connection over a path the peer does not have ended cleanly")
 		}
 		for until := time.Now().Add(time.Second); time.Now().Before(until); time.Sleep(10 * time.Millisecond) {

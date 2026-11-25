@@ -99,7 +99,7 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.11.0, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.11.1, last heard 2026-01-15T10:00:05Z
 features     path-test, resolve, rule-paths, dial-both, spare, held, session-ok
 
 PATH     TYPE    ADDRESS                 PROXY                    SECURITY  VERIFY  PIN  ROLES           SUBS

@@ -296,12 +296,15 @@ This is a first version, made by one developer in spare time. What is known:
   it was read.** It says that the other node wrote the whole input to its
   connection to the destination and ended that direction in order. Whether
   the destination's program read it is beyond what a node can see. In one
-  case less than that holds. When the process of the other node is killed
-  within about a second after it wrote the last of the input, the system
-  throws away what the destination has not taken from that connection yet
-  and resets it. The destination sees the reset, and the command can still
-  end with status 0. The command ends about a second after the two
-  directions have, because it waits for the node's word. SOCKS5 rules and `tcpraid connect` were run in
+  case status 0 says less than that. A node that is stopped resets the
+  connections of all its sessions. When the other node is stopped within
+  about a second after it wrote the last of the input, the destination loses
+  what it had not taken yet and sees a reset, and the command can still end
+  with status 0. With version 0.11.0 the same happened when that node's
+  process was killed in that second. Since version 0.11.1 the system
+  delivers the rest for a node that is killed. The command ends about a
+  second after the two directions have, because it waits for the node's
+  word. SOCKS5 rules and `tcpraid connect` were run in
   containers, with `curl` as the SOCKS5 client.
 - **The exported configuration is not a backup.** It holds no key and no
   pair secret, so it cannot bring a node back or pair one. Keep the data

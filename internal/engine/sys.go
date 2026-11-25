@@ -42,12 +42,19 @@ func ArmReset(c net.Conn) {
 	}
 }
 
-// cleanClose closes a LAN-side connection the ordinary way: what the socket still holds
-// is sent, then a FIN. Only for a stream that ended completely in both directions.
-func cleanClose(c net.Conn) {
+// disarm takes back what ArmReset did: a close of the LAN-side connection c, also the
+// one the kernel does when the process dies, is an ordinary one again, which sends what
+// the socket still holds and then a FIN. resetClose arms it again by itself.
+func disarm(c net.Conn) {
 	if tc, ok := c.(lingerer); ok {
 		tc.SetLinger(-1)
 	}
+}
+
+// cleanClose closes a LAN-side connection the ordinary way: what the socket still holds
+// is sent, then a FIN. Only for a stream that ended completely in both directions.
+func cleanClose(c net.Conn) {
+	disarm(c)
 	c.Close()
 }
 

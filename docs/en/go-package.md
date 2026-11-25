@@ -106,9 +106,7 @@ if err := conn.Done(ctx); err != nil {
 two directions have ended, and returns nil when the stream ended completely
 in both directions. The other node then wrote everything to its connection
 to the destination and ended that direction in order. Whether the
-destination's program read it is beyond what a node can see, and the
-README names one case, under "Known limits", in which the destination did
-not get all of it. A `*CutError`
+destination's program read it is beyond what a node can see. A `*CutError`
 with the node's reason means that the stream was cut off before that. An
 error that matches `ErrNoWord` means that the node cannot say, because it
 runs a version before 0.11.0. A node that no longer knows the session

@@ -139,8 +139,11 @@ type session struct {
 	// confirmed: the session ended in order and the other end said that it was done
 	// too (set by the monitor when it ends the session; see SessionEvent.Confirmed)
 	confirmed bool
-	changeN   uint64    // bumped whenever our state changes (the UDP sender follows it)
-	udp       *udpState // UDP feedback channel (nil = none)
+	// disarmed: the reset on close of the LAN-side connection was taken back, because
+	// this end said that it is done (buildSnapshot)
+	disarmed bool
+	changeN  uint64    // bumped whenever our state changes (the UDP sender follows it)
+	udp      *udpState // UDP feedback channel (nil = none)
 	// lifecycle
 	closed   bool
 	everUp   bool
@@ -752,6 +755,21 @@ func (s *session) buildSnapshot() *snapshot {
 	s.snapSeq++
 	sn := &snapshot{seqNo: s.snapSeq, sentNs: nowNs(), cum: s.cum, fin: s.sendFin, rxDone: s.rxDone}
 	sn.allDone = s.rxDone && s.sendFin >= 0 && s.peerCum >= uint64(s.sendFin)
+	if sn.allDone && !s.disarmed {
+		// This end is about to say that it is done: the whole of the other end's
+		// stream is written to the LAN-side connection and that direction is ended,
+		// and the other end has taken the whole of this end's stream. The other end
+		// will count the session as confirmed on this word. So the word must not go
+		// out while a death of this process would still reset the LAN-side
+		// connection and make the system throw away what that connection has not
+		// sent yet: the reset on close (ArmReset) is taken back first, under the
+		// same lock. A session that is aborted later is reset all the same
+		// (resetClose).
+		s.disarmed = true
+		if s.local != nil {
+			disarm(s.local)
+		}
+	}
 	if c := s.recvCap(); s.pendingB < c {
 		sn.budget = uint64(c)
 	} else {

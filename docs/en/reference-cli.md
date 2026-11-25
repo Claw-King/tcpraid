@@ -41,7 +41,7 @@ after telling its peers and resetting the application connections it carries.
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.11.0 (wire protocol 1)
+version      0.11.1 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -94,7 +94,7 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.11.0, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.11.1, last heard 2026-01-15T10:00:05Z
 features     path-test, resolve, rule-paths, dial-both, spare, held, session-ok
 spares       2 connections wait for a session to begin on them
 
@@ -681,9 +681,7 @@ connection ended. After both directions have ended it asks the node, which
 answers when the session between the two nodes is over, about a second
 later. Status 0 means that the peer wrote the whole input to its connection
 to the destination and ended that direction in order. It does not say that
-the destination's program has read it, and the README names, under "Known
-limits", one case in which the destination did not get all of it. A
-connection that is cut off before
+the destination's program has read it. A connection that is cut off before
 that ends with status 4, also when the destination's side had ended first.
 So does one whose other node is gone before it said that it had written
 everything, and one that the node no longer knows when it is asked. While
@@ -784,5 +782,5 @@ node.
 
 ```
 $ tcpraid version
-tcpraid 0.11.0 (wire protocol 1)
+tcpraid 0.11.1 (wire protocol 1)
 ```
