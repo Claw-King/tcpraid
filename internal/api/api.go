@@ -118,7 +118,8 @@ type Rules interface {
 	TestPeer(ctx context.Context, name string, opt forward.TestOptions) (forward.TestResult, error)
 	Transport() []forward.TransportValue
 	SetTransport(change map[string]*string) ([]forward.TransportValue, error)
-	Connect(peer, host string, port int, c net.Conn, rd io.Reader, begin func() error) error
+	Connect(peer, host string, port int, c net.Conn, rd io.Reader, begin func(session string) error) error
+	SessionEnd(ctx context.Context, id [16]byte) (end forward.SessionEnd, known bool)
 }
 
 // Config is what a Server serves.
@@ -223,6 +224,7 @@ func New(cfg Config) *Server {
 		add(http.MethodGet, PathTransport, s.getTransport)
 		add(http.MethodPut, PathTransport, s.putTransport)
 		add(http.MethodPost, PathConnect, s.connect)
+		add(http.MethodGet, PathSessions+"/{id}/end", s.sessionEnd)
 	}
 	return s
 }
@@ -852,6 +854,7 @@ func (s *Server) peer(p node.Peer) Peer {
 	if s.cfg.Rules != nil {
 		st := s.cfg.Rules.PeerStatus(p.Name)
 		out.Online, out.Version, out.Spares = st.Online, st.Version, st.Spares
+		out.Features, out.Problem = st.Features, st.Problem
 		if !st.LastMessage.IsZero() {
 			at := st.LastMessage.UTC()
 			out.LastMessage = &at

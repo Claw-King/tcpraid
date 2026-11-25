@@ -18,6 +18,9 @@ type (
 	// upListener is a LAN-side connection that wants to hear when the other end has
 	// taken the session.
 	upListener interface{ SessionUp() }
+	// idListener is a LAN-side connection that wants to know the id of the session
+	// that carries it. It is told once, when the session is created.
+	idListener interface{ SessionID(id [16]byte) }
 )
 
 // resetClose closes a LAN-side connection with RST: a FIN would read as a clean end.

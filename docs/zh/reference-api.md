@@ -42,7 +42,7 @@ $ curl --cacert /var/lib/tcpraid/api.tls -H "Authorization: Bearer $(cat /var/li
 ### GET /api/v1/status
 
 ```
-{"version":"0.10.1","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.11.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
  "sessions":2,"peers":1,"rules":2,"listen":["0.0.0.0:9851"],"advertise":["nas-b.example:9851"]}
 ```
@@ -129,10 +129,10 @@ Cache-Control: no-store
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.10.1","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.11.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
-`online` 表示和这个对端之间有一条控制连接连着。`version` 和 `last_message` 在收到过对端的消息之后才出现。0.6.0 版新增的 `spares` 是两个节点之间正在等会话的备用连接数，没有时不出现。0.7.0 版新增的 `transport` 是本节点上和这个对端之间的会话用来取代节点设置的那些传输层设置，对端没有设时不出现(见“传输层的设置”)。加入到本节点的对端，在这里没有 `addresses`，也没有 `paths`。配对密钥绝不会出现在回答里，显示代理时不带它的用户名和密码。从 0.10.0 版起，代理在节点里有用户名和密码的路径会带 `"proxy_login": true`。这个字段只供读取，写在请求里不改变任何东西。
+`online` 表示和这个对端之间有一条控制连接连着。`version` 和 `last_message` 在收到过对端的消息之后才出现。0.6.0 版新增的 `spares` 是两个节点之间正在等会话的备用连接数，没有时不出现。0.7.0 版新增的 `transport` 是本节点上和这个对端之间的会话用来取代节点设置的那些传输层设置，对端没有设时不出现(见“传输层的设置”)。0.11.0 版新增的 `features` 列出控制连接连上时对端说它会做的事，用的是 `PROTOCOL.md` 里的名字。同一版新增的 `problem` 说明为什么和一个在线的对端之间什么都不承载，没有这样的原因时不出现。加入到本节点的对端，在这里没有 `addresses`，也没有 `paths`。配对密钥绝不会出现在回答里，显示代理时不带它的用户名和密码。从 0.10.0 版起，代理在节点里有用户名和密码的路径会带 `"proxy_login": true`。这个字段只供读取，写在请求里不改变任何东西。
 
 从 0.5.0 版起，路径可以多两个字段。`addrs` 是同一个监听的其余地址，节点在 `addr` 之后按顺序尝试它们，连同 `addr` 最多 8 个。`mark` 是这条路径的连接带的套接字标记，只在 Linux 上有。只有一个地址、不带标记的路径没有这两个字段：
 
@@ -147,7 +147,7 @@ Cache-Control: no-store
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.10.1",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.11.0",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 
@@ -158,7 +158,7 @@ $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","u
 ```
 $ curl -X PUT ... -d '{"transport":{"window":"8MB","grace":null}}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"9d875c73...b9a2cd07","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"","udp_dial":"","online":true,"version":"0.10.1","last_message":"2026-01-15T10:00:28.39632723Z",
+ "allow":"","udp_dial":"","online":true,"version":"0.11.0","last_message":"2026-01-15T10:00:28.39632723Z",
  "spares":2,"transport":{"window":"8MB"}}
 ```
 
@@ -171,7 +171,7 @@ $ curl -X PUT ... -d '{"subs":4}' http://127.0.0.1:9850/api/v1/peers/nas-a/paths
 {"created":false,"peer":{"name":"nas-a","fingerprint":"e5645f9b...7795ec86","addresses":["nas-a.example.org:9851"],
  "paired_at":"2026-01-15T10:00:20Z",
  "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":4}],
- "allow":"","udp_dial":"","online":true,"version":"0.10.1","last_message":"2026-01-15T10:00:30.643951578Z"}}
+ "allow":"","udp_dial":"","online":true,"version":"0.11.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
 ```
 
 `DELETE` 删除这条路径，回答是对端。对端没有这条路径时是 `404`。
@@ -312,9 +312,10 @@ HTTP/1.1 400 Bad Request
 HTTP/1.1 101 Switching Protocols
 Connection: Upgrade
 Upgrade: tcpraid-connect
+Tcpraid-Session: 5f0c1a7e93b24d6688aa0c3e51d2f7b9
 ```
 
-从这几行头之后的空行起，这条连接上双向传的只有数据流本身。两个方向都完整结束的流，以连接的正常关闭结束。被切断的流以重置结束，经 TLS 时不发关闭 TLS 连接的那个告警，所以程序绝不会把被切断的流的结尾读成数据的结尾。
+从这几行头之后的空行起，这条连接上双向传的只有数据流本身。0.11.0 版新增的 `Tcpraid-Session` 是承载这条连接的会话的编号。两个方向都完整结束的流，以连接的正常关闭结束。被切断的流以重置结束，经 TLS 时不发关闭 TLS 连接的那个告警，所以程序绝不会把被切断的流的结尾读成数据的结尾。
 
 到目的地的连接没有开始时，节点回答原因并关闭连接：
 
@@ -325,6 +326,23 @@ HTTP/1.1 403 Forbidden
 ```
 
 `403` 是对端的允许列表。其余原因都是 `502`：对端没有配对或没有连着，目的地连不上，名字没有地址。
+
+### GET /api/v1/sessions/{id}/end
+
+0.11.0 版新增。它回答这个编号的会话在本节点上是怎么结束的，会话还在进行时就等到它结束。由 `POST /api/v1/connect` 拿到连接的程序，在连接的两个方向都结束之后问它，就知道自己发的东西是不是都传过去了。
+
+```
+$ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9850/api/v1/sessions/5f0c1a7e93b24d6688aa0c3e51d2f7b9/end
+{"ended":true,"complete":true,"reason":"done"}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `ended` | 在请求等待的时间里会话还没有结束时是 `false`。这时再问一次 |
+| `complete` | 数据流在两个方向上都完整结束了。另一个节点把这一端的全部数据写进了它通往目的地的连接，并按顺序结束了那个方向，目的地的全部数据也已经在本节点交了出去 |
+| `reason` | 原因，和节点日志里写的一样 |
+
+请求等 30 秒，或者等查询串里写的秒数(`?wait=10`)，最多 60 秒。`404` 表示节点没有这个编号的会话，也不记得有这样一个会话结束过。节点把最近 256 个会话的结束情况保留 5 分钟。`complete` 为 `false` 的会话是被切断的，或者另一个节点还没说它已经把数据全部传过去就不在了。
 
 ## 传输层的设置
 

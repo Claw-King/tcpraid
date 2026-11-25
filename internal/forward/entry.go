@@ -6,13 +6,22 @@ package forward
 // Such an entry has to answer its client: the stream begins, or there is none and why.
 // The transport tells this end when the peer has taken a session, and tells it later
 // if the peer could not connect the session to its destination. It has no word for
-// "the destination is connected". So the answer "the stream begins" is given as soon
-// as one of two things has happened: data has arrived from the destination, or the
-// peer has taken the session and has reported no failure for settle. A failure that
-// the peer reports within that time is answered with its reason. One that it reports
-// later reaches the client as a connection that is reset after it began.
+// "the destination is connected".
+//
+// A peer of version 0.11.0 or later says that word on the control connection
+// (session_ok). With such a peer the answer "the stream begins" is given at the first
+// of these: the peer's word, data or the end from the destination. A failure that the
+// peer reports is answered with its reason. When none of them has come confirm after
+// the peer took the session, the entry gives up and answers that there is no stream.
+//
+// With a peer that does not say the word, the answer is given when data has arrived
+// from the destination, or when the peer has taken the session and has reported no
+// failure for settle. A failure that the peer reports within that time is answered
+// with its reason. One that it reports later reaches the client as a connection that
+// is reset after it began.
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -43,8 +52,16 @@ var (
 type openConn struct {
 	net.Conn           // the client's connection: TCP, or TLS over TCP
 	rd       io.Reader // what the client sends is read from here
-	begin    func() error
-	settle   time.Duration
+	// begin writes the answer that the stream begins. It is given the id of the
+	// session in hex, or "" when the entry was not told one.
+	begin  func(session string) error
+	settle time.Duration
+	// The peer at the other end, and whether it tells when it has connected a session
+	// (it said so when the entry was made): the entry then waits for that word, for
+	// confirm at most, and not for settle.
+	rt      *Runtime
+	peer    string
+	confirm time.Duration
 
 	mu     sync.Mutex
 	state  int  // opening, begun or over
@@ -54,6 +71,14 @@ type openConn struct {
 	// client must not read a stream that was cut off as one that ended.
 	reset bool
 	timer *time.Timer
+	// session is the id of the session that carries the connection, in hex, once the
+	// transport has said it. gaveUp: the peer did not say in time whether it connected
+	// the session, and the entry ended the wait.
+	session string
+	gaveUp  bool
+	// cut: the end of the stream toward the client could not be written (CloseWrite
+	// over TLS). An end that is read after that is no end, see Read.
+	cut bool
 	// settled is signalled when the state leaves opening: a read that returned the end
 	// of the data before then waits on it
 	settled *sync.Cond
@@ -65,14 +90,21 @@ const (
 	entryOver           // closed before the stream began: the entry answers and closes
 )
 
-// newOpenConn wraps c. rd is where the rest of what the client sends is read (c itself,
-// or a buffer in front of it). begin writes to c the answer that the stream begins.
-func (rt *Runtime) newOpenConn(c net.Conn, rd io.Reader, begin func() error) *openConn {
+// newOpenConn wraps c, a connection that goes to the peer called peer. rd is where the
+// rest of what the client sends is read (c itself, or a buffer in front of it). begin
+// writes to c the answer that the stream begins.
+func (rt *Runtime) newOpenConn(peer string, c net.Conn, rd io.Reader, begin func(session string) error) *openConn {
 	settle := rt.EntrySettle
 	if settle <= 0 {
 		settle = entrySettle
 	}
-	oc := &openConn{Conn: c, rd: rd, begin: begin, settle: settle}
+	oc := &openConn{Conn: c, rd: rd, begin: begin, settle: settle, rt: rt, peer: peer}
+	if rt.peerSays(peer, control.FeatureSessionOK) {
+		oc.confirm = entryConfirm
+		if rt.EntryConfirm > 0 {
+			oc.confirm = rt.EntryConfirm
+		}
+	}
 	oc.settled = sync.NewCond(&oc.mu)
 	return oc
 }
@@ -86,6 +118,10 @@ func (rt *Runtime) newOpenConn(c net.Conn, rd io.Reader, begin func() error) *op
 // held back until the answer was written or the entry is over: the write of the answer
 // fails on a connection that was reset, and a client that only ended its sending side
 // gets its answer and has its end passed on then.
+//
+// Over TLS one more write can be that call: the record that ends the stream toward the
+// client (CloseWrite). It is written under the lock, so a read that returned the end
+// of the data for that reason waits here until its failure is recorded.
 func (oc *openConn) Read(p []byte) (int, error) {
 	n, err := oc.rd.Read(p)
 	if err == io.EOF {
@@ -93,7 +129,7 @@ func (oc *openConn) Read(p []byte) (int, error) {
 		for oc.state == entryOpening {
 			oc.settled.Wait()
 		}
-		over := oc.state == entryOver
+		over := oc.state == entryOver || oc.cut
 		oc.mu.Unlock()
 		if over {
 			return n, io.ErrUnexpectedEOF
@@ -124,7 +160,7 @@ func (oc *openConn) open() error {
 		oc.timer.Stop()
 	}
 	defer oc.settled.Broadcast()
-	if err := oc.begin(); err != nil {
+	if err := oc.begin(oc.session); err != nil {
 		oc.state = entryOver
 		oc.Conn.SetReadDeadline(time.Now())
 		return err
@@ -136,12 +172,61 @@ func (oc *openConn) open() error {
 	return nil
 }
 
+// SessionID is called by the transport when it has created the session that carries
+// the connection. An entry whose peer tells when a session is connected is found by
+// that word under this id.
+func (oc *openConn) SessionID(id [16]byte) {
+	session := hex.EncodeToString(id[:])
+	oc.mu.Lock()
+	oc.session = session
+	oc.mu.Unlock()
+	if oc.confirm > 0 {
+		oc.rt.wait(oc.peer, session, oc)
+	}
+}
+
 // SessionUp is called by the transport when the peer has taken the session.
 func (oc *openConn) SessionUp() {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
-	if oc.state == entryOpening && oc.timer == nil {
-		oc.timer = time.AfterFunc(oc.settle, func() { oc.open() })
+	if oc.state != entryOpening || oc.timer != nil {
+		return
+	}
+	if oc.confirm > 0 {
+		oc.timer = time.AfterFunc(oc.confirm, oc.giveUp)
+		return
+	}
+	oc.timer = time.AfterFunc(oc.settle, func() { oc.open() })
+}
+
+// giveUp ends the wait of an entry whose peer has said nothing about the session for
+// confirm: no stream begins. What the transport reads next from the connection fails,
+// so the session ends as one that was cut off.
+func (oc *openConn) giveUp() {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	if oc.state != entryOpening {
+		return
+	}
+	oc.state, oc.gaveUp = entryOver, true
+	oc.Conn.SetReadDeadline(time.Now())
+	oc.settled.Broadcast()
+}
+
+// waited reports whether the entry gave the wait for the peer's word up.
+func (oc *openConn) waited() bool {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	return oc.gaveUp
+}
+
+// forget takes the entry out of the list of those that wait for a peer's word.
+func (oc *openConn) forget() {
+	oc.mu.Lock()
+	session := oc.session
+	oc.mu.Unlock()
+	if oc.confirm > 0 {
+		oc.rt.unwait(oc.peer, session)
 	}
 }
 
@@ -208,10 +293,25 @@ func (oc *openConn) CloseWrite() error {
 	if err := oc.open(); err != nil {
 		return err
 	}
-	if cw, ok := oc.Conn.(interface{ CloseWrite() error }); ok {
+	cw, ok := oc.Conn.(interface{ CloseWrite() error })
+	if !ok {
+		return nil
+	}
+	if _, overTLS := oc.Conn.(interface{ NetConn() net.Conn }); !overTLS {
+		// a TCP connection ends a direction without writing anything
 		return cw.CloseWrite()
 	}
-	return nil
+	// Over TLS the end is a record that is written, and the write can be the call
+	// that a reset of the client is reported to. The read of the client's data then
+	// returns the end of the data, and must not take it for the end of a stream
+	// (Read). The TLS connection bounds this write itself.
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	err := cw.CloseWrite()
+	if err != nil {
+		oc.cut = true
+	}
+	return err
 }
 
 // SetReadDeadline leaves a connection alone whose reading Close has ended.
@@ -230,8 +330,9 @@ func (oc *openConn) SetReadDeadline(t time.Time) error {
 // with the peer's code for it (control.CodeAllow, control.CodeDial, control.CodeLookup;
 // empty for every other reason), and began is false: oc is then still open for the
 // entry's answer.
-func (rt *Runtime) carryEntry(r node.Rule, oc *openConn, host string, port int) (began bool, why, code string) {
+func (rt *Runtime) carryEntry(r node.Rule, oc *openConn, host string, port int) (began bool, why, code, kind string) {
 	a := rt.begin(r.Name)
+	defer oc.forget()
 	ip := net.ParseIP(host)
 	if ip == nil {
 		var err error
@@ -242,20 +343,23 @@ func (rt *Runtime) carryEntry(r node.Rule, oc *openConn, host string, port int) 
 				code = le.code
 			}
 			oc.Close()
-			return false, err.Error(), code
+			return false, err.Error(), code, ""
 		}
 	} else if v4 := ip.To4(); v4 != nil {
 		ip = v4
 	}
 	rt.carryAttempt(a, r, oc, ip, port)
 	if !oc.refused() {
-		return true, "", ""
+		return true, "", "", ""
 	}
-	why, code = a.reason(entryReasonWait)
+	if oc.waited() {
+		a.fail(fmt.Sprintf("peer %q took the connection to %s and did not say within %v whether it reached the destination.", r.Peer, net.JoinHostPort(host, fmt.Sprint(port)), oc.confirm))
+	}
+	why, code, kind = a.reason(entryReasonWait)
 	if why == "" {
 		why = fmt.Sprintf("the connection to %s through peer %q ended before it began", net.JoinHostPort(host, fmt.Sprint(port)), r.Peer)
 	}
-	return false, why, code
+	return false, why, code, kind
 }
 
 // ConnectRefused is the error of Connect when no stream began: the reason, and whether
@@ -275,14 +379,17 @@ func (e *ConnectRefused) Error() string { return e.Reason }
 // session takes the transport settings of the peer and the node, and the node that
 // opens its sub-connections is chosen as for a rule without a dial.
 //
+// begin is given the id of the session that carries the connection, in hex: the
+// program can ask with it how the session ended (SessionEnd).
+//
 // A nil error means that the stream began and c is closed. A *ConnectRefused means
 // that it never began: c is still open, for the caller to say why and to close.
-func (rt *Runtime) Connect(name, host string, port int, c net.Conn, rd io.Reader, begin func() error) error {
+func (rt *Runtime) Connect(name, host string, port int, c net.Conn, rd io.Reader, begin func(session string) error) error {
 	if _, ok := rt.Node.Peer(name); !ok {
 		return &ConnectRefused{Reason: fmt.Sprintf("peer %q is not paired with this node", name)}
 	}
-	oc := rt.newOpenConn(c, rd, begin)
-	began, why, code := rt.carryEntry(node.Rule{Peer: name, Enabled: true}, oc, host, port)
+	oc := rt.newOpenConn(name, c, rd, begin)
+	began, why, code, _ := rt.carryEntry(node.Rule{Peer: name, Enabled: true}, oc, host, port)
 	if began {
 		return nil
 	}

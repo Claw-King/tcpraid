@@ -220,6 +220,12 @@ type SessionEvent struct {
 	TxBytes, RxBytes int64
 	Clean            bool
 	Why              string
+	// Confirmed, of a session that ended Clean: the other end said that it was done
+	// too, so it wrote the whole of this end's stream to its application and ended
+	// that direction in order. A session ends Clean without it when the other end took
+	// every chunk and was gone, with all its sub-connections, before it said so: it may
+	// not have written the last of them.
+	Confirmed bool
 }
 
 // End says how a session ended.
@@ -409,6 +415,18 @@ func (e *Engine) AbortPeerBefore(peer string, t time.Time, why string) []Owner {
 // returns how many sessions that were.
 func (e *Engine) AbortOwner(owner Owner, why string) int {
 	return len(e.abortWhere(func(s *session) bool { return s.isClient && s.owner == owner }, why))
+}
+
+// AbortSession resets the session with the given id that this end holds with the peer,
+// whichever end created it, as AbortPeer resets all of a peer's: for a caller that the
+// peer told that it does not hold the session. why is the reason the log gives. It
+// returns the owner of the session and whether there was one.
+func (e *Engine) AbortSession(peer string, id [16]byte, why string) (Owner, bool) {
+	owners := e.abortWhere(func(s *session) bool { return s.id == id && s.owner.Peer == peer }, why)
+	if len(owners) == 0 {
+		return Owner{}, false
+	}
+	return owners[0], true
 }
 
 // Unreachable ends the session with the given id that this end carries for the peer, as

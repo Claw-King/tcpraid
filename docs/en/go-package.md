@@ -91,9 +91,31 @@ So a program that sends a request and reads an answer writes, calls
 reads to `io.EOF`, and closes. A program that gives up in the middle just
 closes.
 
-Two limits are the ones of `tcpraid connect` (`reference-cli.md`). The node
-says that a connection began before it can be sure that the destination took
-it, so a destination that does not answer at all shows as a connection that
-begins and is then cut off. And a `Write` or a `CloseWrite` that returned
-without an error says that the node took the data, which the node may still
-hold.
+A `Write` or a `CloseWrite` that returned without an error says that the
+node took the data, which the node may still hold. Since version 0.11.0 the
+method `Done` says where it got to. Call it after `CloseWrite` and after
+`Read` has returned `io.EOF`:
+
+```go
+if err := conn.Done(ctx); err != nil {
+	// the destination may not have all that was sent
+}
+```
+
+`Done` waits until the node has ended the session, about a second after the
+two directions have ended, and returns nil when the stream ended completely
+in both directions. The other node then wrote everything to its connection
+to the destination and ended that direction in order. Whether the
+destination's program read it is beyond what a node can see, and the
+README names one case, under "Known limits", in which the destination did
+not get all of it. A `*CutError`
+with the node's reason means that the stream was cut off before that. An
+error that matches `ErrNoWord` means that the node cannot say, because it
+runs a version before 0.11.0. A node that no longer knows the session
+answers with an `*Error` of status 404, which is no word that the stream
+ended complete. A node keeps how its last sessions ended for a few minutes.
+
+One limit is shared with `tcpraid connect` (`reference-cli.md`). With a peer
+of a version before 0.11.0 the node says that a connection began before it
+can be sure that the destination took it, so a destination that does not
+answer at all shows as a connection that begins and is then cut off.

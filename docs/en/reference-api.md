@@ -60,7 +60,7 @@ that ran out of time.
 ### GET /api/v1/status
 
 ```
-{"version":"0.10.1","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.11.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
  "sessions":2,"peers":1,"rules":2,"listen":["0.0.0.0:9851"],"advertise":["nas-b.example:9851"]}
 ```
@@ -176,7 +176,7 @@ code. The answer is the new peer, as below.
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.10.1","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.11.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
 `online` means that a control connection with the peer is up. `version` and
@@ -185,7 +185,11 @@ version 0.6.0, is the number of spare connections between the two nodes that
 wait for a session to begin on them, and is absent when there is none.
 `transport`, added in version 0.7.0, holds the transport settings that the
 sessions with the peer use at this node in the place of the node's, and is
-absent when the peer has none (see "Transport settings"). A peer that joined
+absent when the peer has none (see "Transport settings"). `features`, added
+in version 0.11.0, lists what the peer said it can do when the control
+connection came up, by the names of `PROTOCOL.md`. `problem`, added in the
+same version, says why nothing is carried to or from a peer that is online,
+and is absent when there is no such reason. A peer that joined
 this node has no `addresses` and no `paths` here. The pair secret is never in
 an answer, and a proxy is shown without its user and password. Since version
 0.10.0 a path whose proxy has a user and a password in the node says so with
@@ -215,7 +219,7 @@ peer.
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.10.1",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.11.0",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 
@@ -232,7 +236,7 @@ is:
 ```
 $ curl -X PUT ... -d '{"transport":{"window":"8MB","grace":null}}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"9d875c73...b9a2cd07","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"","udp_dial":"","online":true,"version":"0.10.1","last_message":"2026-01-15T10:00:28.39632723Z",
+ "allow":"","udp_dial":"","online":true,"version":"0.11.0","last_message":"2026-01-15T10:00:28.39632723Z",
  "spares":2,"transport":{"window":"8MB"}}
 ```
 
@@ -255,7 +259,7 @@ $ curl -X PUT ... -d '{"subs":4}' http://127.0.0.1:9850/api/v1/peers/nas-a/paths
 {"created":false,"peer":{"name":"nas-a","fingerprint":"e5645f9b...7795ec86","addresses":["nas-a.example.org:9851"],
  "paired_at":"2026-01-15T10:00:20Z",
  "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":4}],
- "allow":"","udp_dial":"","online":true,"version":"0.10.1","last_message":"2026-01-15T10:00:30.643951578Z"}}
+ "allow":"","udp_dial":"","online":true,"version":"0.11.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
 ```
 
 The `DELETE` removes the path and answers with the peer. A peer without that
@@ -466,10 +470,12 @@ When the connection to the destination begins, the node answers
 HTTP/1.1 101 Switching Protocols
 Connection: Upgrade
 Upgrade: tcpraid-connect
+Tcpraid-Session: 5f0c1a7e93b24d6688aa0c3e51d2f7b9
 ```
 
 and from the empty line after these headers the connection carries the data
-of the stream in both directions and nothing else. A stream that ended
+of the stream in both directions and nothing else. `Tcpraid-Session`, added
+in version 0.11.0, is the id of the session that carries the connection. A stream that ended
 completely in both directions ends with an ordinary close of the
 connection. One that was cut off ends with a reset, and over TLS without
 the alert that closes a TLS connection, so that a program never reads the
@@ -487,6 +493,32 @@ HTTP/1.1 403 Forbidden
 `403` is the peer's allow list. Every other reason is `502`: the peer is not
 paired or not connected, the destination could not be reached, the name has
 no address.
+
+### GET /api/v1/sessions/{id}/end
+
+Added in version 0.11.0. It says how the session with that id ended at this
+node, and waits for the end if the session is still going on. A program
+that was handed a connection by `POST /api/v1/connect` asks it after both
+directions of its connection have ended, to learn whether everything it
+sent was passed on.
+
+```
+$ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9850/api/v1/sessions/5f0c1a7e93b24d6688aa0c3e51d2f7b9/end
+{"ended":true,"complete":true,"reason":"done"}
+```
+
+| Field | Meaning |
+|---|---|
+| `ended` | `false` when the session had not ended within the time the request waited. Ask again |
+| `complete` | the stream ended completely in both directions. The other node wrote all of this end's data to its connection to the destination and ended that direction in order, and all of the destination's data was handed over at this node |
+| `reason` | the reason as the node's log has it |
+
+The request waits 30 seconds, or the number of seconds in the query
+(`?wait=10`), 60 at most. `404` means that the node holds no session with
+that id and does not remember the end of one. It keeps the ends of the last
+256 sessions for 5 minutes. A session that ended with `complete` false was
+cut off, or the other node was gone before it said that it had passed
+everything on.
 
 ## Transport settings
 

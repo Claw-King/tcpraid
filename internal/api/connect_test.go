@@ -140,6 +140,50 @@ func TestConnectRoute(t *testing.T) {
 		t.Fatalf("%d bytes came back, and they are not the greeting and what was sent", len(back))
 	}
 
+	// the answer named the session, and the node says how it ended to who holds the token
+	session := resp.Header.Get("Tcpraid-Session")
+	if len(session) != 32 {
+		t.Fatalf("the answer names the session %q, want 32 hexadecimal digits", session)
+	}
+	ask := func(id, token, query string) (int, string) {
+		req, err := http.NewRequest("GET", srv.URL+PathSessions+"/"+id+"/end"+query, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Body.Close()
+		answer, _ := io.ReadAll(r.Body)
+		return r.StatusCode, string(answer)
+	}
+	var end struct {
+		Ended, Complete bool
+		Reason          string
+	}
+	if code, answer := ask(session, b.cfg.Token, ""); code != 200 || json.Unmarshal([]byte(answer), &end) != nil || !end.Ended || !end.Complete {
+		t.Errorf("the end of the session: %d %s", code, answer)
+	}
+	for what, c := range map[string]struct {
+		id, token, query string
+		want             int
+	}{
+		"without the token":         {session, "", "", 401},
+		"with a wrong token":        {session, "wrong", "", 401},
+		"an id that is none":        {"xyz", b.cfg.Token, "", 400},
+		"a wait that is no number":  {session, b.cfg.Token, "?wait=soon", 400},
+		"a session that never was":  {strings.Repeat("0e", 16), b.cfg.Token, "?wait=1", 404},
+		"the session, a short wait": {session, b.cfg.Token, "?wait=0", 200},
+	} {
+		if code, answer := ask(c.id, c.token, c.query); code != c.want {
+			t.Errorf("%s: %d %s, want %d", what, code, answer, c.want)
+		}
+	}
+
 	// the destination that the peer's allow list does not hold
 	if w := a.send("PUT", PathPeers+"/beta", `{"allow":"192.0.2.0/24"}`); w.Code != 200 {
 		t.Fatalf("setting the allow list: %d %s", w.Code, w.Body)

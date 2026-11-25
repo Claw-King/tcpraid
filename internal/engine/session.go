@@ -136,8 +136,11 @@ type session struct {
 	lastFb      time.Time
 	fbStallTill time.Time // feedback stalled recently (a gap over 1 s with data in flight): deeper queues until then
 	peerAllDone bool
-	changeN     uint64    // bumped whenever our state changes (the UDP sender follows it)
-	udp         *udpState // UDP feedback channel (nil = none)
+	// confirmed: the session ended in order and the other end said that it was done
+	// too (set by the monitor when it ends the session; see SessionEvent.Confirmed)
+	confirmed bool
+	changeN   uint64    // bumped whenever our state changes (the UDP sender follows it)
+	udp       *udpState // UDP feedback channel (nil = none)
 	// lifecycle
 	closed   bool
 	everUp   bool
@@ -1594,9 +1597,20 @@ func (s *session) monitor(redial func()) {
 		switch {
 		case finish:
 			time.Sleep(200 * time.Millisecond) // let the last snapshot leave
+			// The other end may be gone with all its sub-connections before it said
+			// that it is done too. It took every chunk, but it may not have written
+			// the last ones to its application: the end is then not confirmed.
+			s.mu.Lock()
+			s.confirmed = s.peerAllDone
+			s.mu.Unlock()
 			s.shutdown("done", false)
 			return
 		case gone:
+			// the other end answered a new sub-connection that the session ended in
+			// order there
+			s.mu.Lock()
+			s.confirmed = true
+			s.mu.Unlock()
 			s.shutdown("done (peer already finished)", false)
 			return
 		case zeroClean:
@@ -1750,6 +1764,7 @@ func (s *session) shutdown(why string, abort bool) {
 	s.chunks, s.pending, s.pendAt, s.sackSize, s.newQ, s.urgQ = nil, nil, nil, nil, nil, nil
 	st := s.st
 	local := s.local
+	confirmed := s.confirmed && !abort
 	udpDiag := ""
 	if u := s.udp; u != nil {
 		udpDiag = fmt.Sprintf(" | udp in %d out %d gap max %.2fs", u.nIn, u.nOut, u.gapMax.Seconds())
@@ -1780,7 +1795,7 @@ func (s *session) shutdown(why string, abort bool) {
 	s.e.registry.Delete(s)
 	if s.e.Watch != nil {
 		s.e.Watch(SessionEvent{Ended: true, ID: s.id, Destination: s.dstAddr, Client: s.isClient, Owner: s.owner,
-			TxBytes: int64(st.txB), RxBytes: int64(st.rxB), Clean: !abort, Why: why})
+			TxBytes: int64(st.txB), RxBytes: int64(st.rxB), Clean: !abort, Confirmed: confirmed, Why: why})
 	}
 	sum := fmt.Sprintf("%.1fs tx %dMB rx %dMB chunks %d resends %d kicks %d subs %d stall %.1fs",
 		time.Since(s.started).Seconds(), st.txB>>20, st.rxB>>20, st.chunks, st.resends, st.kicks, st.subsUp, st.stall.Seconds())

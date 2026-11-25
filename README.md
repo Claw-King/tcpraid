@@ -41,10 +41,10 @@ It adds, on top of the speed:
   resets the application's connection on both sides. That holds when a node
   is stopped, and also when its process is killed or runs out of memory,
   because each node configures the application's connection so that the
-  system resets it if the process dies. Three cases remain and are listed
-  under "Known limits": a reset that arrives while the node ends its sending
-  side over TLS, an empty connection at the stop of a node, and a machine
-  that loses power.
+  system resets it if the process dies. Two cases remain and are listed under
+  "Known limits": an empty connection at the stop of a node, and a machine
+  that loses power. Versions before 0.11.0 have a third, which is listed
+  there too.
 - **Encryption between the two nodes** by default (TLS 1.3). Each node checks
   the other's key against the one it stored when the two were paired.
 
@@ -219,16 +219,16 @@ This is a first version, made by one developer in spare time. What is known:
 - **A host name as the destination of a rule needs version 0.4.0 or later on
   both nodes.** The peer looks the name up for every connection. Nothing is
   kept between two connections, so each one waits for that lookup first.
-- **A reset that another call takes.** The system reports a reset that
-  arrives on a connection to one call only. If a write of the node is that
-  call, the node's read of the same connection sees an ordinary end. Since
-  version 0.10.1 the node allows for this where it writes data to an
-  application and where it answers a SOCKS5 client or a `connect` request.
-  Versions before it could pass such a reset on as the end of a complete
-  stream. In a test written to provoke this, a few of every hundred such
-  connections ended that way. One write is still not covered: the notice
-  with which the node ends its sending side on a connection to the API under
-  `-api-tls`. No test has made a reset arrive at that notice.
+- **A reset that another call takes, in versions before 0.11.0.** The system
+  reports a reset that arrives on a connection to one call only. If a write
+  of the node is that call, the node's read of the same connection sees an
+  ordinary end. Versions before 0.10.1 could pass such a reset on as the end
+  of a complete stream. In a test written to provoke this, a few of every
+  hundred such connections ended that way. Since version 0.10.1 the node
+  allows for it where it writes data to an application and where it answers
+  a SOCKS5 client or a `connect` request, and since version 0.11.0 also where
+  it ends its sending side on a connection to the API under `-api-tls`,
+  which is a write too.
 - **Stopping a node while a destination is still being connected.** If a node
   is stopped at the very moment a session that has just begun is connecting to
   its destination at that node, the destination may see a connection that is
@@ -240,12 +240,14 @@ This is a first version, made by one developer in spare time. What is known:
   tells its peers. If it was killed, they see it as soon as it is back and
   the two are connected again, usually within seconds. A node that comes back
   says that it runs as a new process, and the other node resets what it still
-  held for the old one. Two cases wait longer, until the 15 minutes
-  (`-grace`) are over: a node that does not come back, and a session that had
-  begun only seconds (up to about ten) before its peer was killed. Nodes of
-  version 0.1.1 or older neither say that they are new nor act on hearing it.
-  With one of them on either side, a node that is killed may leave the other
-  waiting the 15 minutes.
+  held for the old one. A node that does not come back leaves the other
+  waiting until the 15 minutes (`-grace`) are over. So does a session that
+  had begun only seconds (up to about ten) before its peer was killed, unless
+  both nodes run version 0.11.0 or later: such nodes ask the new process which
+  of those sessions it holds, and reset the others. Nodes of version 0.1.1 or
+  older neither say that they are new nor act on hearing it. With one of them
+  on either side, a node that is killed may leave the other waiting the 15
+  minutes.
 - **A machine that loses power or freezes** sends nothing. The applications
   next to it see no end of their connections until their own timeouts. The
   node at the other site holds its sessions as described in the previous
@@ -268,19 +270,39 @@ This is a first version, made by one developer in spare time. What is known:
   (`docs/en/security.md`).
 - **A listener limits, but does not prevent,** what someone can do by holding
   many connections open against it (`docs/en/security.md`).
-- **Both nodes must run the same wire protocol version.** There is no
-  negotiation.
-- **A SOCKS5 rule and `tcpraid connect` say "connected" before they can be
-  sure.** The other node reports immediately that it took a connection, and
-  only afterwards if it could not reach the destination. So the node waits
-  150 milliseconds for such a report and then tells the client that the
-  connection began. A destination that refuses, or that the allow list does
-  not hold, is usually reported in that time. A destination that does not answer at
-  all is reported later, and the client sees a connection that began and is
-  then reset. The exit status 0 of `tcpraid connect` says that the node took
-  the whole input. A cut after that reaches the destination as a reset and
-  is not seen by the command, which has ended. Both came with version 0.9.0
-  and were run in containers, with `curl` as the SOCKS5 client.
+- **There is one version of the wire protocol.** Two nodes say to each other
+  which versions they speak and what they can do beyond the first release,
+  and use only what both name (`PROTOCOL.md`). A node carries nothing to or
+  from a peer that lists no version it speaks, and `tcpraid peers` says so.
+  All releases so far speak version 1, so that case has only been run in
+  tests.
+- **Three things need version 0.11.0 on both nodes.** They are the answer
+  "connected" of a SOCKS5 rule and of `tcpraid connect` that waits until the
+  other node has reached the destination, the SOCKS5 reply for a destination
+  that refuses, and the reset of a session that began seconds before its
+  peer was killed. With an older node at the other end, a node tells the
+  client that the connection began 150 milliseconds after the other node
+  took it, and a destination that does not answer at all shows as a
+  connection that began and is then reset. The exit status of
+  `tcpraid connect` that says whether the whole input was passed on needs
+  version 0.11.0 on the node next to the command only.
+- **The word "connected" can be lost.** The other node says once, on the
+  control connection, that it has reached the destination. If that
+  connection ends at that very moment, the word does not arrive, and a
+  client whose protocol waits for the answer before it sends anything is
+  told after 12 seconds that the connection did not begin, although the
+  destination was reached. A destination that speaks first is not affected.
+- **Exit status 0 of `tcpraid connect` says where the input got to, not that
+  it was read.** It says that the other node wrote the whole input to its
+  connection to the destination and ended that direction in order. Whether
+  the destination's program read it is beyond what a node can see. In one
+  case less than that holds. When the process of the other node is killed
+  within about a second after it wrote the last of the input, the system
+  throws away what the destination has not taken from that connection yet
+  and resets it. The destination sees the reset, and the command can still
+  end with status 0. The command ends about a second after the two
+  directions have, because it waits for the node's word. SOCKS5 rules and `tcpraid connect` were run in
+  containers, with `curl` as the SOCKS5 client.
 - **The exported configuration is not a backup.** It holds no key and no
   pair secret, so it cannot bring a node back or pair one. Keep the data
   directory for that.

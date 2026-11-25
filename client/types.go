@@ -116,6 +116,12 @@ type Peer struct {
 	// Spares (since 0.6.0) is the number of spare connections between the two nodes
 	// that wait for a session to begin on them; absent when there is none.
 	Spares int `json:"spares,omitempty"`
+	// Features (since 0.11.0) is what the peer said it can do when the control
+	// connection came up, by the names of PROTOCOL.md; absent before that.
+	Features []string `json:"features,omitempty"`
+	// Problem (since 0.11.0) says why no connection is carried to or from the peer
+	// although it is online; absent when there is no such reason.
+	Problem string `json:"problem,omitempty"`
 	// Transport (since 0.7.0) holds the transport settings that sessions with the peer
 	// use at this node in the place of the node's, by name, each written as on the
 	// command line ("window": "256MB"); absent when the peer has none.
@@ -355,6 +361,22 @@ type PathTest struct {
 // ConnectUpgrade names the protocol of a connection after a connect request was
 // answered with 101: the stream itself.
 const ConnectUpgrade = "tcpraid-connect"
+
+// SessionHeader is the header of the 101 answer to a connect request that holds the id
+// of the session that carries the connection (since 0.11.0).
+const SessionHeader = "Tcpraid-Session"
+
+// SessionEnd is the answer of GET /api/v1/sessions/{id}/end (since 0.11.0): how a
+// session ended at the node. Ended is false when the session had not ended within the
+// time the request waited. Complete says that the stream ended completely in both
+// directions: the other node wrote all of this end's data to the destination and
+// ended that direction in order, and all of the destination's data was handed over.
+// Reason is the reason as the node's log has it.
+type SessionEnd struct {
+	Ended    bool   `json:"ended"`
+	Complete bool   `json:"complete"`
+	Reason   string `json:"reason,omitempty"`
+}
 
 // ConnectRequest asks for a connection to host:port as seen from the peer. Host is an
 // IP address or a host name, which the peer looks up.

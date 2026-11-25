@@ -97,6 +97,13 @@ type PeerStatus struct {
 	// Spares is the number of spare connections between the two nodes that wait for a
 	// session, whichever node opened them.
 	Spares int
+	// Features is what the peer's last hello said it can do, in the peer's words made
+	// printable; none before a hello arrived.
+	Features []string
+	// Problem, if not empty, says why no session is opened with the peer although it
+	// is connected: its hello lists no version of the wire protocol that this node
+	// speaks.
+	Problem string
 }
 
 // peerControl is what the runtime keeps about the control connections with one peer.
@@ -121,6 +128,12 @@ type peerControl struct {
 	lastOf             time.Time
 	// features is what the peer's last hello said it can do (control.FeaturePathTest).
 	features []string
+	// noCommon, if not empty, says that the peer's last hello listed no version of
+	// the wire protocol that this node speaks: no session is opened with it.
+	noCommon string
+	// answering: a held of the peer is being answered. One is answered at a time, and
+	// another that comes meanwhile is passed over.
+	answering bool
 	// Spare connections (spare.go). spareAsked is how many this node last asked the
 	// peer to keep to it over a control connection that is still up (-1: it has not
 	// asked). spareWant is how many the peer asked this node to keep; spareIdle are the
@@ -179,7 +192,8 @@ type reverseEntry struct {
 }
 
 // features are what this node says it can do in every hello.
-var features = []string{control.FeaturePathTest, control.FeatureResolve, control.FeatureRulePaths, control.FeatureDialBoth, control.FeatureSpare}
+var features = []string{control.FeaturePathTest, control.FeatureResolve, control.FeatureRulePaths, control.FeatureDialBoth, control.FeatureSpare,
+	control.FeatureHeld, control.FeatureSessionOK}
 
 // maxFeatures bounds what is kept of the features a peer names.
 const maxFeatures = 16
@@ -355,7 +369,11 @@ func (rt *Runtime) runControl(peer node.Peer, conn net.Conn, dialed bool) {
 // serveControl says hello, pings, and handles the messages of cc until it fails; it
 // returns why. done is closed by the caller when it has returned.
 func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}) error {
-	hello := control.Message{Type: control.TypeHello, Name: rt.Node.Name(), Version: rt.Version, Protocols: []int{control.Protocol}, Instance: rt.instance}
+	protocols := []int{control.Protocol}
+	if rt.protocols != nil {
+		protocols = rt.protocols
+	}
+	hello := control.Message{Type: control.TypeHello, Name: rt.Node.Name(), Version: rt.Version, Protocols: protocols, Instance: rt.instance}
 	if !rt.noFeatures {
 		hello.Features = features
 		switch {
@@ -367,6 +385,8 @@ func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}
 			hello.Features = []string{control.FeaturePathTest, control.FeatureResolve, control.FeatureRulePaths}
 		case rt.noSpare:
 			hello.Features = []string{control.FeaturePathTest, control.FeatureResolve, control.FeatureRulePaths, control.FeatureDialBoth}
+		case rt.noHeld:
+			hello.Features = []string{control.FeaturePathTest, control.FeatureResolve, control.FeatureRulePaths, control.FeatureDialBoth, control.FeatureSpare}
 		}
 	}
 	if err := cc.Send(hello); err != nil {
@@ -396,6 +416,7 @@ func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}
 		now := time.Now()
 		pc.last = now
 		var oldUntil time.Time
+		noCommon := ""
 		if m.Type == control.TypeHello {
 			pc.greeted = true
 			pc.version = printable(m.Version, 64)
@@ -403,14 +424,25 @@ func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}
 			for _, f := range m.Features[:min(len(m.Features), maxFeatures)] {
 				pc.features = append(pc.features, printable(f, 32))
 			}
+			// the versions of the wire protocol the two nodes list: with none in
+			// common no session is opened, and the log says so once
+			if said := noCommonProtocol(cc.peer, m.Protocols, protocols); said != pc.noCommon {
+				pc.noCommon, noCommon = said, said
+			}
 			oldUntil = pc.hello(cc, printable(m.Instance, 64))
 		}
 		if cc.instance != "" && cc.instance == pc.instance {
 			pc.lastOf = now
 		}
 		rt.mu.Unlock()
+		if noCommon != "" {
+			rt.logf("%s No connection is carried to or from this peer.", noCommon)
+		}
 		if !oldUntil.IsZero() {
 			rt.peerRestarted(cc.peer, oldUntil)
+			// the sessions that began later may be the old process's or the new
+			// one's: the new one is asked
+			rt.askHeld(cc, oldUntil)
 		}
 		switch m.Type {
 		case control.TypeHello:
@@ -443,6 +475,23 @@ func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}
 			if id, err := hex.DecodeString(m.Session); err == nil && len(id) == 16 {
 				rt.Engine.EndTest(cc.peer, [16]byte(id))
 			}
+		case control.TypeHeld:
+			rt.mu.Lock()
+			busy := pc.answering
+			pc.answering = true
+			rt.mu.Unlock()
+			if !busy {
+				go func() {
+					rt.serveHeld(cc, m)
+					rt.mu.Lock()
+					pc.answering = false
+					rt.mu.Unlock()
+				}()
+			}
+		case control.TypeHeldReply:
+			rt.heldAnswered(cc, m)
+		case control.TypeSessionOK:
+			rt.sessionOK(cc.peer, m)
 		}
 		// hello and pong need nothing more; a type this version does not know is ignored
 	}
@@ -453,7 +502,12 @@ func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}
 // know them; left alone, each would wait out the grace time with its application
 // connection open.
 func (rt *Runtime) peerRestarted(name string, oldUntil time.Time) {
-	owners := rt.Engine.AbortPeerBefore(name, oldUntil, "the peer's node was restarted")
+	rt.restarted(name, rt.Engine.AbortPeerBefore(name, oldUntil, "the peer's node was restarted"))
+}
+
+// restarted logs, and notes at their rules, that the sessions of these owners were
+// reset because the process of the peer called name that held them is gone.
+func (rt *Runtime) restarted(name string, owners []engine.Owner) {
 	if len(owners) == 0 {
 		return
 	}
@@ -559,7 +613,8 @@ func (rt *Runtime) PeerStatus(name string) PeerStatus {
 	if pc == nil {
 		return PeerStatus{}
 	}
-	return PeerStatus{Online: len(pc.conns) > 0, Version: pc.version, LastMessage: pc.last, Spares: len(pc.spareIdle) + len(rt.spares[name])}
+	return PeerStatus{Online: len(pc.conns) > 0, Version: pc.version, LastMessage: pc.last, Spares: len(pc.spareIdle) + len(rt.spares[name]),
+		Features: slices.Clone(pc.features), Problem: pc.noCommon}
 }
 
 // dropControlLocked ends everything about the control connections with the peer called name
@@ -832,6 +887,10 @@ func (rt *Runtime) serveOpen(pc *peerControl, cc *ctlConn, m control.Message) {
 	failForGood := func(reason string) {
 		cc.Send(control.Message{Type: control.TypeOpenFail, Request: m.Request, Reason: reason, Code: control.CodeNoPath})
 	}
+	if err := rt.speaks(cc.peer); err != nil {
+		fail("the two nodes list no version of the wire protocol in common")
+		return
+	}
 	ps, err := rt.peerFor(cc.peer)
 	if err != nil {
 		// no path to the peer, or the pairing has just ended
@@ -920,6 +979,7 @@ func (rt *Runtime) serveOpen(pc *peerControl, cc *ctlConn, m control.Message) {
 			Valid:      ps.valid,
 			Sink:       rt.sink,
 			DialFailed: rt.tellFailure(peer.Name),
+			Dialed:     rt.tellConnected(peer.Name),
 			Config:     rt.settingsFor(peer, ""),
 		})
 	}()

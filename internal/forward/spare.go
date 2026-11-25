@@ -303,6 +303,7 @@ func (rt *Runtime) serveSpare(pc *peerControl, ps *peerState, conn net.Conn) {
 		Valid:      ps.valid,
 		Sink:       rt.sink,
 		DialFailed: rt.tellFailure(peer.Name),
+		Dialed:     rt.tellConnected(peer.Name),
 	}, func(opt *engine.SubOptions) {
 		// the peer begins a session on it: the next spare is due. What the node keeps
 		// for the peer may have changed since the spare was opened, and the session is

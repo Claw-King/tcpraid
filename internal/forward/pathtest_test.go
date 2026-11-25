@@ -491,7 +491,8 @@ func TestPathsReplyNamesNoAddress(t *testing.T) {
 	}
 	cc, _ := b.control(t)
 	hello := expect(t, cc, control.TypeHello)
-	if !slices.Equal(hello.Features, []string{control.FeaturePathTest, control.FeatureResolve, control.FeatureRulePaths, control.FeatureDialBoth, control.FeatureSpare}) {
+	if !slices.Equal(hello.Features, []string{control.FeaturePathTest, control.FeatureResolve, control.FeatureRulePaths, control.FeatureDialBoth, control.FeatureSpare,
+		control.FeatureHeld, control.FeatureSessionOK}) {
 		t.Errorf("the hello names the features %v", hello.Features)
 	}
 	if err := cc.Send(control.Message{Type: control.TypePaths, Request: 7}); err != nil {

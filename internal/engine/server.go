@@ -2,10 +2,12 @@ package engine
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -167,8 +169,14 @@ type SubOptions struct {
 	// cannot be reached.
 	Sink func() (net.Conn, string)
 	// DialFailed, if not nil, is told when a session could not be connected to its
-	// destination, before the other end is: code is DialRefused or DialError.
-	DialFailed func(id [16]byte, code, reason string)
+	// destination, before the other end is: code is DialRefused or DialError. With
+	// DialError, kind says which kind of failure it was where the error's number
+	// says so (KindRefused, KindTimeout, KindUnreachable), and is empty otherwise.
+	DialFailed func(id [16]byte, code, kind, reason string)
+	// Dialed, if not nil, is told when a session was connected to its destination.
+	// It is called from the goroutine that connected, before the session carries
+	// data, and must return at once.
+	Dialed func(id [16]byte)
 	// Config, if not nil, are the settings a session that the call creates runs with,
 	// instead of the engine's: the session takes a copy when it is created.
 	Config *Config
@@ -179,6 +187,29 @@ const (
 	DialRefused = "allow" // the destination is not in the allow list
 	DialError   = "dial"  // connecting to the destination failed; the reason is the system's error
 )
+
+// The kinds DialFailed gives with DialError.
+const (
+	KindRefused     = "refused"     // the destination refused the connection
+	KindTimeout     = "timeout"     // the destination did not answer in time
+	KindUnreachable = "unreachable" // no route to the destination's host or network
+)
+
+// dialKind says of which kind the error of connecting to a destination is, by the
+// error's number and never by its text, which differs from system to system. The
+// numbers for a refusal and for no route are the system's (isRefused, isUnreachable).
+func dialKind(err error) string {
+	var ne net.Error
+	switch {
+	case isRefused(err):
+		return KindRefused
+	case isUnreachable(err):
+		return KindUnreachable
+	case isTimedOut(err) || errors.Is(err, os.ErrDeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()):
+		return KindTimeout
+	}
+	return ""
+}
 
 // SinkPort and SinkIP are the destination of a session that ends inside the other end
 // (SubOptions.Sink). No application connection can have it: port 0 is not a port.
@@ -393,16 +424,16 @@ func (e *Engine) serveSub(c net.Conn, opt SubOptions, r *Route, join *session, s
 	added := ok(s)
 	// dial outside the server lock: a slow destination must not hold up others
 	go func() {
-		failed := func(code, why string) {
+		failed := func(code, kind, why string) {
 			if opt.DialFailed != nil {
-				opt.DialFailed(h.id, code, why)
+				opt.DialFailed(h.id, code, kind, why)
 			}
 			s.dialFail(why)
 		}
 		if sink {
 			d, why := opt.Sink()
 			if d == nil {
-				failed(DialError, why)
+				failed(DialError, "", why)
 				return
 			}
 			if !s.setLocal(d) {
@@ -418,16 +449,19 @@ func (e *Engine) serveSub(c net.Conn, opt SubOptions, r *Route, join *session, s
 			if name == "" {
 				name = "-allow"
 			}
-			failed(DialRefused, "not in "+name)
+			failed(DialRefused, "", "not in "+name)
 			return
 		}
 		d, err := net.DialTimeout("tcp", s.dstAddr, 10*time.Second)
 		if err != nil {
-			failed(DialError, err.Error())
+			failed(DialError, dialKind(err), err.Error())
 			return
 		}
 		// from here on, a process that dies resets the destination
 		ArmReset(d)
+		if opt.Dialed != nil {
+			opt.Dialed(h.id)
+		}
 		if !s.setLocal(d) {
 			resetClose(d)
 			return

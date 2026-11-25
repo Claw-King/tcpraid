@@ -140,5 +140,18 @@ func connect(dataDir string, req api.ConnectRequest, in io.Reader, out io.Writer
 	if err := <-sent; err != nil {
 		return connectCut, fmt.Errorf("the connection was cut off while sending: %v", err)
 	}
-	return connectDone, nil
+	// Both directions have ended at this end. The node may still hold input that the
+	// destination has not been given, so the command asks the node how the session
+	// ended, and waits for that: only a stream that ended completely in both
+	// directions is a status 0. A node before 0.11.0 does not say, and the command
+	// ends as it did then.
+	var cut *client.CutError
+	switch err := conn.Done(context.Background()); {
+	case err == nil, errors.Is(err, client.ErrNoWord):
+		return connectDone, nil
+	case errors.As(err, &cut):
+		return connectCut, fmt.Errorf("the connection was cut off before the destination had all of the input: %s", cut.Reason)
+	default:
+		return connectCut, fmt.Errorf("the node took all of the input, and how the connection ended could not be asked: %v", err)
+	}
 }

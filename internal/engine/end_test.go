@@ -47,7 +47,7 @@ func TestCarrySaysHowTheSessionEnded(t *testing.T) {
 	}
 	exit := New(DefaultConfig())
 	addr := subListener(t, exit, SubOptions{Keys: k, Peer: "alpha", Allow: allow, AllowName: "the allow list of the peer",
-		DialFailed: func(id [16]byte, code, reason string) {
+		DialFailed: func(id [16]byte, code, _, reason string) {
 			mu.Lock()
 			failures[id] = failure{code, reason}
 			mu.Unlock()
@@ -168,7 +168,7 @@ func TestSinkSession(t *testing.T) {
 	plain := New(DefaultConfig())
 	var told string
 	var mu sync.Mutex
-	addr = subListener(t, plain, SubOptions{Keys: k, Peer: "alpha", DialFailed: func(_ [16]byte, code, _ string) { mu.Lock(); told = code; mu.Unlock() }})
+	addr = subListener(t, plain, SubOptions{Keys: k, Peer: "alpha", DialFailed: func(_ [16]byte, code, _, _ string) { mu.Lock(); told = code; mu.Unlock() }})
 	route = entry.NewRoute([]DialGroup{{Name: "p", Want: 1, Dial: dialTo(addr)}}, k, "")
 	app, done = carry(route, SinkIP, SinkPort, owner)
 	defer app.Close()

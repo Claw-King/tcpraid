@@ -176,6 +176,9 @@ func (e *Engine) begin(cfg *Config, c net.Conn, ip net.IP, port int, ks keys, ud
 	}
 	s := e.newSessionWith(cfg, id, c, true, fmt.Sprintf("%s:%d", ip, port), ks, owner)
 	e.smu.Unlock()
+	if l, ok := c.(idListener); ok {
+		l.SessionID(id)
+	}
 	s.udpSetup(ks, udpDial)
 	return s
 }

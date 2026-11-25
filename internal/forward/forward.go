@@ -84,6 +84,9 @@ type Runtime struct {
 	peers       map[string]*peerState          // by peer name
 	ctl         map[string]*peerControl        // control connections, by peer name
 	reverse     map[reverseKey]*reverseEntry   // sessions whose sub-connections a peer was asked to open
+	waiting     map[failKey]*openConn          // entries that wait for a peer's word that a session is connected (held.go)
+	heldAsked   map[string]*heldQuery          // peer name -> what this node asked it after its restart (held.go)
+	heldSeq     uint64                         // the number of the last such question
 	transparent bool                           // ServeTransparent runs
 	times       times                          // set before Start, read after
 	// instance is the number this process says in every hello: picked at Start, so it
@@ -102,6 +105,18 @@ type Runtime struct {
 	noRulePaths bool
 	noDialBoth  bool
 	noSpare     bool
+	// noHeld: the hello names neither the held nor the session-ok feature (to be
+	// 0.10.x).
+	noHeld bool
+	// protocols, if not nil, are the versions of the wire protocol the hello lists in
+	// the place of control.Protocol (a test sets it before Start to be a node that
+	// speaks another version).
+	protocols []int
+	// How the sessions of this node ended (held.go). endMu guards ends and endCh, and
+	// nothing else is taken under it.
+	endMu sync.Mutex
+	ends  map[[16]byte]endRecord
+	endCh chan struct{}
 	// Spares is how many spare connections this node asks a peer for that it holds no
 	// path to, and the most it keeps to one peer that asks for them: control.MaxSpares
 	// at most, 0 for none. Set before Start.
@@ -115,6 +130,10 @@ type Runtime struct {
 	// for the peer to report a failure after the peer took the session, in the place
 	// of 150 ms (entry.go). Set before Start.
 	EntrySettle time.Duration
+	// EntryConfirm, if not zero, is how long such an entry waits for a peer that tells
+	// when it has connected a session to say so, in the place of 12 s. Set before
+	// Start.
+	EntryConfirm time.Duration
 	// socksOpening, if not zero, is the time a client of a SOCKS5 rule has for its
 	// request, in the place of socksOpeningTime (a test sets it before Start).
 	socksOpening time.Duration
@@ -234,6 +253,18 @@ func (rt *Runtime) Start(ctx context.Context) {
 	rt.ctl = map[string]*peerControl{}
 	rt.reverse = map[reverseKey]*reverseEntry{}
 	rt.spares = map[string][]*spareConn{}
+	rt.waiting = map[failKey]*openConn{}
+	rt.heldAsked = map[string]*heldQuery{}
+	// the end of every session is kept for a while; whoever watched before still does
+	if rt.Engine != nil {
+		watch := rt.Engine.Watch
+		rt.Engine.Watch = func(ev engine.SessionEvent) {
+			rt.sessionEvent(ev)
+			if watch != nil {
+				watch(ev)
+			}
+		}
+	}
 	rt.Spares = max(0, min(rt.Spares, control.MaxSpares))
 	rt.mu.Unlock()
 	go rt.superviseControl(ctx)
@@ -441,6 +472,11 @@ func (rt *Runtime) carryNamed(r node.Rule, c net.Conn, host string, port int) {
 // carryAttempt carries the connection that a stands for; see carry. Who opens the
 // sub-connections is the rule's to say (Rule.Dial).
 func (rt *Runtime) carryAttempt(a *attempt, r node.Rule, c net.Conn, ip net.IP, port int) {
+	if err := rt.speaks(r.Peer); err != nil {
+		a.fail(err.Error())
+		reset(c)
+		return
+	}
 	peer, ok := rt.Node.Peer(r.Peer)
 	holds := ok && len(peer.Paths) > 0
 	switch mode := r.DialMode(); {
@@ -727,6 +763,7 @@ func (rt *Runtime) HandleSub(peer node.Peer, conn net.Conn) {
 		Valid:      rt.validFor(peer),
 		Sink:       rt.sink,
 		DialFailed: rt.tellFailure(peer.Name),
+		Dialed:     rt.tellConnected(peer.Name),
 		Config:     rt.settingsFor(peer, ""),
 	})
 }

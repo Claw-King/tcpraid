@@ -302,6 +302,9 @@ func peerState(p api.Peer) string {
 		if p.Version != "" {
 			s += ", runs " + p.Version
 		}
+		if p.Problem != "" {
+			s += ", no version of the wire protocol in common"
+		}
 	}
 	if p.LastMessage != nil {
 		s += ", last heard " + p.LastMessage.Local().Format(time.RFC3339)
@@ -565,6 +568,12 @@ func cmdPeers(args []string, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stdout, "paired       %s\n", p.PairedAt.Local().Format(time.RFC3339))
 				fmt.Fprintf(stdout, "addresses    %s\n", addrs)
 				fmt.Fprintf(stdout, "state        %s\n", peerState(p))
+				if p.Problem != "" {
+					fmt.Fprintf(stdout, "problem      %s\n", p.Problem)
+				}
+				if len(p.Features) > 0 {
+					fmt.Fprintf(stdout, "features     %s\n", strings.Join(p.Features, ", "))
+				}
 				if p.Allow != "" {
 					fmt.Fprintf(stdout, "allow        %s\n", p.Allow)
 				}

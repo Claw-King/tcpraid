@@ -43,8 +43,8 @@ taken  0.0.0.0:9700  nas-a  192.0.2.10:873  0         FAILED: listening on 0.0.0
 | "the rule lets only peer ... open the connections (dial peer), and the peer is not connected to this node" | 规则带了 `-dial peer`，而和对端之间没有控制连接连着。`tcpraid peers` 会显示对端离线。见“对端离线” |
 | "the rule lets both nodes open the connections (dial both), which needs a path on each node, and ..." | 规则带了 `-dial both`，报错的后半句说明是哪个节点没有通往另一个节点的路径，或者没有规则点名的任何一条路径。在那个节点上加路径，或者换一个 `-dial` 重新添加规则 |
 | "peer ... does not open connections of a session that the other node opens connections of too (it runs version ...)" | 规则带了 `-dial both`，而对端的版本早于 0.6.0。升级它，或者换一个 `-dial` |
-| SOCKS5 客户端报告应答码 2、4 或 1 | 规则没能承载这条连接。2 是对面节点的允许列表，4 是对面节点连不上目的地或找不到名字，1 是其余情况。`tcpraid rules` 里有最近一次的原因(见 `reference-cli.md` 的“SOCKS5 规则”) |
-| SOCKS5 客户端或 `tcpraid connect` 的连接刚开始就被重置 | 对面节点接下了连接，事后才发现目的地没有回应。SOCKS5 规则的原因在 `tcpraid rules` 里。`tcpraid connect` 的原因在节点的日志里，那一行以 `connect:` 开头 |
+| SOCKS5 客户端报告应答码 2、4、5 或 1 | 规则没能承载这条连接。2 是对面节点的允许列表，5 是目的地拒绝了对面节点，4 是对面节点因为别的原因连不上目的地或找不到名字，1 是其余情况。`tcpraid rules` 里有最近一次的原因(见 `reference-cli.md` 的“SOCKS5 规则”) |
+| SOCKS5 客户端或 `tcpraid connect` 的连接刚开始就被重置 | 对面节点的版本早于 0.11.0。它接下了连接，事后才发现目的地没有回应。SOCKS5 规则的原因在 `tcpraid rules` 里。`tcpraid connect` 的原因在节点的日志里，那一行以 `connect:` 开头 |
 | `tcpraid connect` 以状态 3 结束 | 到目的地的连接没有开始。原因在它的标准错误里，说法和上面各行相同 |
 | `tcpraid connect` 以状态 1 结束，并说 "does not carry connections for other programs" | 本机上的节点比 0.9.0 旧。更新它 |
 | "hook: N events were not given to the hook, because 4 runs of it were going on" | 事件来得比钩子返回得快，而节点不等它。让 `-hook` 的程序快一些，或者让它把活儿启动起来就返回。`reference-files.md` 写了钩子能指望什么 |

@@ -52,6 +52,7 @@ const (
 	socksGeneralFailure  = 1
 	socksNotAllowed      = 2 // connection not allowed by ruleset
 	socksHostUnreachable = 4
+	socksConnRefused     = 5 // connection refused
 	socksCmdUnsupported  = 7
 	socksAddrUnsupported = 8
 )
@@ -214,8 +215,8 @@ func (rt *Runtime) serveSocks(r node.Rule, c net.Conn, opening *atomic.Int32) {
 		}
 		return
 	}
-	oc := rt.newOpenConn(c, c, func() error { return socksReply(c, socksSucceeded) })
-	began, _, code := rt.carryEntry(r, oc, host, port)
+	oc := rt.newOpenConn(r.Peer, c, c, func(string) error { return socksReply(c, socksSucceeded) })
+	began, _, code, kind := rt.carryEntry(r, oc, host, port)
 	if began {
 		return
 	}
@@ -227,6 +228,10 @@ func (rt *Runtime) serveSocks(r node.Rule, c net.Conn, opening *atomic.Int32) {
 		rep = socksNotAllowed
 	case control.CodeDial, control.CodeLookup:
 		rep = socksHostUnreachable
+		if kind == control.KindRefused {
+			// the peer said that the destination refused (version 0.11.0 or later)
+			rep = socksConnRefused
+		}
 	}
 	socksRefuse(c, rep)
 }

@@ -65,6 +65,7 @@ type attempt struct {
 	// still say why; known is closed when it has.
 	text    string
 	code    string
+	kind    string // of a failed connect at the peer, as far as the peer said (control.KindRefused, ...)
 	pending bool
 	known   chan struct{}
 }
@@ -84,6 +85,7 @@ type failKey struct {
 // said it: the text is already made printable.
 type failDetail struct {
 	code, reason string
+	kind         string // one of the kinds of package control, or empty
 	at           time.Time
 }
 
@@ -119,7 +121,7 @@ func (a *attempt) setCode(code string) {
 // reason returns why the connection was not carried, as fail recorded it, and the code
 // that goes with it. Where the peer may still say why its end could not connect the
 // session, it waits for that, wait at most.
-func (a *attempt) reason(wait time.Duration) (text, code string) {
+func (a *attempt) reason(wait time.Duration) (text, code, kind string) {
 	rt := a.rt
 	rt.mu.Lock()
 	pending := a.pending
@@ -134,7 +136,7 @@ func (a *attempt) reason(wait time.Duration) (text, code string) {
 	}
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	return a.text, a.code
+	return a.text, a.code, a.kind
 }
 
 // fail records what went wrong with the connection. Only the first call counts.
@@ -228,6 +230,7 @@ func (rt *Runtime) ended(a *attempt, peer, dst string, end engine.End) {
 		d, told := rt.details[key]
 		if told {
 			delete(rt.details, key)
+			a.kind = d.kind
 			a.setCode(d.code)
 		} else if rt.recent != nil {
 			prune(rt.recent, func(r recentEnd) time.Time { return r.at })
@@ -307,8 +310,8 @@ func prune[K comparable, V any](m map[K]V, at func(V) time.Time) {
 // tellFailure returns what the engine calls when this node could not connect a session
 // of the peer to its destination: the peer is told why on a control connection, if one
 // is up. The engine tells it afterwards that the session failed.
-func (rt *Runtime) tellFailure(peer string) func(id [16]byte, code, reason string) {
-	return func(id [16]byte, code, reason string) {
+func (rt *Runtime) tellFailure(peer string) func(id [16]byte, code, kind, reason string) {
+	return func(id [16]byte, code, kind, reason string) {
 		cc := rt.liveControl(peer)
 		if cc == nil {
 			return
@@ -316,7 +319,7 @@ func (rt *Runtime) tellFailure(peer string) func(id [16]byte, code, reason strin
 		if len(reason) > maxReason {
 			reason = reason[:maxReason]
 		}
-		cc.Send(control.Message{Type: control.TypeSessionFail, Session: hex.EncodeToString(id[:]), Code: code, Reason: reason})
+		cc.Send(control.Message{Type: control.TypeSessionFail, Session: hex.EncodeToString(id[:]), Code: code, Kind: kind, Reason: reason})
 	}
 }
 
@@ -330,6 +333,10 @@ func (rt *Runtime) sessionFailed(peer string, m control.Message) {
 	}
 	key := failKey{peer, strings.ToLower(m.Session)}
 	d := failDetail{code: printable(m.Code, 16), reason: printable(m.Reason, maxReason), at: time.Now()}
+	switch m.Kind {
+	case control.KindRefused, control.KindTimeout, control.KindUnreachable:
+		d.kind = m.Kind
+	}
 	rt.mu.Lock()
 	if rt.details == nil {
 		rt.mu.Unlock()
@@ -340,6 +347,7 @@ func (rt *Runtime) sessionFailed(peer string, m control.Message) {
 		delete(rt.recent, key)
 		// the text first: setCode wakes whoever waits for the reason
 		r.a.text = unreachable(peer, r.dst, d)
+		r.a.kind = d.kind
 		r.a.setCode(d.code)
 	} else {
 		prune(rt.details, func(d failDetail) time.Time { return d.at })

@@ -41,7 +41,7 @@ after telling its peers and resetting the application connections it carries.
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.10.1 (wire protocol 1)
+version      0.11.0 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -94,7 +94,8 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.10.1, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.11.0, last heard 2026-01-15T10:00:05Z
+features     path-test, resolve, rule-paths, dial-both, spare, held, session-ok
 spares       2 connections wait for a session to begin on them
 
 PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS  MARK
@@ -110,6 +111,12 @@ peer nas-b removed. The other node is not told and still lists this one.
 - `peers show NAME` has a `spares` line while spare connections with the
   peer wait for a session (`connecting.md`, "Spare connections"). Either
   node shows the same number.
+- Since version 0.11.0 `peers show NAME` has a `features` line with what the
+  peer said it can do when the control connection came up, by the names of
+  `PROTOCOL.md`. Two nodes use a feature only when both name it. A `problem`
+  line appears when the peer lists no version of the wire protocol that this
+  node speaks. Nothing is carried to or from such a peer, and `tcpraid peers`
+  shows it as `online, no version of the wire protocol in common`.
 - `peers check NAME` opens a connection on every path, in the path's tier,
   and asks the other node to prove that it holds the pairing. A path with
   several addresses is checked at each of them, one line for each. The
@@ -484,19 +491,25 @@ The node answers a request with one of these reply codes of SOCKS5:
 | 0, succeeded | the connection to the destination began |
 | 2, connection not allowed by ruleset | the peer's allow list does not let the destination through |
 | 4, host unreachable | the peer could not connect to the destination, or could not find the address of the name |
+| 5, connection refused | the destination refused the peer's connection. A peer of a version before 0.11.0 does not say that it was a refusal, and the code is then 4 |
 | 7, command not supported | the request is not CONNECT |
 | 8, address type not supported | the address is none of the three kinds |
 | 1, general SOCKS server failure | everything else: the peer is not connected, the peer is too old to look a name up, the name cannot be a host name, the port is 0. `tcpraid rules` shows the reason |
 
-The peer tells this node immediately that it took a connection, and tells it
-only afterwards if it could not connect to the destination. So the node
+Since version 0.11.0 the peer tells this node when it has connected to the
+destination, and the node answers "succeeded" then, or when data arrives
+from the destination. A destination that does not answer the peer at all
+gets code 4 after the 10 seconds that the peer gives a connect. When the
+peer has said nothing 12 seconds after it took the connection, the node
+answers code 1.
+
+A peer of a version before 0.11.0 does not say that it has connected. It
+tells this node immediately that it took a connection, and only afterwards
+if it could not connect to the destination. With such a peer the node
 answers "succeeded" as soon as data arrives from the destination, or 150
 milliseconds after the peer took the connection if the peer has reported no
-failure by then. A destination that refuses, and one that the allow list
-does not hold, are usually reported within that time and get their code.
-When the report comes later, they show like the next case. A
-destination that does not answer at all is reported later, and the client
-then sees a connection that began and is reset.
+failure by then. A destination that does not answer at all is then reported
+later, and the client sees a connection that began and is reset.
 
 A client has 10 seconds from connecting to the end of its request, and a
 rule keeps at most 64 clients in that state. A further one is closed
@@ -653,7 +666,7 @@ sending until its input ends.
 
 | Exit status | Meaning |
 |---|---|
-| 0 | the data from the destination ended completely, and the input ended and the node took all of it |
+| 0 | the data from the destination ended completely, and the peer wrote the whole input to its connection to the destination and ended that direction in order |
 | 1 | the node could not be asked, or did not take the request: no node runs on the data directory, or the node is older than 0.9.0 |
 | 2 | the command line is wrong |
 | 3 | the node took the request, and no connection to the destination began. The reason is on the standard error: the peer is not connected, the allow list, the destination, the name |
@@ -661,16 +674,29 @@ sending until its input ends.
 
 The destination does not read the end of a complete stream after a part of
 the input, except in the rare case that the README describes under "Known
-limits". A cut reaches it as a reset. The status of the command says less than
-that. Status 0 says that the node took all of the input, which the node may
-still hold when the command ends. When the connection is cut off after that,
-the destination sees the reset and the command, which has ended, does not
-learn of it. That happens when the destination's side ended first, and when
-the destination ends its side before it has read everything.
+limits". A cut reaches it as a reset.
 
-The same wait as for a SOCKS5 rule applies before the connection counts as
-begun, so a destination that does not answer at all can end with status 4
-and not 3.
+Since version 0.11.0 the command ends only when the node has said how the
+connection ended. After both directions have ended it asks the node, which
+answers when the session between the two nodes is over, about a second
+later. Status 0 means that the peer wrote the whole input to its connection
+to the destination and ended that direction in order. It does not say that
+the destination's program has read it, and the README names, under "Known
+limits", one case in which the destination did not get all of it. A
+connection that is cut off before
+that ends with status 4, also when the destination's side had ended first.
+So does one whose other node is gone before it said that it had written
+everything, and one that the node no longer knows when it is asked. While
+the destination does not read, the session does not end, and the command
+waits with it.
+
+A node of a version before 0.11.0 does not say how a connection ended. With
+such a node the command ends as it did before: status 0 says that the node
+took all of the input, which the node may still hold at that moment.
+
+The connection counts as begun as for a SOCKS5 rule. With a peer of version
+0.11.0 or later, a destination that does not answer at all ends with status
+3. With an older peer it can end with status 4.
 
 In a wrapper script, start the command with `exec`. Otherwise the script
 keeps the command's output open, and the program that reads it may not see
@@ -758,5 +784,5 @@ node.
 
 ```
 $ tcpraid version
-tcpraid 0.10.1 (wire protocol 1)
+tcpraid 0.11.0 (wire protocol 1)
 ```

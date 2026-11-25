@@ -23,6 +23,10 @@
 //	test_end      to the end with the sink     session
 //	resolve       to the end that will connect  request, host, port
 //	resolve_reply the answer                   request, addr, or code and reason
+//	spares        to the end with the path     spares
+//	held          to an end that was restarted request, sessions
+//	held_reply    the answer                   request, sessions, done
+//	session_ok    to the end that carries      session
 //
 // session_fail tells the end that carries a session why the other end could not connect
 // it to its destination. paths asks an end for the names and sizes of the paths it holds
@@ -37,6 +41,15 @@
 // An open with rule_paths or rule_subs asks for the sub-connections of a session of a
 // rule that uses only some of the paths, or fewer data sub-connections on each
 // (FeatureRulePaths).
+//
+// held asks an end that runs as a new process which of the named sessions it holds
+// (FeatureHeld): the asking end cannot tell for those that began shortly before the
+// restart. The answer names the ones it holds and the ones that ended complete at it;
+// the asking end resets the others.
+//
+// session_ok tells the end that carries a session that the other end has connected it
+// to its destination (FeatureSessionOK), and a session_fail may say of which kind the
+// failure was (kind).
 //
 // A message longer than MaxMessage, or one whose MAC is wrong, ends the connection.
 package control
@@ -89,6 +102,10 @@ const (
 	TypeResolveReply = "resolve_reply"
 	// since 0.6.0
 	TypeSpares = "spares"
+	// since 0.11.0
+	TypeHeld      = "held"
+	TypeHeldReply = "held_reply"
+	TypeSessionOK = "session_ok"
 )
 
 // FeaturePathTest in a hello says that the sending node takes the sessions of a path
@@ -115,6 +132,26 @@ const FeatureDialBoth = "dial-both"
 // FeatureSpare in a hello says that the sending node keeps spare connections to a peer
 // that asks for them (spares) and uses the ones a peer keeps to it.
 const FeatureSpare = "spare"
+
+// FeatureHeld in a hello says that the sending node answers held: which of the sessions
+// a peer names it holds, and which of them ended complete at it.
+const FeatureHeld = "held"
+
+// FeatureSessionOK in a hello says that the sending node tells the end that carries a
+// session when it has connected the session to its destination (session_ok), and of
+// which kind a failure was (the kind of a session_fail).
+const FeatureSessionOK = "session-ok"
+
+// MaxHeld is the most sessions a held names, and the most its answer does.
+const MaxHeld = 256
+
+// The kinds of a session_fail with the code CodeDial (since 0.11.0); none for a failure
+// of another kind.
+const (
+	KindRefused     = "refused"     // the destination refused the connection
+	KindTimeout     = "timeout"     // the destination did not answer in time
+	KindUnreachable = "unreachable" // no route to the destination's host or network
+)
 
 // BothPathBase is where the path numbers begin that the node asked with an open that
 // says both gives the sub-connections it opens: the paths of the asking node, which
@@ -167,10 +204,10 @@ type Message struct {
 	Features []string `json:"features,omitempty"`
 	// ping, pong
 	Seq uint64 `json:"seq,omitempty"`
-	// open, open_fail: the number the asking end gave its request
+	// open, open_fail, held, held_reply: the number the asking end gave its request
 	Request uint64 `json:"request,omitempty"`
 	// open: the id of the session, in hex (for the logs of the two ends to match).
-	// session_fail, test_end: the session the message is about
+	// session_fail, test_end, session_ok: the session the message is about
 	Session string `json:"session,omitempty"`
 	// open_fail, session_fail: why, for a person to read
 	Reason string `json:"reason,omitempty"`
@@ -204,6 +241,15 @@ type Message struct {
 	Addr string `json:"addr,omitempty"`
 	// paths_reply: the paths the sending node holds to the node that asked
 	Paths []PathInfo `json:"paths,omitempty"`
+	// held (since 0.11.0): the ids, in hex, of the sessions the asking node wants to
+	// know of, MaxHeld at most. held_reply: those of them that the answering node
+	// holds
+	Sessions []string `json:"sessions,omitempty"`
+	// held_reply: those of the sessions asked about that ended complete, in both
+	// directions, at the answering node. A session in neither list is unknown to it
+	Done []string `json:"done,omitempty"`
+	// session_fail (since 0.11.0): KindRefused, KindTimeout or KindUnreachable, or empty
+	Kind string `json:"kind,omitempty"`
 }
 
 // ErrTooLong is the error of a message that is longer than MaxMessage.

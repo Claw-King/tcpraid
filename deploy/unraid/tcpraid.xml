@@ -1,6 +1,6 @@
 <Container version="2">
   <Name>tcpraid</Name>
-  <Repository>ghcr.io/claw-king/tcpraid:0.10.1</Repository>
+  <Repository>ghcr.io/claw-king/tcpraid:0.11.0</Repository>
   <Registry>https://ghcr.io/claw-king/tcpraid</Registry>
   <Network>bridge</Network>
   <Privileged>false</Privileged>

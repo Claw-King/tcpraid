@@ -258,20 +258,45 @@ field that the receiving end does not know is ignored.
 | `pong` | in answer to a `ping` | `seq` | |
 | `open` | by the end that carries a session | `request` (number, not zero), `session` (the id in hex), `test_path` and `test_subs` (numbers; optional), `rule_paths` (list of text; optional), `rule_subs` (number; optional) and `both` (true or absent) | open the sub-connections of this session from your end |
 | `open_fail` | in answer to an `open` | `request`, `reason` (text), `code` (`nopath`; optional) | it cannot be done |
-| `session_fail` | by the exit end of a session | `session` (the id in hex), `code` (`allow` or `dial`), `reason` (text) | the session could not be connected to its destination, and why |
+| `session_fail` | by the exit end of a session | `session` (the id in hex), `code` (`allow` or `dial`), `reason` (text), `kind` (`refused`, `timeout` or `unreachable`; optional) | the session could not be connected to its destination, and why |
 | `paths` | by an end that runs a path test | `request` | name the paths you hold to me |
 | `paths_reply` | in answer to a `paths` | `request`, `paths` (list of `name`, `subs`, `data`) | the paths, in their order, without addresses |
 | `test_end` | by an end that runs a path test | `session` (the id in hex) | I have ended this session of the test |
 | `resolve` | by an end that is about to carry a session | `request`, `host` (text), `port` (number) | which address does this host name stand for at your end? |
 | `resolve_reply` | in answer to a `resolve` | `request`, and either `addr` (an IP address as text) or `code` (`lookup`, `allow` or `busy`) with `reason` (text; optional) | the address, or why there is none |
 | `spares` | by an end that holds no path to the other | `spares` (number; absent means 0) | keep this many spare connections to me |
+| `held` | by an end whose peer runs as a new process | `request`, `sessions` (list of ids in hex, 256 at most) | which of these sessions do you hold? |
+| `held_reply` | in answer to a `held` | `request`, `sessions` (the ids it holds), `done` (the ids that ended complete at it) | these, and a session in neither list it does not know |
+| `session_ok` | by the exit end of a session | `session` (the id in hex) | the session is connected to its destination |
 
 The types from `session_fail` to `test_end`, and the fields `features`,
 `test_path` and `test_subs`, were added in version 0.3.0. The types `resolve`
 and `resolve_reply` were added in version 0.4.0, and the fields `rule_paths`
 and `rule_subs` in version 0.5.0. Version 0.6.0 added the type `spares`, the
-field `both` of an `open` and the field `code` of an `open_fail`. Older
-versions ignore what they do not know.
+field `both` of an `open` and the field `code` of an `open_fail`. Version
+0.11.0 added the types `held`, `held_reply` and `session_ok` and the field
+`kind` of a `session_fail`. Older versions ignore what they do not know.
+
+**Versions and features.** Two rules say what two nodes use with each other.
+
+- *The version of this document.* A node lists in the `protocols` of its
+  `hello` the versions of the wire protocol that it speaks. So far every
+  release lists 1 and nothing else. A session uses the highest version that
+  both nodes list, and version 1 while a node has not received the other's
+  `hello`. A `hello` that lists nothing counts as one that lists 1. When the
+  two lists have no version in common, a node opens no session with that
+  peer: it resets the application connections that a rule would carry there,
+  answers an `open` with `open_fail`, and says in its log and in the peer's
+  status what the two lists were.
+- *What a node can do beyond the first release.* Every such thing has a
+  name, and a node that does it puts the name in the `features` of its
+  `hello`. A node uses it with a peer only when the peer's last `hello`
+  named it. A name that a node does not know means nothing to it. The names
+  so far are `path-test` and `resolve` (below), `rule-paths`, `dial-both`,
+  `spare`, `held` and `session-ok`. A new type of message, and a new field
+  that changes what the receiving node must do, comes with a new name. A
+  field that only adds information, like the `kind` of a `session_fail`,
+  needs none.
 
 An end that receives nothing for 30 seconds takes the connection for dead. The
 end that dialed dials again after 1, 2, 4, then every 8 seconds.
@@ -288,6 +313,25 @@ first `instance` an end receives from a peer, on the same one again, on the
 one before the current one (a late message of the old process), or on a
 `hello` without `instance` (versions before 0.1.2 send none and ignore it).
 
+**Sessions of the last seconds before a restart.** The rule above resets the
+sessions that began before the last message of the old process. A session
+that began after that message may belong to either process, and the node
+cannot tell. Since version 0.11.0 it asks. A node that answers says so with
+the text `held` in the `features` of its `hello`. An end that has just reset
+sessions for a new `instance` sends `held` on the control connection that
+brought the `hello`, with a `request` number and the ids of the sessions with
+that peer that began after the old process's last message, 256 at most. It
+leaves out a session that it carries and on which the peer has not answered
+any sub-connection yet, because the next sub-connection of that session will be
+answered or refused. The peer answers `held_reply` with the same `request`.
+`sessions` are the ids among those asked that it holds with the asking node,
+and `done` the ones that ended completely in both directions at it. It
+remembers how its last sessions ended for a few minutes. The asking end
+resets the sessions it asked about that are in neither list. It acts on an
+answer only within 10 seconds of the question, only for the last question it
+asked that peer, only from the process it asked, and only for ids it asked
+about. Without an answer the sessions stay as they are.
+
 **Why a session could not be connected.** The exit end of a session tells the
 client end in the transport that it could not connect the session to its
 destination (frame DIALFAIL), without a reason. Since version 0.3.0 it also
@@ -301,6 +345,30 @@ with that peer ends the session as it does on DIALFAIL. This matters because
 the frame can be lost when the exit end closes its connections right after
 it. A `session_fail` that names a session the receiving end does not carry
 with that peer changes nothing.
+
+Since version 0.11.0 a `session_fail` with the code `dial` may carry a
+`kind`: `refused` when the destination refused the connection, `timeout`
+when it did not answer in the 10 seconds the exit end gives a connect, and
+`unreachable` when the system had no route to its host or network. The exit
+end takes the kind from the number of the system's error, never from its
+text. A receiving end passes over any other word.
+
+**A session that is connected.** The transport has no frame that says that
+the exit end reached the destination. Since version 0.11.0 the exit end says
+it on a control connection: `session_ok` with the id of the session, sent
+when the connect to the destination has succeeded, if a control connection
+with the other node is up. A node that sends it says so with the text
+`session-ok` in the `features` of its `hello`. The word matters to a node
+that has to answer a client in turn, such as a SOCKS5 client. Such a
+node, with a peer that named the feature, tells its client that the
+connection began at the first of these: `session_ok`, data from the
+destination, the end of the destination's data. When none of them has come
+12 seconds after the peer took the session, and no `session_fail` either,
+it ends the session and tells its client that no connection began. With a
+peer that did not name the feature it tells its client 150 milliseconds
+after the peer took the session, if no `session_fail` has come by then. A
+`session_ok` for a session that the receiving end does not carry with that
+peer, or whose client was answered already, changes nothing.
 
 **Path test.** Since version 0.3.0 a node can measure a path by sending data
 that the other node discards. A node that takes part says so with the text

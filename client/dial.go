@@ -159,7 +159,7 @@ func (c *Client) Dial(ctx context.Context, peer, address string) (*Conn, error) 
 		// the node was asked and said no: its own words, not "the node is not running"
 		return fail(&Error{Status: resp.StatusCode, Message: e.Error})
 	}
-	return &Conn{tcp: tcp, c: conn, br: br}, nil
+	return &Conn{tcp: tcp, c: conn, br: br, cl: c, session: resp.Header.Get(SessionHeader)}, nil
 }
 
 // ErrOlderNode is the error of a Dial at a node that has no route for it.
@@ -173,8 +173,71 @@ type Conn struct {
 	c   net.Conn      // tcp itself, or TLS over it
 	br  *bufio.Reader // reads of c; it may hold data that came with the node's answer
 
+	cl      *Client // the client that dialed, for Done
+	session string  // the id of the session that carries the connection; empty from a node before 0.11.0
+
 	mu      sync.Mutex
 	written bool // CloseWrite passed the end on
+}
+
+// ErrNoWord is the error of Done on a connection whose node does not say how a session
+// ended: it runs a version before 0.11.0.
+var ErrNoWord = errors.New("the node does not say how the connection ended")
+
+// CutError is the error of Done for a connection whose stream did not end completely
+// in both directions. Reason is the reason the node gave.
+type CutError struct {
+	Reason string
+}
+
+func (e *CutError) Error() string {
+	return "the connection did not end complete at the node: " + e.Reason
+}
+
+// Done waits until the node has ended the session that carried the connection and
+// returns nil when the stream ended completely in both directions: the other node
+// wrote everything that was written here to the destination and ended that direction
+// in order, and everything the destination sent was handed over. Call it after
+// CloseWrite and after Read has returned io.EOF. Before that the session has not
+// ended, and Done waits.
+//
+// It returns a *CutError when the session ended another way, ErrNoWord when the node
+// is of a version that does not say, and the context's error when the context ends
+// first. A node that no longer knows the session answers with an *Error of status 404:
+// it keeps how its last sessions ended for a few minutes only. That is no word that
+// the stream ended complete.
+func (c *Conn) Done(ctx context.Context) error {
+	if c.session == "" {
+		return ErrNoWord
+	}
+	// each request waits at the node for a while, within the time the Client gives a
+	// request
+	wait := 30
+	if t := c.cl.Timeout; t > 0 {
+		wait = max(0, min(wait, int((t-2*time.Second)/time.Second)))
+	}
+	for {
+		var end SessionEnd
+		err := c.cl.Call(ctx, http.MethodGet, PathSessions+"/"+c.session+"/end?wait="+strconv.Itoa(wait), nil, &end)
+		switch {
+		case ctx.Err() != nil:
+			return ctx.Err()
+		case err != nil:
+			return err
+		case !end.Ended:
+			// the node waited and the session goes on. A moment between two requests,
+			// for a node that answers at once
+			select {
+			case <-time.After(200 * time.Millisecond):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			continue
+		case end.Complete:
+			return nil
+		}
+		return &CutError{Reason: end.Reason}
+	}
 }
 
 // Read reads data from the destination. It returns io.EOF only when the destination

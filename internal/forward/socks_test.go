@@ -183,7 +183,8 @@ func TestSocksReplySaysWhyNot(t *testing.T) {
 	}{
 		{"an address the allow list does not hold", 1, []byte{127, 0, 0, 1}, dst, 2, "not in the allow list"},
 		{"a name whose address the allow list does not hold", 3, socksName("db.site-a.example"), dst, 2, "allow list"},
-		{"a destination that refuses", 1, []byte{127, 0, 0, 1}, refused, 4, "refused"},
+		// since version 0.11.0 the peer says of which kind the failure was
+		{"a destination that refuses", 1, []byte{127, 0, 0, 1}, refused, 5, "refused"},
 		{"a name the peer does not know", 3, socksName("nothing.site-a.example"), dst, 4, "no such host"},
 	} {
 		var rep byte

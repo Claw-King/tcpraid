@@ -14,8 +14,9 @@ package api
 //	Connection: Upgrade
 //	Upgrade: tcpraid-connect
 //
-// and from the empty line after it the connection carries the stream in both
-// directions and nothing else. A stream that ended completely in both directions ends
+// with one more header, Tcpraid-Session, that holds the id of the session (since
+// version 0.11.0). From the empty line after it the connection carries the stream in
+// both directions and nothing else. A stream that ended completely in both directions ends
 // with an ordinary close; one that was cut short ends with a reset, so that its end is
 // never taken for the end of the data.
 //
@@ -23,11 +24,14 @@ package api
 // the destination) with the reason as {"error": "..."} and closes the connection.
 
 import (
+	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/Claw-King/tcpraid/client"
@@ -69,10 +73,15 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request, _ map[string]st
 		return
 	}
 	c.SetDeadline(time.Time{}) // the HTTP server's deadlines are not the stream's
-	begin := func() error {
+	begin := func(session string) error {
 		c.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		defer c.SetWriteDeadline(time.Time{})
-		_, err := c.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: " + ConnectUpgrade + "\r\n\r\n"))
+		answer := "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: " + ConnectUpgrade + "\r\n"
+		if session != "" {
+			// with it the program can ask how the session ended (sessionEnd)
+			answer += client.SessionHeader + ": " + session + "\r\n"
+		}
+		_, err := c.Write([]byte(answer + "\r\n"))
 		return err
 	}
 	err = s.cfg.Rules.Connect(req.Peer, req.Host, req.Port, c, brw.Reader, begin)
@@ -88,4 +97,41 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request, _ map[string]st
 	c.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	fmt.Fprintf(c, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", code, http.StatusText(code), len(body), body)
 	c.Close()
+}
+
+// sessionEndWait is the longest that one request for the end of a session waits, and
+// what it waits without a wait in the request.
+const (
+	sessionEndWait    = 60 * time.Second
+	sessionEndDefault = 30 * time.Second
+)
+
+// GET /api/v1/sessions/{id}/end: how the session with the id ended at this node. The
+// request waits until the session has ended, for the seconds its query names (wait,
+// sessionEndDefault without one, sessionEndWait at most), and answers with ended false
+// when it has not by then. A session that this node neither holds nor remembers is
+// answered 404: the node keeps the ends of the last sessions for a few minutes.
+func (s *Server) sessionEnd(w http.ResponseWriter, r *http.Request, p map[string]string) {
+	raw, err := hex.DecodeString(p["id"])
+	if err != nil || len(raw) != 16 {
+		writeError(w, http.StatusBadRequest, "the id of a session is 32 hexadecimal digits")
+		return
+	}
+	wait := sessionEndDefault
+	if text := r.URL.Query().Get("wait"); text != "" {
+		n, err := strconv.Atoi(text)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, "wait is a number of seconds")
+			return
+		}
+		wait = min(time.Duration(n)*time.Second, sessionEndWait)
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), wait)
+	defer cancel()
+	end, known := s.cfg.Rules.SessionEnd(ctx, [16]byte(raw))
+	if !known {
+		writeError(w, http.StatusNotFound, "this node holds no session with that id and does not remember the end of one")
+		return
+	}
+	writeJSON(w, http.StatusOK, client.SessionEnd{Ended: end.Ended, Complete: end.Complete, Reason: end.Reason})
 }
