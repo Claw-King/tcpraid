@@ -8,22 +8,22 @@
 
 | 机器(`uname -m`) | 文件 |
 |---|---|
-| `x86_64` | `tcpraid-0.10.0-linux-amd64` |
-| `aarch64` | `tcpraid-0.10.0-linux-arm64` |
-| `armv7l` | `tcpraid-0.10.0-linux-armv7` |
-| | `tcpraid-0.10.0-SHA256SUMS` |
+| `x86_64` | `tcpraid-0.10.1-linux-amd64` |
+| `aarch64` | `tcpraid-0.10.1-linux-arm64` |
+| `armv7l` | `tcpraid-0.10.1-linux-armv7` |
+| | `tcpraid-0.10.1-SHA256SUMS` |
 
 把适合你机器的文件和校验文件下载到同一个目录，用校验文件核对二进制文件，然后安装：
 
 ```
-$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.10.0/tcpraid-0.10.0-linux-arm64
-$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.10.0/tcpraid-0.10.0-SHA256SUMS
-$ grep linux-arm64 tcpraid-0.10.0-SHA256SUMS | sha256sum -c
-tcpraid-0.10.0-linux-arm64: OK
-# install -m 0755 tcpraid-0.10.0-linux-arm64 /usr/local/bin/tcpraid
+$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.10.1/tcpraid-0.10.1-linux-arm64
+$ curl -LO https://github.com/Claw-King/tcpraid/releases/download/v0.10.1/tcpraid-0.10.1-SHA256SUMS
+$ grep linux-arm64 tcpraid-0.10.1-SHA256SUMS | sha256sum -c
+tcpraid-0.10.1-linux-arm64: OK
+# install -m 0755 tcpraid-0.10.1-linux-arm64 /usr/local/bin/tcpraid
 
 $ tcpraid version
-tcpraid 0.10.0 (wire protocol 1)
+tcpraid 0.10.1 (wire protocol 1)
 ```
 
 你下载的文件所在的一行如果不是 `OK`，说明下载到的不是发布的文件，不要运行它。
@@ -34,7 +34,7 @@ tcpraid 0.10.0 (wire protocol 1)
 go build -trimpath -o tcpraid ./cmd/tcpraid
 ```
 
-或者用 `deploy/build.sh 0.10.0` 构建全部发布用的二进制文件，脚本开头写了没装 Go 时怎么做。把适合你机器的文件复制到 `/usr/local/bin/tcpraid`。用上面那条普通的 `go build` 得到的二进制文件报告的是 `0.10.0-dev`，而构建脚本会把给它的版本号写进去。
+或者用 `deploy/build.sh 0.10.1` 构建全部发布用的二进制文件，脚本开头写了没装 Go 时怎么做。把适合你机器的文件复制到 `/usr/local/bin/tcpraid`。用上面那条普通的 `go build` 得到的二进制文件报告的是 `0.10.1-dev`，而构建脚本会把给它的版本号写进去。
 
 ## 在 macOS 和 Windows 上
 
@@ -42,31 +42,31 @@ go build -trimpath -o tcpraid ./cmd/tcpraid
 
 | 系统 | 文件 |
 |---|---|
-| macOS，Apple 芯片 | `tcpraid-0.10.0-macos-arm64` |
-| macOS，Intel | `tcpraid-0.10.0-macos-amd64` |
-| Windows，x64 | `tcpraid-0.10.0-windows-amd64.exe` |
-| Windows，ARM | `tcpraid-0.10.0-windows-arm64.exe` |
+| macOS，Apple 芯片 | `tcpraid-0.10.1-macos-arm64` |
+| macOS，Intel | `tcpraid-0.10.1-macos-amd64` |
+| Windows，x64 | `tcpraid-0.10.1-windows-amd64.exe` |
+| Windows，ARM | `tcpraid-0.10.1-windows-arm64.exe` |
 
 **核对下载到的文件。** 在 macOS 上，打开终端，进入放着这两个文件的目录：
 
 ```
-$ grep macos-arm64 tcpraid-0.10.0-SHA256SUMS | shasum -a 256 -c
-tcpraid-0.10.0-macos-arm64: OK
-$ chmod +x tcpraid-0.10.0-macos-arm64
-$ ./tcpraid-0.10.0-macos-arm64 version
+$ grep macos-arm64 tcpraid-0.10.1-SHA256SUMS | shasum -a 256 -c
+tcpraid-0.10.1-macos-arm64: OK
+$ chmod +x tcpraid-0.10.1-macos-arm64
+$ ./tcpraid-0.10.1-macos-arm64 version
 ```
 
 在 Windows 上，用 PowerShell，用眼睛比对两个值。除了字母大小写可以不同，它们必须相同：
 
 ```
-> (Get-FileHash .\tcpraid-0.10.0-windows-amd64.exe -Algorithm SHA256).Hash
-> Select-String windows-amd64 .\tcpraid-0.10.0-SHA256SUMS
-> .\tcpraid-0.10.0-windows-amd64.exe version
+> (Get-FileHash .\tcpraid-0.10.1-windows-amd64.exe -Algorithm SHA256).Hash
+> Select-String windows-amd64 .\tcpraid-0.10.1-SHA256SUMS
+> .\tcpraid-0.10.1-windows-amd64.exe version
 ```
 
 **这些二进制文件没有签名。** 第一次启动时，系统可能会拦下它，说无法确认这个程序的来源。如果你已经核对过 SHA-256 校验值，就按系统的提示或它的安全设置里提供的办法允许它运行。在我们知道的那一次里，用 `scp` 拷到 Mac 上、在终端里启动的二进制文件没有被拦下。用浏览器下载的文件，系统可能另作处理，那种情况没有试过。节点要接受别的机器连进来时(`-listen`，或者规则的监听端口)，系统还可能询问是否允许这个程序接受传入的连接。macOS 问了，按钮是 Deny 和 Allow。要允许，否则另一个节点连不上。
 
-**运行**在终端里进行。tcpraid 的各个命令和参数与 Linux 上相同，只是把 `tcpraid` 换成你下载的文件的名字，在 PowerShell 里写成 `.\tcpraid-0.10.0-windows-amd64.exe`。这份文档里围绕这些命令的 shell 写法是按 Linux 写的，我们没有在这两个系统上试过。不同的地方：
+**运行**在终端里进行。tcpraid 的各个命令和参数与 Linux 上相同，只是把 `tcpraid` 换成你下载的文件的名字，在 PowerShell 里写成 `.\tcpraid-0.10.1-windows-amd64.exe`。这份文档里围绕这些命令的 shell 写法是按 Linux 写的，我们没有在这两个系统上试过。不同的地方：
 
 - **数据目录。** 不带 `-data` 时，节点把数据放在当前用户的配置目录下名为 `tcpraid` 的目录里。macOS 上是 `~/Library/Application Support/tcpraid`，Windows 上是 `%AppData%\tcpraid`。向节点发请求的各个命令(`status`、`pair`、`peers`、`rules`、`sessions`)以同一个用户运行时，也去那里找。
 - **只在 Linux 上有的：** `-transparent` 和透明规则，`-maxrss`，`-stats` 那一行里的 `rss`(别的系统上显示为 `n/a`)，容器镜像，systemd 单元。在别的系统上，`tcpraid run` 启动时会拒绝 `-transparent` 和 `-maxrss`。
@@ -81,7 +81,7 @@ $ ./tcpraid-0.10.0-macos-arm64 version
 nas-a# tcpraid run -name nas-a -listen 0.0.0.0:9851 -advertise nas-a.example.org:9851
 ... web interface: no password was set, so one was made. It is shown this once: okt7wgr47g3lt6f2
 ... web interface: to set your own, start the node with -ui-password-file FILE or the environment variable TCPRAID_UI_PASSWORD
-... node 0.10.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+... node 0.10.1 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
 ... transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
 ... web interface: open http://127.0.0.1:9850 in a browser on this machine
 ```
@@ -110,7 +110,7 @@ nas-a# tcpraid run -name nas-a -listen 0.0.0.0:9851 -advertise nas-a.example.org
 nas-a$ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.10.0 (wire protocol 1)
+version      0.10.1 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0

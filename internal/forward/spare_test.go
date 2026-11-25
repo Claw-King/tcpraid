@@ -3,6 +3,7 @@ package forward
 import (
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -339,5 +340,91 @@ func TestSparesComeBackAfterALossOnlyOneNodeSaw(t *testing.T) {
 	a.rt.mu.Unlock()
 	if n != 2 {
 		t.Errorf("alpha has %d control connections with beta, want 2: the old one, which it has not seen end, and the new one", n)
+	}
+}
+
+// spareAllow starts a pair that keeps spares, with a rule on alpha to a sink through
+// beta. ready waits until both spares are kept, and set changes the allow list that
+// beta keeps for alpha.
+func spareAllow(t *testing.T) (a *testNode, in, dst int, got chan arrival, ready func(), set func(string)) {
+	t.Helper()
+	a, b := sparePair(t, 2, 2)
+	ready = func() {
+		t.Helper()
+		eventually(t, "beta keeps two spare connections to alpha", func() bool { return sparesOf(a, "beta") == 2 && sparesOf(b, "alpha") == 2 })
+	}
+	dst, got = sink(t)
+	in = freePorts(t, 1)
+	if err := a.rt.AddRule(node.Rule{Name: "r", Listen: loop(in), Destination: loop(dst), Peer: "beta", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	set = func(allow string) {
+		t.Helper()
+		if _, err := b.svc.SetPeerOptions("alpha", &allow, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("alpha:\n%s\nbeta:\n%s", a.logs, b.logs)
+		}
+	})
+	return a, in, dst, got, ready, set
+}
+
+// A session that begins on a spare connection is held to the allow list that the node
+// keeps for the peer when the session begins, not to the one of the time the spare was
+// opened. A destination that was taken out of the list is refused at once.
+func TestSpareRefusesWhatWasTakenOutOfTheAllowList(t *testing.T) {
+	a, in, _, _, ready, set := spareAllow(t)
+	// A connection does not always begin on a spare: one may just have ended. The
+	// refusal is asked of every try, and the test is over with the first try whose
+	// connection did begin on a spare that was opened while beta kept no list.
+	for try := 1; ; try++ {
+		set("")
+		ready()
+		before := used(a)
+		set("192.0.2.0/24:873")
+		if _, err := send(t, loop(in), 5000); err == nil {
+			t.Fatal("the destination was taken out of the allow list, and a connection that began on a spare opened before that was carried")
+		}
+		if used(a) == before+1 {
+			return
+		}
+		if try == 5 {
+			t.Fatal("none of 5 connections began on a spare: the test did not test what it should")
+		}
+	}
+}
+
+// And a destination that was put into the list is let through at once.
+func TestSpareCarriesWhatWasPutIntoTheAllowList(t *testing.T) {
+	a, in, dst, got, ready, set := spareAllow(t)
+	for try := 1; ; try++ {
+		set("192.0.2.0/24:873")
+		// two spares are used up, whatever becomes of the connections, so that both
+		// spares are of the time of the narrow list
+		for start, n := used(a), 0; used(a) < start+2; n++ {
+			if n == 8 {
+				t.Fatal("8 connections used up fewer than two spares")
+			}
+			ready()
+			send(t, loop(in), 100)
+		}
+		ready()
+		before := used(a)
+		set("127.0.0.1/32:" + strconv.Itoa(dst))
+		if _, err := send(t, loop(in), 5000); err != nil {
+			t.Fatalf("the destination was put into the allow list, and a connection that began on a spare opened before that ended with %v", err)
+		}
+		for wait(t, got).n != 5000 {
+			// what a version that kept the old list carried before
+		}
+		if used(a) == before+1 {
+			return
+		}
+		if try == 5 {
+			t.Fatal("none of 5 connections began on a spare: the test did not test what it should")
+		}
 	}
 }

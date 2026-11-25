@@ -42,9 +42,9 @@ It adds, on top of the speed:
   is stopped, and also when its process is killed or runs out of memory,
   because each node configures the application's connection so that the
   system resets it if the process dies. Three cases remain and are listed
-  under "Known limits": an application that resets its connection while the
-  node is writing to it, an empty connection at the stop of a node, and a
-  machine that loses power.
+  under "Known limits": a reset that arrives while the node ends its sending
+  side over TLS, an empty connection at the stop of a node, and a machine
+  that loses power.
 - **Encryption between the two nodes** by default (TLS 1.3). Each node checks
   the other's key against the one it stored when the two were paired.
 
@@ -219,16 +219,16 @@ This is a first version, made by one developer in spare time. What is known:
 - **A host name as the destination of a rule needs version 0.4.0 or later on
   both nodes.** The peer looks the name up for every connection. Nothing is
   kept between two connections, so each one waits for that lookup first.
-- **An application that resets its connection while the node writes to it.**
-  The system reports a reset to one call only. If the node's write is that
-  call, the node's read of the same connection sees an ordinary end, and in
-  rare cases this end reaches the other node before the session is ended.
-  The application at the other site then reads the end of a complete stream,
-  although the first application was cut off. In a test written to provoke
-  this, a few of every hundred such connections ended that way. The same can
-  happen, far more rarely, to a program that resets its connection to the
-  API without `-api-tls` at the moment the node takes its `connect` request.
-  The destination may then see an empty stream.
+- **A reset that another call takes.** The system reports a reset that
+  arrives on a connection to one call only. If a write of the node is that
+  call, the node's read of the same connection sees an ordinary end. Since
+  version 0.10.1 the node allows for this where it writes data to an
+  application and where it answers a SOCKS5 client or a `connect` request.
+  Versions before it could pass such a reset on as the end of a complete
+  stream. In a test written to provoke this, a few of every hundred such
+  connections ended that way. One write is still not covered: the notice
+  with which the node ends its sending side on a connection to the API under
+  `-api-tls`. No test has made a reset arrive at that notice.
 - **Stopping a node while a destination is still being connected.** If a node
   is stopped at the very moment a session that has just begun is connecting to
   its destination at that node, the destination may see a connection that is

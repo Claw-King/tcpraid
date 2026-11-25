@@ -43,7 +43,7 @@
 The start-up lines of the log repeat what is in effect:
 
 ```
-node 0.10.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+node 0.10.1 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
 transport window=128MB budget=256MB grace=20m0s hol=1s timeline=off maxrss=off
 tuned target=500ms
 ```

@@ -54,6 +54,9 @@ type openConn struct {
 	// client must not read a stream that was cut off as one that ended.
 	reset bool
 	timer *time.Timer
+	// settled is signalled when the state leaves opening: a read that returned the end
+	// of the data before then waits on it
+	settled *sync.Cond
 }
 
 const (
@@ -69,19 +72,27 @@ func (rt *Runtime) newOpenConn(c net.Conn, rd io.Reader, begin func() error) *op
 	if settle <= 0 {
 		settle = entrySettle
 	}
-	return &openConn{Conn: c, rd: rd, begin: begin, settle: settle}
+	oc := &openConn{Conn: c, rd: rd, begin: begin, settle: settle}
+	oc.settled = sync.NewCond(&oc.mu)
+	return oc
 }
 
-// Read reads what the client sends. An end that is read after the answer to the client
-// could not be written is no end of a stream. A reset is reported to one call only: when
-// the write of the answer was that call, the read that follows sees the end of the data
-// where the connection was in fact reset, and the stream would be passed on as complete.
-// open holds the lock while it writes the answer, so a read that returned for that reason
-// waits here until open has recorded that the write failed.
+// Read reads what the client sends. An end that is read when the answer to the client
+// could not be written is no end of a stream. A reset is reported to one call only. When
+// another call was that one, the read sees the end of the data where the connection was
+// in fact reset, and the stream would be passed on as complete. The other call is the
+// write of the answer, or a read that the HTTP server made in the background before it
+// handed the connection over. So an end that is read before the client has its answer is
+// held back until the answer was written or the entry is over: the write of the answer
+// fails on a connection that was reset, and a client that only ended its sending side
+// gets its answer and has its end passed on then.
 func (oc *openConn) Read(p []byte) (int, error) {
 	n, err := oc.rd.Read(p)
 	if err == io.EOF {
 		oc.mu.Lock()
+		for oc.state == entryOpening {
+			oc.settled.Wait()
+		}
 		over := oc.state == entryOver
 		oc.mu.Unlock()
 		if over {
@@ -112,6 +123,7 @@ func (oc *openConn) open() error {
 	if oc.timer != nil {
 		oc.timer.Stop()
 	}
+	defer oc.settled.Broadcast()
 	if err := oc.begin(); err != nil {
 		oc.state = entryOver
 		oc.Conn.SetReadDeadline(time.Now())
@@ -150,6 +162,7 @@ func (oc *openConn) Close() error {
 			oc.timer.Stop()
 		}
 		oc.Conn.SetReadDeadline(time.Now())
+		oc.settled.Broadcast()
 	}
 	return nil
 }

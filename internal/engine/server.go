@@ -229,13 +229,15 @@ func (e *Engine) ServeSub(c net.Conn, opt SubOptions) {
 // that the other end, which carries the sessions, can start one on it at once: the
 // other end sends the header when it has a session for it, and until then the call
 // waits, however long that is. used, if not nil, is called when the header begins to
-// arrive. Closing c ends the wait.
+// arrive, with the options of the call. What it changes there counts for the session:
+// the spare may have waited long, and the allow list and the address for UDP feedback
+// are those of the time the session begins. Closing c ends the wait.
 //
 // A session that the call creates is not kept at any number of sub-connections by this
 // end; it is once the other end asks for the rest (Route.ServeReverse).
-func (e *Engine) ServeSpare(c net.Conn, opt SubOptions, used func()) {
+func (e *Engine) ServeSpare(c net.Conn, opt SubOptions, used func(*SubOptions)) {
 	if used == nil {
-		used = func() {}
+		used = func(*SubOptions) {}
 	}
 	e.serveSub(c, opt, nil, nil, used)
 }
@@ -286,7 +288,7 @@ func (e *Engine) reverseRedial(s *session, opt SubOptions, r *Route) func() {
 // name that session: anything else is refused. With spare, c is a spare connection: the
 // header may take any time to begin, and spare is called when it does. It reports
 // whether c became a sub-connection of a session.
-func (e *Engine) serveSub(c net.Conn, opt SubOptions, r *Route, join *session, spare func()) bool {
+func (e *Engine) serveSub(c net.Conn, opt SubOptions, r *Route, join *session, spare func(*SubOptions)) bool {
 	ks := opt.Keys.ks
 	b := make([]byte, headerLen)
 	rest := b
@@ -295,7 +297,7 @@ func (e *Engine) serveSub(c net.Conn, opt SubOptions, r *Route, join *session, s
 			c.Close()
 			return false
 		}
-		spare()
+		spare(&opt)
 		rest = b[1:]
 	}
 	c.SetReadDeadline(time.Now().Add(15 * time.Second))

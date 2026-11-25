@@ -303,10 +303,19 @@ func (rt *Runtime) serveSpare(pc *peerControl, ps *peerState, conn net.Conn) {
 		Valid:      ps.valid,
 		Sink:       rt.sink,
 		DialFailed: rt.tellFailure(peer.Name),
-	}, func() {
-		// the peer begins a session on it: the next spare is due
+	}, func(opt *engine.SubOptions) {
+		// the peer begins a session on it: the next spare is due. What the node keeps
+		// for the peer may have changed since the spare was opened, and the session is
+		// held to what it keeps now: the settings, the allow list and the address for
+		// UDP feedback. A peer that is gone leaves them as they were, and its session
+		// is refused because the pairing no longer holds (Valid). A stored list has
+		// passed the parse before
 		if now, ok := rt.Node.Peer(peer.Name); ok {
 			*cfg = *rt.settingsFor(now, "")
+			if a, err := engine.ParseAllow(now.Allow); err == nil {
+				opt.Allow = a
+			}
+			opt.UDPDial = now.UDPDial
 		}
 		used = gone()
 		rt.mu.Lock()

@@ -118,6 +118,11 @@ type session struct {
 	rxDone     bool
 	blocked    time.Duration // time blocked writing to the LAN side
 	writingSet time.Time
+	// wBegun and wEnded count the writes to the LAN side that began and that returned;
+	// localFailed says that one of them failed. pumpLocal consults them when it reads
+	// the end of the data, see there.
+	wBegun, wEnded uint64
+	localFailed    bool
 	// feedback
 	snapSeq     uint64
 	snapGen     uint64
@@ -199,6 +204,10 @@ const (
 )
 
 var causeNames = [nCause]string{"gap", "stall", "dead"}
+
+// localEndWait is the longest that the end of the application's data waits for a write
+// to the application that was in flight when it was read (pumpLocal).
+const localEndWait = time.Second
 
 // newSession creates a session and registers it. dst is its destination address: it is
 // set here, before the session can be found in the registry, because readers of the
@@ -698,9 +707,15 @@ func (s *session) deliverLocal() {
 			s.mark()
 			s.cond.Broadcast()
 			s.writingSet = time.Now()
+			s.wBegun++
 			s.mu.Unlock()
 			_, err := s.local.Write(d)
 			s.mu.Lock()
+			s.wEnded = s.wBegun
+			if err != nil {
+				s.localFailed = true
+			}
+			s.cond.Broadcast() // pumpLocal may wait for this write
 			w := time.Since(s.writingSet)
 			s.blocked += w
 			s.writingSet = time.Time{}
@@ -1404,6 +1419,23 @@ func (s *session) pumpLocal() {
 			return
 		}
 		if err != nil {
+			// The end of the data. A reset that arrives is reported to one call only
+			// (Linux). When a write to the application was that call, this read sees
+			// the end of the data although the application was cut off, and the stream
+			// must not be passed on as complete. Such a write returns at once with its
+			// error, so a write that was in flight when the end was read is waited
+			// for. A write that is merely held, because the application ended its
+			// sending side in order and reads slowly, does not return. The end is then
+			// passed on after localEndWait.
+			inFlight := s.wBegun
+			for t0 := time.Now(); !s.closed && !s.localFailed && s.wEnded < inFlight && time.Since(t0) < localEndWait; {
+				waitTimeout(s.cond, 20*time.Millisecond)
+			}
+			if s.closed || s.localFailed {
+				// deliverLocal ends the session with an abort
+				s.mu.Unlock()
+				return
+			}
 			s.sendFin = int64(s.nextSeq)
 			s.mark()
 			s.cond.Broadcast()

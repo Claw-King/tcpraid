@@ -42,7 +42,7 @@ $ curl --cacert /var/lib/tcpraid/api.tls -H "Authorization: Bearer $(cat /var/li
 ### GET /api/v1/status
 
 ```
-{"version":"0.10.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.10.1","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
  "sessions":2,"peers":1,"rules":2,"listen":["0.0.0.0:9851"],"advertise":["nas-b.example:9851"]}
 ```
@@ -129,7 +129,7 @@ Cache-Control: no-store
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.10.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.10.1","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
 `online` 表示和这个对端之间有一条控制连接连着。`version` 和 `last_message` 在收到过对端的消息之后才出现。0.6.0 版新增的 `spares` 是两个节点之间正在等会话的备用连接数，没有时不出现。0.7.0 版新增的 `transport` 是本节点上和这个对端之间的会话用来取代节点设置的那些传输层设置，对端没有设时不出现(见“传输层的设置”)。加入到本节点的对端，在这里没有 `addresses`，也没有 `paths`。配对密钥绝不会出现在回答里，显示代理时不带它的用户名和密码。从 0.10.0 版起，代理在节点里有用户名和密码的路径会带 `"proxy_login": true`。这个字段只供读取，写在请求里不改变任何东西。
@@ -147,7 +147,7 @@ Cache-Control: no-store
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.10.0",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.10.1",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 
@@ -158,7 +158,7 @@ $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","u
 ```
 $ curl -X PUT ... -d '{"transport":{"window":"8MB","grace":null}}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"9d875c73...b9a2cd07","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"","udp_dial":"","online":true,"version":"0.10.0","last_message":"2026-01-15T10:00:28.39632723Z",
+ "allow":"","udp_dial":"","online":true,"version":"0.10.1","last_message":"2026-01-15T10:00:28.39632723Z",
  "spares":2,"transport":{"window":"8MB"}}
 ```
 
@@ -171,7 +171,7 @@ $ curl -X PUT ... -d '{"subs":4}' http://127.0.0.1:9850/api/v1/peers/nas-a/paths
 {"created":false,"peer":{"name":"nas-a","fingerprint":"e5645f9b...7795ec86","addresses":["nas-a.example.org:9851"],
  "paired_at":"2026-01-15T10:00:20Z",
  "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":4}],
- "allow":"","udp_dial":"","online":true,"version":"0.10.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
+ "allow":"","udp_dial":"","online":true,"version":"0.10.1","last_message":"2026-01-15T10:00:30.643951578Z"}}
 ```
 
 `DELETE` 删除这条路径，回答是对端。对端没有这条路径时是 `404`。

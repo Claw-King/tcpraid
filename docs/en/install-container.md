@@ -8,7 +8,7 @@ on a real NAS (see "Where each platform takes it").
 
 | | |
 |---|---|
-| Image | `ghcr.io/claw-king/tcpraid:0.10.0` (you can also build it yourself with `deploy/Dockerfile`) |
+| Image | `ghcr.io/claw-king/tcpraid:0.10.1` (you can also build it yourself with `deploy/Dockerfile`) |
 | Data | a directory mounted at `/data`. It holds the node's private key, its peers and its rules. Keep it, back it up like a private key, never share it between two nodes |
 | Port 9850 | the web page and the local API. Plain HTTP unless the node is started with `-api-tls` (`security.md`): publish it only on a network you trust |
 | Port 9851 | where other nodes connect. Needed on the node that the other one can reach; harmless on the other |
@@ -49,7 +49,7 @@ $ docker compose up -d
 $ docker logs tcpraid
 ... web interface: no password was set, so one was made. It is shown this once: y7ygtkha76gshsnt
 ... web interface: to set your own, start the node with -ui-password-file FILE or the environment variable TCPRAID_UI_PASSWORD
-... node 0.10.0 name="nas-a" fingerprint=056f8829...e2e077d8 data=/data api=[::]:9850 listen=[::]:9851 listen-plain=off transparent=off udp-listen=off
+... node 0.10.1 name="nas-a" fingerprint=056f8829...e2e077d8 data=/data api=[::]:9850 listen=[::]:9851 listen-plain=off transparent=off udp-listen=off
 ... transport window=128MB budget=256MB grace=15m0s hol=1s timeline=off maxrss=off
 ... web interface: open http://127.0.0.1:9850 in a browser on this machine
 ... the web interface and the API at [::]:9850 are plain HTTP and reachable from other hosts. Use them on a network you trust, or put a reverse proxy with TLS in front.
