@@ -40,7 +40,7 @@ tcpraid -mode client -listen 127.0.0.1:9801 -remote server.example.org:9901 \
 
 ```
 $ tcpraid -check -mode client -listen 127.0.0.1:9801 -remote server.example.org:9901 -dst 192.0.2.5:873 -psk psk
-ok: 0.11.1 client paths [data/data x8], window 128 MB, budget 256 MB, maxrss 0 MB, grace 15m0s, psk true, udp listen "" dial ""
+ok: 0.11.2 client paths [data/data x8], window 128 MB, budget 256 MB, maxrss 0 MB, grace 15m0s, psk true, udp listen "" dial ""
 ```
 
 ## 透明使用
@@ -115,7 +115,7 @@ limits: { maxrss_mb: 700, maxsess: 64 }
 
 ```
 $ tcpraid -config client.yaml -check
-ok: 0.11.1 client paths [main/data x8, second/repair x4, second/control x1, proxy/data x4], window 128 MB, budget 256 MB, maxrss 700 MB, grace 15m0s, psk true, udp listen "0.0.0.0:8445" dial ""
+ok: 0.11.2 client paths [main/data x8, second/repair x4, second/control x1, proxy/data x4], window 128 MB, budget 256 MB, maxrss 700 MB, grace 15m0s, psk true, udp listen "0.0.0.0:8445" dial ""
 ```
 
 `addr` 是 client 经这条路径要去连的地址。它是 tcpraid server 的监听，或者通往它的入口。对于目的地固定的端口转发或代理入口，它就是那个转发的地址。server 不需要 `paths`：
@@ -172,7 +172,7 @@ control:
 
 ## 运行
 
-**停止。** 遇到 SIGINT / SIGTERM、`-maxrss` 或 `-life` 时，tcpraid 先通知每一个对端，然后重置它的应用连接并退出。对端会立刻丢弃这些会话，而不是连同缓存的数据一起保留 `grace` 那么久。
+**停止。** 遇到 SIGINT / SIGTERM、`-maxrss` 或 `-life` 时，tcpraid 先通知每一个对端，然后重置还在进行中的会话的应用连接并退出。对端会立刻丢弃这些会话，而不是连同缓存的数据一起保留 `grace` 那么久。
 
 **重启。** 会话状态在内存里。重启之后的进程没法恢复它的会话，所以应用会看到连接被重置，必须重试。
 

@@ -8,7 +8,7 @@
 # the password of the web interface, and the ports for forwarding rules.
 services:
   tcpraid:
-    image: ghcr.io/claw-king/tcpraid:0.11.1
+    image: ghcr.io/claw-king/tcpraid:0.11.2
     container_name: tcpraid
     # A new node takes its name from the host name at its first start and adds four
     # random characters, for example tcpraid-k3x9, so two nodes made from this file

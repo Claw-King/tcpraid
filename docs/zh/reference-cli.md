@@ -22,7 +22,7 @@ tcpraid version
 
 ## run
 
-启动一个节点。它的参数见 `reference-files.md`，包括在哪里监听，以及节点的传输层设置，从 `-window` 到 `-maxrss`。收到 SIGINT 或 SIGTERM 时，它先通知各个对端、重置自己承载的应用连接，然后以退出状态 0 停止。
+启动一个节点。它的参数见 `reference-files.md`，包括在哪里监听，以及节点的传输层设置，从 `-window` 到 `-maxrss`。收到 SIGINT 或 SIGTERM 时，它先通知各个对端、重置还在进行中的会话的应用连接，然后以退出状态 0 停止。
 
 ## status
 
@@ -30,7 +30,7 @@ tcpraid version
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.11.1 (wire protocol 1)
+version      0.11.2 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -79,7 +79,7 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.11.1, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.11.2, last heard 2026-01-15T10:00:05Z
 features     path-test, resolve, rule-paths, dial-both, spare, held, session-ok
 spares       2 connections wait for a session to begin on them
 
@@ -525,5 +525,5 @@ changed: rule "zfs": changed
 
 ```
 $ tcpraid version
-tcpraid 0.11.1 (wire protocol 1)
+tcpraid 0.11.2 (wire protocol 1)
 ```

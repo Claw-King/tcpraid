@@ -295,16 +295,21 @@ This is a first version, made by one developer in spare time. What is known:
 - **Exit status 0 of `tcpraid connect` says where the input got to, not that
   it was read.** It says that the other node wrote the whole input to its
   connection to the destination and ended that direction in order. Whether
-  the destination's program read it is beyond what a node can see. In one
-  case status 0 says less than that. A node that is stopped resets the
-  connections of all its sessions. When the other node is stopped within
-  about a second after it wrote the last of the input, the destination loses
-  what it had not taken yet and sees a reset, and the command can still end
-  with status 0. With version 0.11.0 the same happened when that node's
-  process was killed in that second. Since version 0.11.1 the system
-  delivers the rest for a node that is killed. The command ends about a
-  second after the two directions have, because it waits for the node's
-  word. SOCKS5 rules and `tcpraid connect` were run in
+  the destination's program read it is beyond what a node can see. With an
+  older node at the other end, status 0 could say less than that. A node of
+  version 0.11.0 that was killed, and a node of version 0.11.0 or 0.11.1
+  that was stopped, within about a second after it wrote the last of the
+  input, reset its connection to the destination, and what the destination
+  had not taken yet was lost. Since version 0.11.2 the system delivers the
+  rest in both cases. That needs the network of the node's host to stay up
+  after the node has gone. A node that is the main process of a container
+  whose network goes with it, as at `docker stop` of a container on a
+  network of the container's own, can still lose that rest, and the
+  destination then sees neither an end nor a reset. A node that is stopped
+  in that second also tells the other node that the session was aborted, so
+  the command can end with status 4 although the destination gets
+  everything. The command ends about a second after the two directions
+  have, because it waits for the node's word. SOCKS5 rules and `tcpraid connect` were run in
   containers, with `curl` as the SOCKS5 client.
 - **The exported configuration is not a backup.** It holds no key and no
   pair secret, so it cannot bring a node back or pair one. Keep the data

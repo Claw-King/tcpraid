@@ -4,12 +4,12 @@
 #
 # Build, from the directory that holds go.mod:
 #
-#   docker build -f deploy/Dockerfile --build-arg VERSION=0.11.1 -t tcpraid:0.11.1 .
+#   docker build -f deploy/Dockerfile --build-arg VERSION=0.11.2 -t tcpraid:0.11.2 .
 #
 # The default command starts a node. Any other tcpraid command line can be given in its
-# place, the manual mode included (docker run ... tcpraid:0.11.1 -mode server ...).
+# place, the manual mode included (docker run ... tcpraid:0.11.2 -mode server ...).
 FROM golang:1.27 AS build
-ARG VERSION=0.11.1-dev
+ARG VERSION=0.11.2-dev
 # Set by "docker buildx build --platform ..."; empty with the classic builder, which
 # builds for the machine it runs on.
 ARG TARGETARCH

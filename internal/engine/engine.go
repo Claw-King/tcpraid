@@ -358,8 +358,8 @@ func (e *Engine) abortAll() {
 	}
 }
 
-// Fatal tells the peers, then resets every LAN-side connection before exiting (a FIN
-// would make a cut-off stream look complete).
+// Fatal tells the peers, then resets the LAN-side connections as Shutdown does before
+// exiting (a FIN would make a cut-off stream look complete).
 func (e *Engine) Fatal(f string, a ...interface{}) {
 	e.Shutdown()
 	log.Fatalf(f, a...)
@@ -367,7 +367,11 @@ func (e *Engine) Fatal(f string, a ...interface{}) {
 
 // Shutdown tells the peers that every session is being reset, then resets every
 // LAN-side connection that exists; one that a session is still dialing is reset by the
-// dialing side when it comes up. Call it before the process exits. From here on Carry
+// dialing side when it comes up. The LAN-side connection of a session that has said
+// that it is done is left alone: the other end may have counted the session as
+// confirmed on that word, and a reset would make the system throw away what the
+// connection has not sent yet. The exit of the process closes it the ordinary way.
+// Call it before the process exits. From here on Carry
 // resets the connection it is given and ServeSub refuses a new session: a session that
 // began after this point would be cut off by the exit without a reset.
 func (e *Engine) Shutdown() {
@@ -378,9 +382,9 @@ func (e *Engine) Shutdown() {
 	e.registry.Range(func(k, _ any) bool {
 		s := k.(*session)
 		s.mu.Lock()
-		l := s.local
+		l, said := s.local, s.disarmed
 		s.mu.Unlock()
-		if l != nil {
+		if l != nil && !said {
 			resetClose(l)
 		}
 		return true
