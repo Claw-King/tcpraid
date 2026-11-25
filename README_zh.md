@@ -31,6 +31,7 @@ tcpraid 把**一条 TCP 连接**拆到**多条 TCP 连接**上传输，在对端
 - 线路本身很好，而单独那条连接的套接字缓冲区又足够大。这时一条连接可能和多条一样快，甚至更快。tcpraid 的好处主要体现在有丢包的线路上，在那里它更稳，而且不需要任何人去调大缓冲区。
 - 两个节点之间有东西把它们的连接并进了一条连接里，比如 SSH 端口转发，或者默认设置的 frp。这时 tcpraid 照样能用，但不会带来任何好处。哪些工具会这样、该怎么设，见 `docs/zh/connecting.md`。
 - 应用自己就能开并行连接。这时直接用应用自己的功能。
+- 应用要一点数据，等它到了才要下一点。这时它的速度是一次要多少除以往返的时间，tcpraid 能做的很少。打开另一个站点的文件共享可能就是这样，`docs/zh/tutorial-file-share.md` 讲了怎样改善。
 
 它不是 VPN，也不是通用代理。它只承载你为之建了规则的那些 TCP 连接，而且只在你自己运行的两台机器之间。
 
@@ -97,6 +98,7 @@ rule rsync added: listening
 | `docs/zh/tutorial-rsync.md` | 用 rsync 连到 rsync 守护进程 |
 | `docs/zh/tutorial-postgresql.md` | PostgreSQL 流复制 |
 | `docs/zh/tutorial-pbs.md` | Proxmox Backup Server 的同步任务 |
+| `docs/zh/tutorial-file-share.md` | 用另一个站点的文件共享，以及它的速度由什么决定 |
 | `docs/zh/security.md` | 保护了什么、没保护什么、配对码或文件泄露意味着什么 |
 | `docs/zh/tunnels.md` | 和隧道、组网工具或代理一起使用 |
 | `docs/zh/troubleshooting.md` | 不通或者很慢的时候看什么 |

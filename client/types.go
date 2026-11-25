@@ -74,6 +74,15 @@ type Session struct {
 	// WindowBytes (since 0.7.0) is the send window the session was created with at
 	// this node: the node's, or the one its peer or its rule sets.
 	WindowBytes int64 `json:"window_bytes"`
+	// Since 0.12.0. IdleShare is the share of the last seconds in which the session's
+	// data sub-connections had room and nothing to send, 0 to 1, without those of a
+	// repair path; absent while the session is too young to say.
+	// WaitsForApplication: that share is high, the session spent nearly all that time
+	// waiting for data from its application, nothing is unsent, and this node is the
+	// one that sends. The application gives the node no more data for now: the limit
+	// of the transfer is the application, not the path. It is no fault.
+	IdleShare           *float64 `json:"idle_share,omitempty"`
+	WaitsForApplication bool     `json:"waits_for_application,omitempty"`
 }
 
 // PairingCodeRequest is the body of POST /api/v1/pairing-codes. Both fields are
@@ -261,6 +270,10 @@ type Rule struct {
 	// PeerDials (since 0.5.0): new connections of the rule are opened by the peer for
 	// now, because this node's own path to the peer is down. Absent otherwise.
 	PeerDials bool `json:"peer_dials,omitempty"`
+	// SettingsHereOnly (since 0.12.0): the rule has transport settings that its
+	// sessions take at the peer too, and the connected peer does not take them (a
+	// version before 0.12.0). They act at this node alone then.
+	SettingsHereOnly bool `json:"settings_here_only,omitempty"`
 	// Dial (since 0.6.0): "self", "peer" or "both" when the rule says which node
 	// opens the sub-connections; absent for "auto".
 	Dial string `json:"dial,omitempty"`

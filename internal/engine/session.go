@@ -142,8 +142,11 @@ type session struct {
 	// disarmed: the reset on close of the LAN-side connection was taken back, because
 	// this end said that it is done (buildSnapshot)
 	disarmed bool
-	changeN  uint64    // bumped whenever our state changes (the UDP sender follows it)
-	udp      *udpState // UDP feedback channel (nil = none)
+	// idle: how much of the last seconds the data sub-connections had nothing to send
+	// (idle.go)
+	idle    idleState
+	changeN uint64    // bumped whenever our state changes (the UDP sender follows it)
+	udp     *udpState // UDP feedback channel (nil = none)
 	// lifecycle
 	closed   bool
 	everUp   bool
@@ -1348,6 +1351,9 @@ func (s *session) writer(sb *sub) {
 				s.e.waitUs[why].Add(time.Since(now).Microseconds())
 				if why == wEmpty {
 					s.tl.starve += time.Since(now)
+					if !sb.repair {
+						s.idle.acc += time.Since(now)
+					}
 				}
 			}
 		}
@@ -1400,6 +1406,7 @@ func (s *session) pumpLocal() {
 			s.mu.Unlock()
 			return
 		}
+		s.idle.readSince = time.Now() // the session list tells how long the pump waits for the application (idle.go)
 		s.mu.Unlock()
 		buf := make([]byte, s.cfg.Chunk)
 		n, err := s.local.Read(buf)
@@ -1422,6 +1429,8 @@ func (s *session) pumpLocal() {
 			data = append([]byte(nil), buf[:n]...)
 		}
 		s.mu.Lock()
+		s.idle.read += time.Since(s.idle.readSince)
+		s.idle.readSince = time.Time{}
 		if s.closed {
 			s.mu.Unlock()
 			return
@@ -1560,6 +1569,7 @@ func (s *session) monitor(redial func()) {
 			}
 		}
 		s.subs = live
+		s.sampleIdle(data, time.Now())
 		slow := s.slowSub(data)
 		// the oldest chunks: re-send one that its carrier has held far too long (a tail
 		// loss has no later chunk to reveal it; a stuck sub may never report) -- only

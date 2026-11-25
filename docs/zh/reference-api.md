@@ -42,7 +42,7 @@ $ curl --cacert /var/lib/tcpraid/api.tls -H "Authorization: Bearer $(cat /var/li
 ### GET /api/v1/status
 
 ```
-{"version":"0.11.2","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.12.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
  "sessions":2,"peers":1,"rules":2,"listen":["0.0.0.0:9851"],"advertise":["nas-b.example:9851"]}
 ```
@@ -84,7 +84,11 @@ $ curl -X PUT ... -d '{"name":"nas-a"}' http://127.0.0.1:9850/api/v1/node
 
 `subs_dialed` 是 0.6.0 版新增的。它是这个会话活着的子连接里由本节点打开的条数，其余的由对端打开。规则带 `"dial": "both"` 时，只要两个节点的路径都通，会话的这两个数都不是零。
 
+规则里的 `settings_here_only`(0.12.0 版起)为 true，表示这条规则有在对端也会起作用的传输层设置，而连着的对端是更旧的版本，不接受它们。这时它们只在本节点起作用。
+
 `window_bytes` 是 0.7.0 版新增的。它是这个会话在本节点开始时取得的窗口：节点的窗口，或者它的对端或规则设的窗口(见“传输层的设置”)。
+
+`idle_share` 和 `waits_for_application` 是 0.12.0 版新增的。`idle_share` 是最近五秒里，会话的数据子连接有空位却没有数据可发的时间占比，从 0 到 1。角色为 `repair` 的路径上的子连接不算在内，它们大部分时间是空闲的。会话开始后的头几秒没有这个字段。`waits_for_application` 只在发送数据的节点上可能为 true：这个占比很高，节点几乎一直在等应用给数据，而且没有还没发出去的数据。这时限制传输的是应用，不是路径。它为 false 时没有这个字段。
 
 ### GET /metrics
 
@@ -129,7 +133,7 @@ Cache-Control: no-store
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.11.2","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.12.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
 `online` 表示和这个对端之间有一条控制连接连着。`version` 和 `last_message` 在收到过对端的消息之后才出现。0.6.0 版新增的 `spares` 是两个节点之间正在等会话的备用连接数，没有时不出现。0.7.0 版新增的 `transport` 是本节点上和这个对端之间的会话用来取代节点设置的那些传输层设置，对端没有设时不出现(见“传输层的设置”)。0.11.0 版新增的 `features` 列出控制连接连上时对端说它会做的事，用的是 `PROTOCOL.md` 里的名字。同一版新增的 `problem` 说明为什么和一个在线的对端之间什么都不承载，没有这样的原因时不出现。加入到本节点的对端，在这里没有 `addresses`，也没有 `paths`。配对密钥绝不会出现在回答里，显示代理时不带它的用户名和密码。从 0.10.0 版起，代理在节点里有用户名和密码的路径会带 `"proxy_login": true`。这个字段只供读取，写在请求里不改变任何东西。
@@ -147,7 +151,7 @@ Cache-Control: no-store
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.11.2",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.12.0",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 
@@ -158,7 +162,7 @@ $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","u
 ```
 $ curl -X PUT ... -d '{"transport":{"window":"8MB","grace":null}}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"9d875c73...b9a2cd07","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"","udp_dial":"","online":true,"version":"0.11.2","last_message":"2026-01-15T10:00:28.39632723Z",
+ "allow":"","udp_dial":"","online":true,"version":"0.12.0","last_message":"2026-01-15T10:00:28.39632723Z",
  "spares":2,"transport":{"window":"8MB"}}
 ```
 
@@ -171,7 +175,7 @@ $ curl -X PUT ... -d '{"subs":4}' http://127.0.0.1:9850/api/v1/peers/nas-a/paths
 {"created":false,"peer":{"name":"nas-a","fingerprint":"e5645f9b...7795ec86","addresses":["nas-a.example.org:9851"],
  "paired_at":"2026-01-15T10:00:20Z",
  "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":4}],
- "allow":"","udp_dial":"","online":true,"version":"0.11.2","last_message":"2026-01-15T10:00:30.643951578Z"}}
+ "allow":"","udp_dial":"","online":true,"version":"0.12.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
 ```
 
 `DELETE` 删除这条路径，回答是对端。对端没有这条路径时是 `404`。

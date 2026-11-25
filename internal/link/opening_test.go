@@ -118,7 +118,7 @@ func TestAcceptorRefuses(t *testing.T) {
 	_, bOfA := pairNodes(t, a, b)
 	_, cOfA := pairNodes(t, a, c)
 	subs := make(chan string, 4)
-	a.acc.HandleSub = func(peer node.Peer, conn net.Conn) { subs <- peer.Name; conn.Close() }
+	a.acc.HandleSub = func(peer node.Peer, _ uint64, conn net.Conn) { subs <- peer.Name; conn.Close() }
 	bfp, cfp := b.n.Identity.FingerprintBytes(), c.n.Identity.FingerprintBytes()
 
 	// the opening names gamma, TLS authenticated beta (gamma's secret would even verify)

@@ -252,10 +252,13 @@ function renderSessions() {
       num(fmtBytes(s.rx_bytes)),
       num(speedText(sessionRate(s))),
       num(String(s.subs)),
-      num(resent));
+      num(resent),
+      // the node says when a session waits for its application to give it data
+      s.waits_for_application ? h('td', { text: t('sessions.waits_app'), title: t('sessions.waits_app_hint') }) : h('td', {}));
   });
   table($('#sessions-table'), [t('col.rule'), t('col.peer'), t('col.destination'), { num: t('col.running') },
-    { num: t('col.sent') }, { num: t('col.received') }, { num: t('col.speed') }, { num: t('col.subs') }, { num: t('col.resent') }],
+    { num: t('col.sent') }, { num: t('col.received') }, { num: t('col.speed') }, { num: t('col.subs') }, { num: t('col.resent') },
+    t('col.note')],
     rows, t('sessions.none'));
 }
 

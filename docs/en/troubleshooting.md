@@ -165,6 +165,32 @@ A node without a path to its peer cannot check, and says `this node has no path 
 - The speed of the stretch between the application and its node, and between
   the far node and the destination, counts as well, because tcpraid cannot be
   faster than the slower of them, or than the application itself.
+- **The application can be the limit.** At the sending node,
+  `tcpraid sessions` then shows the state "ok, waiting for the application",
+  and the Sessions page shows "waiting for the application". The API has
+  `waits_for_application` and `idle_share` (`reference-api.md`). Nothing is
+  left unsent, little is in flight, and hardly anything is sent again. The
+  node has room and the application gives it no data. This is the usual
+  picture of a program that asks for one piece of data, waits for it, and
+  only then asks for the next: every piece costs at least one round trip, so
+  how much the program asks for at a time decides the speed. Copying files
+  over a file share and playing a video from one can be like this over a
+  long distance (`tutorial-file-share.md`).
+  - By default a node waits up to `-coalesce` (20 ms) for more data before
+    it sends a chunk that is not full, and in this case it waits before each
+    small request and each small answer. A rule with `-coalesce 0s` stops
+    that, at both nodes when both run version 0.12.0 or later. Beyond that,
+    no setting of tcpraid changes the speed: the round trip and how much the
+    program asks for decide it.
+  - `tcpraid peers test` measures the path, so it shows a high speed in this
+    case. That says that the path is fine, not that the program will reach
+    that speed.
+  - What helps is in the program: let it ask for more at a time, or for
+    several pieces together, or read ahead. A program that reads the same file
+    in large blocks shows what the path and the nodes give.
+  - While a lost chunk is being sent again, such a program waits as well, and
+    for a few seconds the state can say "waiting for the application" when
+    the path is the cause. A state that stays is what counts.
 - When a session ends, both nodes log two lines about it: bytes, chunks sent
   again, sub-connections replaced, time stalled. A node started with
   `-timeline` logs the same kind of figures while the session runs. The next
@@ -213,9 +239,12 @@ moment of the line.
 What limits a transfer shows at the sending node:
 
 - `pumpwait` near 0 while data moves (`tx` above zero): the node waits for
-  the application, and the path is not the limit. A `pumpwait` of 0 with `tx`
-  at 0 over several lines is one long wait that has not ended yet, so read it
-  as one of the cases below.
+  the application, and the path is not the limit. With `starve` near 1 and
+  `unsent` at 0 as well, the application gives the node data only now and
+  then, as a program does that asks for a piece and waits for it (see "It
+  works but it is not faster"). A `pumpwait` of 0 with `tx` at 0 over several
+  lines is one long wait that has not ended yet, so read it as one of the
+  cases below.
 - `pumpwait` near 1 with `unsent` large and every sub-connection of the data
   paths at its cap: the application delivers faster than the path takes. The
   window is full of data that has not been sent yet, so a larger `-window`

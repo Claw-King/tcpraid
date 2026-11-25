@@ -94,6 +94,7 @@ func TestRunMoreTransportFlagsRefused(t *testing.T) {
 // waits for its end.
 func runFor(t *testing.T, o runOptions) (stop func()) {
 	t.Helper()
+	needsName(t, o.dataDir, o.name)
 	o.apiAddr = "127.0.0.1:0"
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

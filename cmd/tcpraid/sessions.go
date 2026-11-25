@@ -107,6 +107,9 @@ func sessionState(s api.Session) string {
 		state = "connecting"
 	case silent >= silentAfter:
 		state = fmt.Sprintf("waiting for the peer for %v, gives up in %v", silent.Truncate(time.Second), left)
+	case s.WaitsForApplication:
+		// no fault: the application gives this node no more data for now
+		state = "ok, waiting for the application"
 	}
 	if s.SubsDialed > 0 && s.SubsDialed < s.Subs {
 		state += fmt.Sprintf(", %d sub-connections opened by this node and %d by the peer", s.SubsDialed, s.Subs-s.SubsDialed)

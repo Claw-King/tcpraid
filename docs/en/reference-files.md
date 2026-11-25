@@ -43,7 +43,7 @@
 The start-up lines of the log repeat what is in effect:
 
 ```
-node 0.11.2 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+node 0.12.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
 transport window=128MB budget=256MB grace=20m0s hol=1s timeline=off maxrss=off
 tuned target=500ms
 ```
@@ -62,9 +62,9 @@ and the table at the end of this section says which setting belongs to which
 figure.
 
 Each setting acts at this node's end of a session. Nothing of it is sent to
-the peer, with one exception. A node's `-window` is what it sends with and
-what it offers when it receives, and the other node learns it when a session
-begins. The two nodes of a pair may run with different values.
+the peer, except a rule's settings, described below, and the window. A node's
+`-window` is what it sends with and what it offers when it receives, and the
+other node learns it when a session begins. The two nodes of a pair may run with different values.
 
 A session takes each setting from three places, in this order:
 
@@ -77,7 +77,12 @@ A session takes each setting from three places, in this order:
 A setting that the rule does not have comes from the peer, and one that the
 peer does not have comes from the node. A rule's settings act at the node
 where the rule is stored. The other node of the same session takes its own,
-from what it has stored for its peer and from its node. `-budget` and `-timeline`
+from what it has stored for its peer and from its node. Since version 0.12.0
+a rule's settings other than `window`, `grace` and `pigtarget` also act at
+the other node, for the
+sessions of the rule, if that node is of version 0.12.0 or later: they go
+there before what it has stored for its peer, and after what its command
+line gives. `-budget` and `-timeline`
 belong to all sessions of a node together and exist for the node only.
 `-maxrss` and `-stats` are set when the node starts and at no other time.
 

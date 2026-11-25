@@ -3,11 +3,11 @@
     {
       "type": 1,
       "title": "tcpraid",
-      "sub_title": "0.11.2",
+      "sub_title": "0.12.0",
       "description": "Carries one TCP connection over several TCP connections at once, for software that opens a single stream. Web interface on port 9850; with an empty TCPRAID_UI_PASSWORD the node makes a password at its first start and prints it once in its log.",
       "location": "https://github.com/Claw-King/tcpraid",
       "platform": "linux/amd64",
-      "image": "ghcr.io/claw-king/tcpraid:0.11.2",
+      "image": "ghcr.io/claw-king/tcpraid:0.12.0",
       "env": [
         {
           "name": "TCPRAID_UI_PASSWORD",
@@ -44,11 +44,11 @@
     {
       "type": 1,
       "title": "tcpraid",
-      "sub_title": "0.11.2",
+      "sub_title": "0.12.0",
       "description": "Carries one TCP connection over several TCP connections at once, for software that opens a single stream. Web interface on port 9850; with an empty TCPRAID_UI_PASSWORD the node makes a password at its first start and prints it once in its log.",
       "location": "https://github.com/Claw-King/tcpraid",
       "platform": "linux/arm64",
-      "image": "ghcr.io/claw-king/tcpraid:0.11.2",
+      "image": "ghcr.io/claw-king/tcpraid:0.12.0",
       "env": [
         {
           "name": "TCPRAID_UI_PASSWORD",

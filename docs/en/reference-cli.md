@@ -42,7 +42,7 @@ are still under way.
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.11.2 (wire protocol 1)
+version      0.12.0 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -95,8 +95,8 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.11.2, last heard 2026-01-15T10:00:05Z
-features     path-test, resolve, rule-paths, dial-both, spare, held, session-ok
+state        online, runs 0.12.0, last heard 2026-01-15T10:00:05Z
+features     path-test, resolve, rule-paths, dial-both, spare, held, session-ok, rule-settings
 spares       2 connections wait for a session to begin on them
 
 PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS  MARK
@@ -373,7 +373,12 @@ remove the rule and add it again.
 `rules add` also takes the transport settings that are set for each session,
 the same twelve as `peers set`. They hold for the connections of the rule,
 at the node where the rule is stored, in the place of the peer's and the
-node's values. `rules set NAME -SETTING VALUE...` changes them on a rule that
+node's values. Since version 0.12.0 the ones other than `-window`, `-grace`
+and `-pigtarget` act at the peer too, for the sessions of the rule, in the place of what the peer has
+set for this node. A setting that the peer's command line gives stays as it
+is there. With a peer of an older version they act at this node only, and
+the rule's state says so with "(at this node only: the peer does not take a
+rule's settings)". `rules set NAME -SETTING VALUE...` changes them on a rule that
 is there, and the word `default` takes one off again. The rule goes on
 listening while its settings change. A rule that has settings shows them in
 its state:
@@ -543,7 +548,7 @@ One line for each application connection the node carries right now, or
 | `SUBS` | live sub-connections of every role: those that carry data, and those of paths with the roles `repair` and `control`. The `-subs` of a path or a rule counts the ones of that path alone, so this figure can be larger |
 | `NOT SENT YET` | data read from the application that still waits for a sub-connection. A value that stays large means the application delivers faster than the line carries |
 | `IN FLIGHT` | data that was sent and that the peer has not yet reported as received |
-| `STATE` | `ok`, `connecting` while the peer has not answered on any sub-connection, or how long the session has waited for the peer |
+| `STATE` | `ok`, `connecting` while the peer has not answered on any sub-connection, or how long the session has waited for the peer. `ok, waiting for the application` (since version 0.12.0) at the sending node: over the last five seconds its data sub-connections had room and nothing to send, and the node waited for data from the application nearly all the time. The application is the limit then, not the path, and nothing is wrong (`troubleshooting.md`, "It works but it is not faster") |
 
 `SENT` counts what has gone out to the peer. Some of it may still be on its
 way, so it runs ahead of what the far end shows as `RECEIVED`. The command
@@ -783,5 +788,5 @@ node.
 
 ```
 $ tcpraid version
-tcpraid 0.11.2 (wire protocol 1)
+tcpraid 0.12.0 (wire protocol 1)
 ```

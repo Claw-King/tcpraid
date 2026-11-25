@@ -235,9 +235,25 @@ func TestRunAndStatus(t *testing.T) {
 	stop()
 }
 
+// needsName fails the test when it starts a node on a data directory that holds no name
+// yet without giving one. Such a node takes the host name of the machine, and on some
+// test machines (the macOS runners, whose host names are longer than 64 bytes) no node
+// may take it: the test would then fail there and only there.
+func needsName(t *testing.T, dir, name string) {
+	t.Helper()
+	if name != "" {
+		return
+	}
+	if _, err := os.Stat(filepath.Join(dir, node.StateFile)); err == nil {
+		return
+	}
+	t.Fatalf("the test starts a node on %s, which holds no name yet, without -name. Give the node a name.", dir)
+}
+
 // startNode runs a node until the test ends and returns its recorded API address.
 func startNode(t *testing.T, dir, apiAddr, name string) string {
 	t.Helper()
+	needsName(t, dir, name)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- runNode(ctx, dir, apiAddr, name) }()

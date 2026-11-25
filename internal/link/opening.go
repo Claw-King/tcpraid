@@ -24,7 +24,9 @@ import (
 // The MAC is HMAC-SHA256, cut to 16 bytes, over everything before it, under a key
 // derived from the pair secret (OpeningKey). It proves that the dialing end holds the
 // pair secret; in the off tier it is the only proof of who dials. Request, path and role
-// are set in an opening of TypeReverse and zero in the others.
+// are set in an opening of TypeReverse. TypeSpare sets the path, and since 0.12.0
+// TypeSub may set the request to the number of a set of settings (Dialer.OpenSet). They
+// are zero otherwise.
 const (
 	openingMagic   = "TCPL"
 	openingVersion = 1
@@ -208,10 +210,11 @@ type Acceptor struct {
 	// PeerByFingerprint finds the peer whose identity key has the fingerprint.
 	PeerByFingerprint func(fingerprint string) (node.Peer, bool)
 	// HandleSub gets a connection whose opening asked for a sub-connection, after the
-	// opening has been verified; the transport's header is the next thing on it. It
-	// owns the connection and returns without waiting for it to end. nil: such
-	// connections are closed.
-	HandleSub func(peer node.Peer, conn net.Conn)
+	// opening has been verified, with the request of the opening: 0, or the number of
+	// a set of settings that the peer named for its rules (since 0.12.0). The
+	// transport's header is the next thing on it. It owns the connection and returns
+	// without waiting for it to end. nil: such connections are closed.
+	HandleSub func(peer node.Peer, request uint64, conn net.Conn)
 	// HandleReverse gets a connection whose verified opening is of TypeReverse, with
 	// the request, path and role of the opening; this node sends the transport's
 	// header on it. It owns the connection and returns without waiting for it to end.
@@ -307,7 +310,7 @@ func (a *Acceptor) dispatch(peer node.Peer, o *Opening, conn net.Conn) {
 			conn.Close()
 			return
 		}
-		a.HandleSub(peer, conn)
+		a.HandleSub(peer, o.Request, conn)
 	case TypeCheck:
 		// verify derived this key already; a peer record always has a proper secret
 		if key, err := OpeningKey(peer.PairSecret); err == nil {

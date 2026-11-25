@@ -55,6 +55,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -381,6 +382,11 @@ func (s *Server) sessions(w http.ResponseWriter, _ *http.Request, _ map[string]s
 		if si.Client {
 			role = "client"
 		}
+		var idle *float64
+		if si.IdleShare >= 0 {
+			share := math.Round(si.IdleShare*100) / 100
+			idle = &share
+		}
 		list = append(list, Session{
 			ID:           hex.EncodeToString(si.ID[:]),
 			Destination:  si.Destination,
@@ -402,6 +408,9 @@ func (s *Server) sessions(w http.ResponseWriter, _ *http.Request, _ map[string]s
 			GraceLeftMs:   si.GraceLeft.Milliseconds(),
 			Test:          si.Test,
 			WindowBytes:   int64(si.Window),
+
+			IdleShare:           idle,
+			WaitsForApplication: si.AppWait,
 		})
 	}
 	writeJSON(w, http.StatusOK, list)
@@ -685,7 +694,8 @@ func (s *Server) testPeer(w http.ResponseWriter, r *http.Request, arg map[string
 func apiRule(st forward.RuleStatus) Rule {
 	r := st.Rule
 	out := Rule{Name: r.Name, Listen: r.Listen, Destination: r.Destination, Match: r.Match, Socks: r.Socks, Peer: r.Peer, Enabled: r.Enabled,
-		Listening: st.Listening, Error: st.Error, Sessions: st.Sessions, Subs: r.Subs, PeerDials: st.PeerDials, Dial: r.Dial}
+		Listening: st.Listening, Error: st.Error, Sessions: st.Sessions, Subs: r.Subs, PeerDials: st.PeerDials, Dial: r.Dial,
+		SettingsHereOnly: st.SettingsHereOnly}
 	if len(r.Paths) > 0 {
 		out.Paths = append([]string{}, r.Paths...)
 	}

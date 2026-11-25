@@ -54,6 +54,9 @@ func ruleUses(r api.Rule) string {
 	}
 	if len(r.Transport) > 0 {
 		s += ", with " + transportText(r.Transport)
+		if r.SettingsHereOnly {
+			s += " (at this node only: the peer does not take a rule's settings)"
+		}
 	}
 	switch r.Dial {
 	case "self":

@@ -9,7 +9,9 @@ package node
 // share has the node layer only.
 //
 // Every setting here acts at this node's end of a session. The other end of the same
-// session uses its own layers; nothing is sent to it.
+// session uses its own layers, except that since 0.12.0 a rule's settings that each
+// session has for itself are named to a peer that takes them, and act there too
+// (internal/forward/rulesettings.go).
 
 import (
 	"errors"

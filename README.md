@@ -62,6 +62,11 @@ It does not help when:
   which tools do this and what to set.
 - The application can open parallel connections itself. Use that feature
   instead.
+- The application asks for a little data, waits for it, and only then asks
+  for more. Its speed is then how much it asks for at a time, divided by the
+  round trip, and tcpraid can do little about that. Opening a file share at the
+  other site can be like this, and `docs/en/tutorial-file-share.md` says what
+  helps.
 
 tcpraid is not a VPN or a general proxy. It carries only the TCP connections
 you make rules for, between two machines you run.
@@ -173,6 +178,7 @@ this slowly.
 | `docs/en/tutorial-rsync.md` | rsync to an rsync daemon |
 | `docs/en/tutorial-postgresql.md` | PostgreSQL streaming replication |
 | `docs/en/tutorial-pbs.md` | a Proxmox Backup Server sync job |
+| `docs/en/tutorial-file-share.md` | the file share of the other site, and what decides its speed |
 | `docs/en/security.md` | what is protected, what is not, what a leaked code or file is worth |
 | `docs/en/tunnels.md` | using it together with a tunnel, an overlay network or a proxy |
 | `docs/en/troubleshooting.md` | what to look at when it does not work or is slow |

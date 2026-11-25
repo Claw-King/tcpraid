@@ -223,7 +223,9 @@ listening node finds the peer with that fingerprint, checks the MAC, refuses a
 time more than 10 minutes from its own clock and, under TLS, a fingerprint that
 is not the one TLS authenticated. A connection that fails any of this is closed
 without an answer. `request`, `path` and `role` are set in type 2 and zero in
-the others, except that type 5 sets `path`.
+the others, except that type 5 sets `path` and, since version 0.12.0, type 1
+may set `request` to the number of a set of settings (see "The settings of a
+rule at the other node" below).
 
 | Type | Then |
 |---|---|
@@ -268,6 +270,7 @@ field that the receiving end does not know is ignored.
 | `held` | by an end whose peer runs as a new process | `request`, `sessions` (list of ids in hex, 256 at most) | which of these sessions do you hold? |
 | `held_reply` | in answer to a `held` | `request`, `sessions` (the ids it holds), `done` (the ids that ended complete at it) | these, and a session in neither list it does not know |
 | `session_ok` | by the exit end of a session | `session` (the id in hex) | the session is connected to its destination |
+| `rule_settings` | by an end that has rules for the other | `sets` (list of `id`, a number not zero, and `settings`, an object of names and values; 64 at most) | the sessions of my rules take these settings at your end |
 
 The types from `session_fail` to `test_end`, and the fields `features`,
 `test_path` and `test_subs`, were added in version 0.3.0. The types `resolve`
@@ -275,7 +278,9 @@ and `resolve_reply` were added in version 0.4.0, and the fields `rule_paths`
 and `rule_subs` in version 0.5.0. Version 0.6.0 added the type `spares`, the
 field `both` of an `open` and the field `code` of an `open_fail`. Version
 0.11.0 added the types `held`, `held_reply` and `session_ok` and the field
-`kind` of a `session_fail`. Older versions ignore what they do not know.
+`kind` of a `session_fail`. Version 0.12.0 added the type `rule_settings` and
+the field `rule_settings` of an `open`. Older versions ignore what they do not
+know.
 
 **Versions and features.** Two rules say what two nodes use with each other.
 
@@ -293,7 +298,7 @@ field `both` of an `open` and the field `code` of an `open_fail`. Version
   `hello`. A node uses it with a peer only when the peer's last `hello`
   named it. A name that a node does not know means nothing to it. The names
   so far are `path-test` and `resolve` (below), `rule-paths`, `dial-both`,
-  `spare`, `held` and `session-ok`. A new type of message, and a new field
+  `spare`, `held`, `session-ok` and `rule-settings`. A new type of message, and a new field
   that changes what the receiving node must do, comes with a new name. A
   field that only adds information, like the `kind` of a `session_fail`,
   needs none.
@@ -514,3 +519,28 @@ answers the header with the ordinary reply. Its `open` then finds the session
 there and keeps it at its numbers of sub-connections, and the sub-connection
 on the spare connection counts among those of its path. A session of a rule that names
 paths or a number of sub-connections does not begin on a spare connection.
+
+**The settings of a rule at the other node.** The transport settings that a
+rule gives its sessions act at the node where the rule is stored. Since version
+0.12.0 the settings of a rule that each session has for itself also act at
+the other node, if it says so with the text `rule-settings` in the
+`features` of its `hello`. They are `coalesce`, `hol`, `target`, `dead`,
+`kickratio`, `kickfloor`, `share`, `fbsubs` and `fbevery`, written as on the
+command line. `window`, `grace`, `pigtarget` and the settings that all
+sessions of a node share do not travel.
+
+A node sends `rule_settings` to such a peer after each `hello` of the peer
+and whenever its rules change. It names every set that its rules for that
+peer have, 64 at most, each under a number that is not zero. A message takes
+the place of the sets the node named before. A number is given once in the
+life of a process: a rule whose settings change gets a new one.
+
+A session of such a rule names the number of its set to the peer: in the
+`rule_settings` field of the `open` that asks the peer for sub-connections,
+and in the `request` of the opening (type 1) of each sub-connection the node
+dials. The peer creates the session with the set in the place of what it
+keeps for the node, as a rule stored at the peer would, except for a setting
+that its command line gives. It takes a value only if its own rules for that setting
+take it, and passes over a name that does not travel and a number it does
+not hold. A session of such a rule does not begin on a spare connection,
+which the peer opened with its own settings.

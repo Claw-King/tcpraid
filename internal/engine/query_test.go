@@ -43,6 +43,12 @@ func TestSessionList(t *testing.T) {
 		t.Errorf("silence and what is left of the grace time add up to %v, want the grace time %v", sum, e.cfg.Grace)
 	}
 	l[0].Silent, l[0].GraceLeft = 0, 0
+	// the settings and the idle share have tests of their own: a young session cannot
+	// say how idle it was yet
+	if l[0].Config.Window != e.cfg.Window || l[0].IdleShare != -1 {
+		t.Errorf("the session's settings have the window %d, want %d; its idle share is %v, want -1", l[0].Config.Window, e.cfg.Window, l[0].IdleShare)
+	}
+	l[0].Config, l[0].IdleShare = Config{}, 0
 	want := SessionInfo{ID: [16]byte{0xa1, 2}, Destination: "192.0.2.10:873", Started: srv.started,
 		TxBytes: 300, RxBytes: 200, UnackedBytes: 100, Subs: 2, UnsentBytes: 60, Up: true, Window: e.cfg.Window}
 	if l[0] != want {

@@ -42,6 +42,15 @@ type SessionInfo struct {
 	// Window is the send window the session was created with, in bytes: the engine's
 	// or the one its creator gave it.
 	Window int
+	// IdleShare is the share of the last seconds in which the session's data
+	// sub-connections had room and nothing to send, 0 to 1, without those of a repair
+	// path; -1 while the session is too young to say. AppWait: the share is high,
+	// nothing is unsent, and this end is the one that sends: the session waits for
+	// its application to give it data.
+	IdleShare float64
+	AppWait   bool
+	// Config is the copy of the settings the session was created with.
+	Config Config
 }
 
 // SessionList returns the live sessions, oldest first.
@@ -85,6 +94,9 @@ func (e *Engine) SessionList() []SessionInfo {
 			Silent:       silent,
 			GraceLeft:    max(s.grace()-silent, 0),
 			Window:       s.cfg.Window,
+			IdleShare:    s.idleShare(),
+			AppWait:      s.idle.appWait,
+			Config:       s.cfg,
 		})
 		s.mu.Unlock()
 		return true

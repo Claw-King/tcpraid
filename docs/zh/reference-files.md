@@ -43,7 +43,7 @@
 日志的启动行会把实际生效的设置重复一遍：
 
 ```
-node 0.11.2 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+node 0.12.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
 transport window=128MB budget=256MB grace=20m0s hol=1s timeline=off maxrss=off
 tuned target=500ms
 ```
@@ -54,7 +54,7 @@ tuned target=500ms
 
 从 `-window` 到 `-maxrss` 的选项改变本节点传输层的工作方式。默认值适合大多数路径，有测量结果支持时再改。节点为每个会话记在日志里的数字怎么读，见 `troubleshooting.md`。本节末尾的表说明哪一项设置对应哪一个数字。
 
-每一项设置只管会话在本节点这一端的行为，不会发给对端。只有一个例外。一个节点的 `-window` 是它发送时用的窗口，也是它接收时提供的空间，对端在会话开始时得知它。一对节点的两端可以用不同的值。
+每一项设置只管会话在本节点这一端的行为，不会发给对端。例外是规则上的设置(见下文)和窗口。一个节点的 `-window` 是它发送时用的窗口，也是它接收时提供的空间，对端在会话开始时得知它。一对节点的两端可以用不同的值。
 
 一个会话的每一项设置按下面的顺序从三个地方取：
 
@@ -64,7 +64,7 @@ tuned target=500ms
 | 对端 | `tcpraid peers set NAME -SETTING VALUE` | 和这个对端之间的会话，不管规则在两个节点的哪一个上 |
 | 节点 | 启动时 `tcpraid run -SETTING VALUE`，运行中 `tcpraid transport set -SETTING VALUE` | 节点的每一个会话 |
 
-规则没有设的取对端的，对端没有设的取节点的。规则上的设置在规则所在的节点上起作用。同一个会话的另一个节点用它自己的设置，也就是它为对端存的设置和它节点的设置。`-budget` 和 `-timeline` 属于一个节点的全部会话，只有节点这一层。`-maxrss` 和 `-stats` 只能在节点启动时设。
+规则没有设的取对端的，对端没有设的取节点的。规则上的设置在规则所在的节点上起作用。同一个会话的另一个节点用它自己的设置，也就是它为对端存的设置和它节点的设置。从 0.12.0 版起，另一个节点如果也是 0.12.0 或更新的版本，规则上 `window`、`grace`、`pigtarget` 以外的设置对这条规则的会话在它上面也起作用。它们排在它为对端存的设置之前，排在它命令行给出的设置之后。`-budget` 和 `-timeline` 属于一个节点的全部会话，只有节点这一层。`-maxrss` 和 `-stats` 只能在节点启动时设。
 
 会话在开始时取得它的设置，一直用到结束。三个地方的任何一处改动，都只对之后开始的会话起作用。`tcpraid transport`、`tcpraid peers set` 和 `tcpraid rules set` 见 `reference-cli.md`。
 

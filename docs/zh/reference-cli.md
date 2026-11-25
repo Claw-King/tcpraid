@@ -30,7 +30,7 @@ tcpraid version
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.11.2 (wire protocol 1)
+version      0.12.0 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -79,8 +79,8 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.11.2, last heard 2026-01-15T10:00:05Z
-features     path-test, resolve, rule-paths, dial-both, spare, held, session-ok
+state        online, runs 0.12.0, last heard 2026-01-15T10:00:05Z
+features     path-test, resolve, rule-paths, dial-both, spare, held, session-ok, rule-settings
 spares       2 connections wait for a session to begin on them
 
 PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS  MARK
@@ -271,7 +271,7 @@ rule pull added: listening, over the paths side, with at most 3 sub-connections 
 
 `rules enable` 和 `rules disable` 会保留这两项设置。要修改它们，就删掉规则再重新添加。
 
-`rules add` 也接受一个会话可以单独有的那些传输层设置，和 `peers set` 的那十二项相同。它们在规则所在的节点上对这条规则的连接起作用，取代对端的和节点的值。`rules set NAME -SETTING VALUE...` 修改一条已有规则的这些设置，在值的位置写 `default` 就把一项去掉。修改设置期间规则照常监听。有设置的规则会在状态里写出来：
+`rules add` 也接受一个会话可以单独有的那些传输层设置，和 `peers set` 的那十二项相同。它们在规则所在的节点上对这条规则的连接起作用，取代对端的和节点的值。从 0.12.0 版起，`-window`、`-grace`、`-pigtarget` 以外的这些设置对这条规则的会话在对端也起作用，取代对端为本节点设的值，对端命令行给出的设置在对端照旧。对端是更旧的版本时，它们只在本节点起作用，规则的状态里会写 "(at this node only: the peer does not take a rule's settings)"。`rules set NAME -SETTING VALUE...` 修改一条已有规则的这些设置，在值的位置写 `default` 就把一项去掉。修改设置期间规则照常监听。有设置的规则会在状态里写出来：
 
 ```
 $ tcpraid rules add zfs -peer nas-a -listen 0.0.0.0:50000-50002 -dest 192.0.2.10:50100-50102 -window 16MB
@@ -379,7 +379,7 @@ ID      ROLE    RULE   PEER   DESTINATION     AGE  SENT      RECEIVED  AVERAGE  
 | `SUBS` | 存活的子连接数，各种角色的都算：承载数据的，以及角色是 `repair` 和 `control` 的路径上的。路径或规则的 `-subs` 只数那一条路径上的，所以这里的数可以更大 |
 | `NOT SENT YET` | 已从应用读进来、还在等子连接的数据。这个数一直很大，说明应用给数据的速度比线路能带的快 |
 | `IN FLIGHT` | 已经发出、对端还没有报告收到的数据 |
-| `STATE` | `ok`；对端还没有在任何子连接上应答时是 `connecting`；或者会话已经等了对端多久 |
+| `STATE` | `ok`；对端还没有在任何子连接上应答时是 `connecting`；或者会话已经等了对端多久。`ok, waiting for the application`(0.12.0 版起)只出现在发送数据的节点上：最近五秒里它的数据子连接有空位却没有数据可发，节点几乎一直在等应用给数据。这时限制传输的是应用，不是路径，也不是出了故障(见 `troubleshooting.md` 的“能用，但没有变快”) |
 
 `SENT` 算的是已经发往对端的数据。其中一部分可能还在路上，所以它会比另一端显示的 `RECEIVED` 多。这条命令说不出一次传输还要多久，因为 tcpraid 不知道应用总共要发多少。
 
@@ -525,5 +525,5 @@ changed: rule "zfs": changed
 
 ```
 $ tcpraid version
-tcpraid 0.11.2 (wire protocol 1)
+tcpraid 0.12.0 (wire protocol 1)
 ```

@@ -228,6 +228,14 @@ func (d *Dialer) Open(ctx context.Context, peer node.Peer, path node.Path) (net.
 	return d.open(ctx, peer, path, TypeSub, nil)
 }
 
+// OpenSet is Open for a sub-connection of a session that takes, at the peer, the set of
+// settings with the number set, which this node named to the peer: the number goes in
+// the request of the opening, which is 0 otherwise. Only for a peer that takes such
+// sets (control.FeatureRuleSettings).
+func (d *Dialer) OpenSet(ctx context.Context, peer node.Peer, path node.Path, set uint64) (net.Conn, error) {
+	return d.open(ctx, peer, path, TypeSub, func(o *Opening) { o.Request = set })
+}
+
 // OpenReverse connects to peer over path and sends the opening of a sub-connection that
 // the peer asked for (TypeReverse), with the request it gave and the path and role this
 // node gives the sub-connection: the peer sends the transport's header on the

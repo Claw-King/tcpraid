@@ -24,6 +24,7 @@ import (
 // on a free loopback port.
 func startNodeWith(t *testing.T, o runOptions) {
 	t.Helper()
+	needsName(t, o.dataDir, o.name)
 	o.apiAddr = "127.0.0.1:0"
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

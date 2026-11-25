@@ -27,6 +27,7 @@
 //	held          to an end that was restarted request, sessions
 //	held_reply    the answer                   request, sessions, done
 //	session_ok    to the end that carries      session
+//	rule_settings to the other end of rules    sets
 //
 // session_fail tells the end that carries a session why the other end could not connect
 // it to its destination. paths asks an end for the names and sizes of the paths it holds
@@ -106,6 +107,8 @@ const (
 	TypeHeld      = "held"
 	TypeHeldReply = "held_reply"
 	TypeSessionOK = "session_ok"
+	// since 0.12.0
+	TypeRuleSettings = "rule_settings"
 )
 
 // FeaturePathTest in a hello says that the sending node takes the sessions of a path
@@ -144,6 +147,22 @@ const FeatureSessionOK = "session-ok"
 
 // MaxHeld is the most sessions a held names, and the most its answer does.
 const MaxHeld = 256
+
+// FeatureRuleSettings in a hello says that the sending node takes the transport
+// settings of the other node's rules for the sessions of those rules (rule_settings,
+// and the number of a set in an open or in the opening of a sub-connection).
+const FeatureRuleSettings = "rule-settings"
+
+// MaxRuleSets is the most sets a rule_settings names, and the most a node keeps for a
+// peer.
+const MaxRuleSets = 64
+
+// RuleSet is one set of transport settings in a rule_settings: a number, not zero, and
+// the settings by name, each value written as on the command line.
+type RuleSet struct {
+	ID       uint64            `json:"id"`
+	Settings map[string]string `json:"settings,omitempty"`
+}
 
 // The kinds of a session_fail with the code CodeDial (since 0.11.0); none for a failure
 // of another kind.
@@ -250,6 +269,13 @@ type Message struct {
 	Done []string `json:"done,omitempty"`
 	// session_fail (since 0.11.0): KindRefused, KindTimeout or KindUnreachable, or empty
 	Kind string `json:"kind,omitempty"`
+	// rule_settings (since 0.12.0): every set of transport settings that the sending
+	// node's rules give their sessions at the receiving node, MaxRuleSets at most. It
+	// takes the place of the sets the sending node named before
+	Sets []RuleSet `json:"sets,omitempty"`
+	// open (since 0.12.0): the number of the set of a rule_settings that the session
+	// takes at the node that is asked; 0 for none
+	RuleSet uint64 `json:"rule_settings,omitempty"`
 }
 
 // ErrTooLong is the error of a message that is longer than MaxMessage.

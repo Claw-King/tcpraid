@@ -106,8 +106,16 @@ type Runtime struct {
 	noDialBoth  bool
 	noSpare     bool
 	// noHeld: the hello names neither the held nor the session-ok feature (to be
-	// 0.10.x).
-	noHeld bool
+	// 0.10.x). noRuleSettings: it does not name the rule-settings feature (to be
+	// 0.11.x).
+	noHeld         bool
+	noRuleSettings bool
+	// The sets of transport settings of rules (rulesettings.go): outSets, by rule, are
+	// the ones this node names to its peers, setSeq the last number given; inSets, by
+	// peer and number, are the ones peers named to this node.
+	outSets map[string]outSet
+	setSeq  uint64
+	inSets  map[string]map[uint64]node.Transport
 	// protocols, if not nil, are the versions of the wire protocol the hello lists in
 	// the place of control.Protocol (a test sets it before Start to be a node that
 	// speaks another version).
@@ -177,8 +185,11 @@ type peerState struct {
 
 	mu sync.Mutex
 	// narrowed are the routes of rules that use only some of the paths or fewer
-	// sub-connections, by what they use (narrowKey); made when first needed.
+	// sub-connections, by what they use (narrowKey); made when first needed. withSet
+	// are the routes of rules whose sessions take a set of settings at the peer
+	// (setRoute).
 	narrowed map[string]*engine.Route
+	withSet  map[string]*engine.Route
 }
 
 // RuleStatus is a rule and how it is doing.
@@ -197,6 +208,10 @@ type RuleStatus struct {
 	// PeerDials: new connections of the rule are opened by the peer for now, although
 	// this node has a path to it, because that path is down.
 	PeerDials bool
+	// SettingsHereOnly: the rule has transport settings that its sessions would take
+	// at the peer too, and the connected peer does not take them (a version before
+	// 0.12.0). They act at this node alone.
+	SettingsHereOnly bool
 }
 
 // Notice is what Runtime.Notify is told. Kind is NoticeOnline, NoticeOffline or
@@ -518,6 +533,14 @@ func (rt *Runtime) carryAttempt(a *attempt, r node.Rule, c net.Conn, ip net.IP, 
 			return
 		}
 	}
+	if set := rt.ruleSet(r); set != 0 {
+		// the sub-connections tell the peer the set the session takes there
+		if route, err = rt.setRoute(ps, r, set); err != nil {
+			a.fail(err.Error())
+			reset(c)
+			return
+		}
+	}
 	if end, ok := route.CarryWith(rt.settingsFor(ps.peer, r.Name), c, ip, port, engine.Owner{Peer: r.Peer, Rule: r.Name}, ps.valid); ok {
 		rt.ended(a, r.Peer, net.JoinHostPort(ip.String(), strconv.Itoa(port)), end)
 	}
@@ -601,6 +624,45 @@ func narrowTo(groups []engine.DialGroup, names []string, subs int, some bool) (o
 		return nil, ""
 	}
 	return out, ""
+}
+
+// maxSetRoutes bounds the routes a peer state keeps for sets of settings: a number
+// changes with every change of a rule's settings.
+const maxSetRoutes = 64
+
+// setRoute returns the route for the sessions of rule r that take the set with the
+// number set at the peer: the paths the rule uses, and sub-connections that name the
+// set in their openings.
+func (rt *Runtime) setRoute(ps *peerState, r node.Rule, set uint64) (*engine.Route, error) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	key := narrowKey(r) + "\x00" + strconv.FormatUint(set, 16)
+	if route := ps.withSet[key]; route != nil {
+		return route, nil
+	}
+	groups := rt.groupsWith(ps, ps.peer, set)
+	switch {
+	case !r.Narrowed():
+	case r.DialMode() == node.DialBoth:
+		if groups = narrowSome(groups, r.Paths, r.Subs); groups == nil {
+			return nil, fmt.Errorf("the rule lets both nodes open the connections (dial both), and this node has none of the paths it names to peer %q that carry data. \"tcpraid peers show %s\" lists the paths.", ps.peer.Name, ps.peer.Name)
+		}
+	default:
+		var missing string
+		if groups, missing = narrow(groups, r.Paths, r.Subs); groups == nil {
+			return nil, noSuchPath(ps.peer.Name, missing)
+		}
+	}
+	keys, err := pairKeys(ps.peer)
+	if err != nil {
+		return nil, err
+	}
+	route := rt.Engine.NewRoute(groups, keys, ps.peer.UDPDial)
+	if ps.withSet == nil || len(ps.withSet) >= maxSetRoutes {
+		ps.withSet = map[string]*engine.Route{}
+	}
+	ps.withSet[key] = route
+	return route, nil
 }
 
 // narrowKey names what a rule uses of a peer's paths.
@@ -703,10 +765,21 @@ func (rt *Runtime) validFor(peer node.Peer) func() bool {
 // groups returns the dial groups of a peer: for each path, one group per role. A data
 // or repair role keeps the path's number of sub-connections; a control role keeps one.
 func (rt *Runtime) groups(ps *peerState, peer node.Peer) []engine.DialGroup {
+	return rt.groupsWith(ps, peer, 0)
+}
+
+// groupsWith is groups for the sessions that take the set of settings with the number
+// set at the peer: each sub-connection names it in its opening. 0: none.
+func (rt *Runtime) groupsWith(ps *peerState, peer node.Peer, set uint64) []engine.DialGroup {
 	var gs []engine.DialGroup
 	for i, path := range peer.Paths {
 		dial := func() (net.Conn, error) {
-			conn, err := ps.dial(func(ctx context.Context) (net.Conn, error) { return rt.Dialer.Open(ctx, peer, path) })
+			conn, err := ps.dial(func(ctx context.Context) (net.Conn, error) {
+				if set != 0 {
+					return rt.Dialer.OpenSet(ctx, peer, path, set)
+				}
+				return rt.Dialer.Open(ctx, peer, path)
+			})
 			rt.dialed(ps, peer.Name, err)
 			return conn, err
 		}
@@ -742,7 +815,10 @@ func (ps *peerState) dial(open func(ctx context.Context) (net.Conn, error)) (net
 // HandleSub takes a sub-connection that a peer opened (link.Acceptor.HandleSub): the
 // transport reads its header and connects the session to its destination, within the
 // peer's allow list if it has one. It returns at once.
-func (rt *Runtime) HandleSub(peer node.Peer, conn net.Conn) {
+//
+// set is the number of the set of settings that the peer's rule gives the session at
+// this node (rulesettings.go), 0 for none.
+func (rt *Runtime) HandleSub(peer node.Peer, set uint64, conn net.Conn) {
 	keys, err := pairKeys(peer)
 	if err != nil {
 		conn.Close()
@@ -764,7 +840,7 @@ func (rt *Runtime) HandleSub(peer node.Peer, conn net.Conn) {
 		Sink:       rt.sink,
 		DialFailed: rt.tellFailure(peer.Name),
 		Dialed:     rt.tellConnected(peer.Name),
-		Config:     rt.settingsFor(peer, ""),
+		Config:     rt.settingsWithSet(peer, set),
 	})
 }
 
@@ -807,6 +883,13 @@ func (rt *Runtime) Rules() []RuleStatus {
 	for _, p := range rt.Node.Peers() {
 		holds[p.Name] = len(p.Paths) > 0
 	}
+	// the connected peers that do not take the sets of settings of rules
+	hereOnly := map[string]bool{}
+	for _, r := range rules {
+		if _, seen := hereOnly[r.Peer]; !seen {
+			hereOnly[r.Peer] = rt.peerLacks(r.Peer, control.FeatureRuleSettings)
+		}
+	}
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	out := make([]RuleStatus, 0, len(rules))
@@ -814,6 +897,7 @@ func (rt *Runtime) Rules() []RuleStatus {
 		p := rt.problems[r.Name]
 		st := RuleStatus{Rule: r, Sessions: sessions[r.Name], Error: p.text, ErrorAt: p.at}
 		st.PeerDials = r.Enabled && r.DialMode() == node.DialAuto && !r.Narrowed() && holds[r.Peer] && rt.pathDownLocked(r.Peer)
+		st.SettingsHereOnly = r.Enabled && hereOnly[r.Peer] && len(travellingOf(r.Transport)) > 0
 		switch {
 		case !r.Enabled:
 			st.Error, st.ErrorAt = "", time.Time{}
@@ -851,6 +935,8 @@ func (rt *Runtime) AddRule(r node.Rule) error {
 	rt.logSettings(r)
 	rt.Apply()
 	rt.rulesChanged()
+	// the peers that take the sets of settings of rules hear of the change
+	go rt.announceSetsAll()
 	return nil
 }
 
@@ -863,7 +949,7 @@ func (rt *Runtime) rulesChanged() {
 // logSettings logs the transport settings of a rule that has some.
 func (rt *Runtime) logSettings(r node.Rule) {
 	if len(r.Transport) > 0 {
-		rt.logf("rule %q: settings of its connections at this node: %s. Connections that arrive from now on use them.", r.Name, r.Transport)
+		rt.logf("rule %q: settings of its connections: %s. Connections that arrive from now on use them.", r.Name, r.Transport)
 	}
 }
 
@@ -879,6 +965,8 @@ func (rt *Runtime) ReplaceRule(name string, r node.Rule) error {
 	rt.logSettings(r)
 	rt.Apply()
 	rt.rulesChanged()
+	// the peers that take the sets of settings of rules hear of the change
+	go rt.announceSetsAll()
 	return nil
 }
 
@@ -891,5 +979,7 @@ func (rt *Runtime) RemoveRule(name string) error {
 	rt.logf("rule %q removed", name)
 	rt.Apply()
 	rt.rulesChanged()
+	// the peers that take the sets of settings of rules hear of the change
+	go rt.announceSetsAll()
 	return nil
 }

@@ -193,7 +193,7 @@ type reverseEntry struct {
 
 // features are what this node says it can do in every hello.
 var features = []string{control.FeaturePathTest, control.FeatureResolve, control.FeatureRulePaths, control.FeatureDialBoth, control.FeatureSpare,
-	control.FeatureHeld, control.FeatureSessionOK}
+	control.FeatureHeld, control.FeatureSessionOK, control.FeatureRuleSettings}
 
 // maxFeatures bounds what is kept of the features a peer names.
 const maxFeatures = 16
@@ -387,6 +387,8 @@ func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}
 			hello.Features = []string{control.FeaturePathTest, control.FeatureResolve, control.FeatureRulePaths, control.FeatureDialBoth}
 		case rt.noHeld:
 			hello.Features = []string{control.FeaturePathTest, control.FeatureResolve, control.FeatureRulePaths, control.FeatureDialBoth, control.FeatureSpare}
+		case rt.noRuleSettings:
+			hello.Features = slices.DeleteFunc(slices.Clone(features), func(f string) bool { return f == control.FeatureRuleSettings })
 		}
 	}
 	if err := cc.Send(hello); err != nil {
@@ -451,6 +453,8 @@ func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}
 			if p, ok := rt.Node.Peer(cc.peer); ok {
 				rt.askSpares(p, cc)
 			}
+			// and it takes the sets of settings of this node's rules again
+			rt.announceSets(cc)
 		case control.TypeSpares:
 			rt.sparesAsked(pc, cc.peer, m.Spares)
 		case control.TypePing:
@@ -490,6 +494,8 @@ func (rt *Runtime) serveControl(pc *peerControl, cc *ctlConn, done chan struct{}
 			}
 		case control.TypeHeldReply:
 			rt.heldAnswered(cc, m)
+		case control.TypeRuleSettings:
+			rt.setsNamed(cc.peer, m)
 		case control.TypeSessionOK:
 			rt.sessionOK(cc.peer, m)
 		}
@@ -664,10 +670,13 @@ func (rt *Runtime) carryReverse(a *attempt, r node.Rule, peer node.Peer, c net.C
 		reset(c)
 		return
 	}
+	ask.RuleSet = rt.ruleSet(r)
 	// a spare connection the peer keeps is on a path of the peer's choosing, so a rule
-	// that names paths or a number of sub-connections does without one
+	// that names paths or a number of sub-connections does without one. The session on
+	// a spare is created with the peer's own settings, so a rule whose settings the
+	// peer takes does without one too
 	end, ok := rt.runReverse(cc, peer, keys, c, ip, port, engine.Owner{Peer: peer.Name, Rule: r.Name}, ask, a.fail,
-		reverseHow{spare: !r.Narrowed(), rule: r.Name})
+		reverseHow{spare: !r.Narrowed() && ask.RuleSet == 0, rule: r.Name})
 	if ok {
 		rt.ended(a, peer.Name, net.JoinHostPort(ip.String(), strconv.Itoa(port)), end)
 	}
@@ -720,7 +729,14 @@ func (rt *Runtime) carryBoth(a *attempt, r node.Rule, peer node.Peer, c net.Conn
 		reset(c)
 		return
 	}
-	ask := control.Message{Both: true, RulePaths: r.Paths, RuleSubs: r.Subs}
+	ask := control.Message{Both: true, RulePaths: r.Paths, RuleSubs: r.Subs, RuleSet: rt.ruleSet(r)}
+	if ask.RuleSet != 0 {
+		if route, err = rt.setRoute(ps, r, ask.RuleSet); err != nil {
+			a.fail(err.Error())
+			reset(c)
+			return
+		}
+	}
 	end, ok := rt.runReverse(cc, peer, keys, c, ip, port, engine.Owner{Peer: peer.Name, Rule: r.Name}, ask, a.fail,
 		reverseHow{own: route, rule: r.Name})
 	if ok {
@@ -980,7 +996,7 @@ func (rt *Runtime) serveOpen(pc *peerControl, cc *ctlConn, m control.Message) {
 			Sink:       rt.sink,
 			DialFailed: rt.tellFailure(peer.Name),
 			Dialed:     rt.tellConnected(peer.Name),
-			Config:     rt.settingsFor(peer, ""),
+			Config:     rt.settingsWithSet(peer, m.RuleSet),
 		})
 	}()
 }
