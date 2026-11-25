@@ -783,7 +783,9 @@ func TestHookThatHangs(t *testing.T) {
 // A hook that cannot be run stops the node at its start, before anything is bound.
 func TestHookThatIsNotThere(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "a")
-	o := optionsOf(t, "-data", dir, "-hook", filepath.Join(t.TempDir(), "no-such-program"))
+	// the node has a name: the host name of the test machine may be one that no node may
+	// take (longer than 64 bytes on the macOS runners), and that error would come first
+	o := optionsOf(t, "-data", dir, "-name", "alpha", "-hook", filepath.Join(t.TempDir(), "no-such-program"))
 	o.apiAddr = "127.0.0.1:0"
 	err := runNodeWith(context.Background(), o)
 	if err == nil || !strings.Contains(err.Error(), "-hook") {
