@@ -37,13 +37,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Claw-King/tcpraid/client"
 	"github.com/Claw-King/tcpraid/internal/node"
 )
 
 const (
 	PathLogin  = "/api/v1/login"
 	PathLogout = "/api/v1/logout"
-	PathNode   = "/api/v1/node"
+	PathNode   = client.PathNode
 
 	// SessionCookie is the name of the cookie of a login where the request names no
 	// port, and what the name begins with where it names one (SessionCookieName).
@@ -86,10 +87,8 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
-// NodeUpdate is the body of PUT /api/v1/node.
-type NodeUpdate struct {
-	Name string `json:"name"`
-}
+// NodeUpdate is the body of PUT /api/v1/node; it is the type of package client.
+type NodeUpdate = client.NodeUpdate
 
 // UI is the web interface of a Server. Set the exported fields before the Server is
 // used.

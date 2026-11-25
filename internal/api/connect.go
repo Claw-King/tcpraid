@@ -30,21 +30,15 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Claw-King/tcpraid/client"
 	"github.com/Claw-King/tcpraid/internal/forward"
 	"github.com/Claw-King/tcpraid/internal/node"
 )
 
-// ConnectUpgrade names the protocol of a connection after a connect request was
-// answered with 101: the stream itself.
-const ConnectUpgrade = "tcpraid-connect"
+// ConnectUpgrade and ConnectRequest are those of package client.
+const ConnectUpgrade = client.ConnectUpgrade
 
-// ConnectRequest asks for a connection to host:port as seen from the peer. Host is an
-// IP address or a host name, which the peer looks up.
-type ConnectRequest struct {
-	Peer string `json:"peer"`
-	Host string `json:"host"`
-	Port int    `json:"port"`
-}
+type ConnectRequest = client.ConnectRequest
 
 func (s *Server) connect(w http.ResponseWriter, r *http.Request, _ map[string]string) {
 	var req ConnectRequest

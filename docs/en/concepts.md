@@ -186,7 +186,9 @@ older. The README lists these cases under "Known limits".
   normally. Any other end resets the application's connection, so that a
   cut-off stream cannot be taken for a complete one. That covers a node
   stopping, a node's process being killed, the end of a pairing, a
-  destination that cannot be reached, and the 15 minutes running out.
+  destination that cannot be reached, and the 15 minutes running out. The
+  few cases in which it does not hold are in the README under "Known
+  limits".
 
 ### Feedback channels
 

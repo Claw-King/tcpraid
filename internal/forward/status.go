@@ -139,17 +139,24 @@ func (a *attempt) reason(wait time.Duration) (text, code string) {
 
 // fail records what went wrong with the connection. Only the first call counts.
 func (a *attempt) fail(text string) {
+	if a.record(text) {
+		a.rt.notify(Notice{Kind: NoticeFailure, Rule: a.rule, Reason: text})
+	}
+}
+
+// record is fail without the notice; it reports whether this call was the first.
+func (a *attempt) record(text string) bool {
 	rt := a.rt
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	if a.said || rt.problems == nil {
-		return
+		return false
 	}
 	a.said = true
 	a.text = text
 	if a.rule == "" {
 		rt.logf("connect: %s", text)
-		return
+		return true
 	}
 	// connection after connection failing the same way is logged once, until one gets
 	// through (ended)
@@ -158,9 +165,10 @@ func (a *attempt) fail(text string) {
 		rt.logf("rule %q: %s", a.rule, text)
 	}
 	if p, ok := rt.problems[a.rule]; ok && p.seq > a.seq {
-		return // something newer is on record
+		return true // something newer is on record
 	}
 	rt.problems[a.rule] = problem{text: text, at: time.Now(), seq: a.seq}
+	return true
 }
 
 // refine records the fuller reason that came after the connection ended: in the place

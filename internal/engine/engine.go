@@ -123,6 +123,11 @@ type Engine struct {
 	cfg Config
 	ks  keys
 
+	// Watch, if not nil, is told of every session that this engine creates and of
+	// its end. Set it before the engine carries anything. It is called while the
+	// engine holds its own locks and must return at once, without calling the engine.
+	Watch func(SessionEvent)
+
 	nSessions atomic.Int64
 	globalB   atomic.Int64 // unacked bytes we sent, all sessions
 	recvB     atomic.Int64 // out-of-order bytes we hold for delivery, all sessions
@@ -201,6 +206,20 @@ type Owner struct {
 	Peer string
 	Rule string
 	Test bool
+}
+
+// SessionEvent tells a watcher of the engine that a session was created or has ended.
+type SessionEvent struct {
+	Ended       bool // false: the session was created
+	ID          [16]byte
+	Destination string
+	Client      bool // this end took the application connection
+	Owner       Owner
+	// Of a session that ended: the stream bytes sent and received, whether the stream
+	// ended completely in both directions, and the reason as the log has it.
+	TxBytes, RxBytes int64
+	Clean            bool
+	Why              string
 }
 
 // End says how a session ended.

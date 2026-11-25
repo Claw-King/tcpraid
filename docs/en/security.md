@@ -188,6 +188,38 @@ directory up like a private key, and do not share it between two nodes.**
   the login then answer `404`, no password exists, and only the token gives
   access to the API.
 
+## The figures, the hook and the exported file
+
+Three things carry information about the node out of it. Each is off until
+you switch it on or run it.
+
+| What | Who gets it | What it holds |
+|---|---|---|
+| the figures of `-metrics` | whoever can reach that address. No token is asked for | numbers, and the names of the peers and the rules. No address, no destination, no key or token, no text of a failure |
+| the events of `-hook` | the program you name, which runs as the node's user | names of peers and rules, destinations, byte counts and reasons. No key, no token, no pairing code |
+| the file of `tcpraid config export` | whoever you give the file to | names, fingerprints, addresses, allow lists, rules and settings. No private key, no pair secret, no token, no password, no pairing code, and no user or password of a proxy |
+
+The address of `-metrics` serves the figures and nothing else, takes no
+request that changes anything, and answers four requests at a time. It is
+not the API: every path of the API still needs the token. Keep the address
+on loopback or on a network where the names of your peers and rules may be
+read.
+
+The program of `-hook` is run directly, not through a shell, and gets no
+arguments. A reason can hold text that the other node sent, and that text
+reaches the program only as the value of a variable and inside the JSON on
+its input. What the program then does with it is the program's business: a
+script that passes `$TCPRAID_REASON` on to another command has to quote
+it. The program inherits the environment of the node, without the
+node's own variables that begin with `TCPRAID_`.
+
+The exported file describes how the node is reached and what it may reach,
+so protect it like other configuration. It is not enough to be
+the node, or to pair with its peers.
+
+A program that uses the Go package (`go-package.md`) reads the token from
+the data directory, like the commands. It can do what the API offers.
+
 ## Who can send connections through a node
 
 A node asks nobody who they are at the places where applications hand it

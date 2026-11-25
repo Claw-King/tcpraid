@@ -237,6 +237,9 @@ func (e *Engine) newSessionWith(cfg *Config, id [16]byte, local net.Conn, isClie
 	e.nSessions.Add(1)
 	e.mSessions.Add(1)
 	e.registry.Store(s, true)
+	if e.Watch != nil {
+		e.Watch(SessionEvent{ID: id, Destination: dst, Client: isClient, Owner: owner})
+	}
 	return s
 }
 
@@ -1743,6 +1746,10 @@ func (s *session) shutdown(why string, abort bool) {
 	}
 	s.e.nSessions.Add(-1)
 	s.e.registry.Delete(s)
+	if s.e.Watch != nil {
+		s.e.Watch(SessionEvent{Ended: true, ID: s.id, Destination: s.dstAddr, Client: s.isClient, Owner: s.owner,
+			TxBytes: int64(st.txB), RxBytes: int64(st.rxB), Clean: !abort, Why: why})
+	}
 	sum := fmt.Sprintf("%.1fs tx %dMB rx %dMB chunks %d resends %d kicks %d subs %d stall %.1fs",
 		time.Since(s.started).Seconds(), st.txB>>20, st.rxB>>20, st.chunks, st.resends, st.kicks, st.subsUp, st.stall.Seconds())
 	if abort {

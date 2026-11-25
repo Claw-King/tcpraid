@@ -5,20 +5,16 @@ package main
 // server, and it goes through the node on this host, by its API (api/connect.go).
 
 import (
-	"bufio"
-	"bytes"
-	"crypto/tls"
-	"encoding/json"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"strconv"
-	"time"
 
+	"github.com/Claw-King/tcpraid/client"
 	"github.com/Claw-King/tcpraid/internal/api"
 )
 
@@ -95,91 +91,32 @@ func cmdConnect(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 // connect asks the node of dataDir for the connection req describes and copies between
 // it and in and out until it ends. It returns the exit status and, unless that is
-// connectDone, why.
+// connectDone, why. The connection is the one of package client (Dial), which keeps
+// the rule that a stream that was cut off is never closed like a complete one.
 func connect(dataDir string, req api.ConnectRequest, in io.Reader, out io.Writer) (int, error) {
-	a, err := openAPI(dataDir, 0)
-	if err != nil {
-		return connectNoNode, fmt.Errorf("%w (%v) (-data %s)", errNoNode, err, dataDir)
-	}
-	defer a.close()
-	tcp, err := (&net.Dialer{Timeout: 10 * time.Second}).Dial("tcp", a.addr)
-	if err != nil {
-		return connectNoNode, fmt.Errorf("%w (%v) (-data %s)", errNoNode, err, dataDir)
-	}
-	defer tcp.Close()
-	c := tcp
-	if a.tls != nil {
-		// the same check as every command: the certificate the node recorded, before
-		// anything is sent
-		tc := tls.Client(tcp, a.tls)
-		tc.SetDeadline(time.Now().Add(10 * time.Second))
-		if err := tc.Handshake(); err != nil {
-			return connectNoNode, fmt.Errorf("%w (%v) (-data %s)", errNoNode, err, dataDir)
-		}
-		tc.SetDeadline(time.Time{})
-		c = tc
-	}
-	body, err := json.Marshal(req)
-	if err != nil {
+	conn, err := client.New(dataDir).Dial(context.Background(), req.Peer, net.JoinHostPort(req.Host, strconv.Itoa(req.Port)))
+	var refused *client.RefusedError
+	switch {
+	case errors.As(err, &refused):
+		return connectRefused, err
+	case err != nil:
 		return connectNoNode, err
 	}
-	hr, err := http.NewRequest(http.MethodPost, a.base+api.PathConnect, bytes.NewReader(body))
-	if err != nil {
-		return connectNoNode, err
-	}
-	hr.Header.Set("Authorization", "Bearer "+a.token)
-	hr.Header.Set("Content-Type", "application/json")
-	hr.Header.Set("Connection", "Upgrade")
-	hr.Header.Set("Upgrade", api.ConnectUpgrade)
-	c.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	if err := hr.Write(c); err != nil {
-		return connectNoNode, fmt.Errorf("%w (%v) (-data %s)", errNoNode, err, dataDir)
-	}
-	c.SetWriteDeadline(time.Time{})
-	// The node answers when the connection to the destination begins, or when it is
-	// clear that none will: it bounds that time itself.
-	br := bufio.NewReader(c)
-	resp, err := http.ReadResponse(br, hr)
-	if err != nil {
-		return connectNoNode, fmt.Errorf("%w (%s did not answer the request: %v) (-data %s)", errNoNode, a.addr, err, dataDir)
-	}
-	if resp.StatusCode != http.StatusSwitchingProtocols || resp.Header.Get("Upgrade") != api.ConnectUpgrade {
-		answer, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		resp.Body.Close()
-		var e struct {
-			Error string `json:"error"`
-		}
-		switch json.Unmarshal(answer, &e); {
-		case e.Error == "":
-			return connectNoNode, fmt.Errorf("%w (%s answered %s) (-data %s)", errNoNode, a.addr, resp.Status, dataDir)
-		case resp.StatusCode == http.StatusNotFound && e.Error == "no such path":
-			return connectNoNode, errors.New("the node on this host does not carry connections for this command. It runs a version before 0.9.0. Update the node.")
-		case resp.StatusCode == http.StatusBadGateway || resp.StatusCode == http.StatusForbidden:
-			return connectRefused, errors.New(e.Error)
-		}
-		return connectNoNode, errors.New(e.Error)
-	}
-	// From here on a close of this end is a reset, also the one the system does when
-	// this process is killed: the node then ends the session as cut off, and the
-	// destination does not take what it got for all there was. An end of the input
-	// is sent as a half-close, which this does not change.
-	if tc, ok := tcp.(*net.TCPConn); ok {
-		tc.SetLinger(0)
-	}
+	// Until the input has ended and was passed on, the close of the connection is a
+	// reset, also the one the system does when this process is killed.
+	defer conn.Close()
 	sent := make(chan error, 1)
 	go func() {
-		_, err := io.Copy(c, in)
+		_, err := io.Copy(conn, in)
 		if err == nil {
-			if cw, ok := c.(interface{ CloseWrite() error }); ok {
-				err = cw.CloseWrite()
-			}
+			err = conn.CloseWrite()
 		}
 		sent <- err
 	}()
 	// read and written by hand, so that it is known which of the two failed
 	buf := make([]byte, 64<<10)
 	for {
-		n, rerr := br.Read(buf)
+		n, rerr := conn.Read(buf)
 		if n > 0 {
 			if _, werr := out.Write(buf[:n]); werr != nil {
 				return connectCut, fmt.Errorf("the standard output could not be written, and the connection was given up: %v", werr)
@@ -195,18 +132,13 @@ func connect(dataDir string, req api.ConnectRequest, in io.Reader, out io.Writer
 	// The destination has ended its side, and everything it sent was written out. The
 	// output is closed, so that whoever reads it sees that end. The other direction
 	// goes on: a destination may end its side first and still read. The command ends
-	// when its input has ended as well and was passed on, and until then a close of
-	// this end stays a reset, so that the destination never takes a part of the input
-	// for all of it.
+	// when its input has ended as well and was passed on (CloseWrite), and only then
+	// is the close of the connection an ordinary one.
 	if oc, ok := out.(io.Closer); ok {
 		oc.Close()
 	}
 	if err := <-sent; err != nil {
 		return connectCut, fmt.Errorf("the connection was cut off while sending: %v", err)
-	}
-	// an ordinary close: the stream ended as it should in both directions
-	if tc, ok := tcp.(*net.TCPConn); ok {
-		tc.SetLinger(-1)
 	}
 	return connectDone, nil
 }

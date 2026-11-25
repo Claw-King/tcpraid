@@ -72,7 +72,24 @@ func (rt *Runtime) newOpenConn(c net.Conn, rd io.Reader, begin func() error) *op
 	return &openConn{Conn: c, rd: rd, begin: begin, settle: settle}
 }
 
-func (oc *openConn) Read(p []byte) (int, error) { return oc.rd.Read(p) }
+// Read reads what the client sends. An end that is read after the answer to the client
+// could not be written is no end of a stream. A reset is reported to one call only: when
+// the write of the answer was that call, the read that follows sees the end of the data
+// where the connection was in fact reset, and the stream would be passed on as complete.
+// open holds the lock while it writes the answer, so a read that returned for that reason
+// waits here until open has recorded that the write failed.
+func (oc *openConn) Read(p []byte) (int, error) {
+	n, err := oc.rd.Read(p)
+	if err == io.EOF {
+		oc.mu.Lock()
+		over := oc.state == entryOver
+		oc.mu.Unlock()
+		if over {
+			return n, io.ErrUnexpectedEOF
+		}
+	}
+	return n, err
+}
 
 // Write passes on data that arrived from the destination: the stream has begun.
 func (oc *openConn) Write(p []byte) (int, error) {

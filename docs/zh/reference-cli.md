@@ -11,6 +11,8 @@ tcpraid peers   path set NAME PATH [flags] | path remove NAME PATH
 tcpraid rules   [list] | add NAME [flags] | set NAME -SETTING VALUE... | remove NAME | enable NAME | disable NAME
 tcpraid sessions [-json] [-watch]             what the node carries right now
 tcpraid transport [-json] | set -SETTING VALUE...    the node's transport settings
+tcpraid connect -peer PEER HOST:PORT          one connection on standard input and output
+tcpraid config  export [-o FILE] | apply FILE [-dry-run] [-prune]
 tcpraid version
 ```
 
@@ -28,7 +30,7 @@ tcpraid version
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.9.0 (wire protocol 1)
+version      0.10.0 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -77,7 +79,7 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.9.0, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.10.0, last heard 2026-01-15T10:00:05Z
 spares       2 connections wait for a session to begin on them
 
 PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS  MARK
@@ -464,7 +466,7 @@ $ ssh -o ProxyCommand='tcpraid connect -peer nas-a %h:%p' admin@192.0.2.10
 | 3 | 节点接受了请求，但到目的地的连接没有开始。原因在标准错误里：对端没有连着、允许列表、目的地、名字 |
 | 4 | 连接开始之后被切断 |
 
-目的地绝不会在只收到一部分输入之后读到“完整结束”，被切断时它收到的是重置。命令的退出状态说的比这少。状态 0 表示节点收下了全部输入，而命令结束时这些输入可能还在节点里。此后连接再被切断，目的地会看到重置，已经结束的命令却无从得知。目的地那一侧先结束时会这样，目的地还没读完就结束了它那一侧时也会这样。
+目的地不会在只收到一部分输入之后读到“完整结束”，例外是 README“已知限制”里写的那种少见情况。被切断时它收到的是重置。命令的退出状态说的比这少。状态 0 表示节点收下了全部输入，而命令结束时这些输入可能还在节点里。此后连接再被切断，目的地会看到重置，已经结束的命令却无从得知。目的地那一侧先结束时会这样，目的地还没读完就结束了它那一侧时也会这样。
 
 连接算作“已开始”之前的等待和 SOCKS5 规则相同，所以完全没有回应的目的地可能以状态 4 而不是 3 结束。
 
@@ -472,9 +474,47 @@ $ ssh -o ProxyCommand='tcpraid connect -peer nas-a %h:%p' admin@192.0.2.10
 
 OpenSSH 设了 `ProxyCommand` 选项时，会运行一条命令来连接服务器。它的手册说这条命令 "should read from its standard input and write to its standard output"，并说 `%h` 代表远端主机名、`%p` 代表远端端口。第二个例子用的就是这些。手册还说这些记号在展开时 "without quoting or escaping of shell characters"，所以命令行的引号要你自己检查。
 
+## config
+
+```
+$ tcpraid config export -o nas-a.yaml
+$ tcpraid config apply nas-a.yaml -dry-run
+nothing to change, because the node is as the file describes it
+```
+
+`config export` 把正在运行的节点的配置写成一份 YAML 文件，写到标准输出，或者写到 `-o` 指定的文件。文件里有节点的名字、对端连同它们的路径和设置、规则，以及节点运行中存下来的传输层设置。`reference-files.md` 里有一份例子，并列出了每个字段。
+
+文件里没有秘密。节点的私钥、配对密钥、令牌、网页界面的密码、还没用掉的配对码都不在里面，所以它可以和别的配置放在一起保管。路径上代理的用户名和密码同样不导出，那条路径会多一行 `proxy_login`，说明节点里有它们。这份文件不是备份。节点的身份和配对只存在于数据目录里。
+
+`config apply FILE` 让正在运行的节点变成文件描述的样子。它比较两者，只改不一样的地方：
+
+- **节点**得到文件为它存的传输层设置。只有文件是从这个节点导出的(文件里的 `node.fingerprint` 说明这一点)，节点才会得到文件里的名字。别的节点的文件可以当模板用，名字留给它原来的节点。
+- **对端**按名字和指纹一起找。节点已经和它配对时，对端得到文件里的路径、允许列表、UDP 地址和传输层设置。没有配对时，命令说明这一点，然后继续。apply 从不配对，也从不解除配对：文件里没有的对端保持原样，带 `-prune` 也一样。
+- **规则**：文件里有而节点没有的会新建，不一样的会修改。节点上有而文件里没有的规则保持原样，命令会说有几条。规则的对端在文件里、却没有和本节点配对时，这条规则不导入，命令会说明。带 `-prune` 时先删掉要去掉的规则，这样文件里的规则可以接手它们的监听地址。
+
+| 参数 | 含义 |
+|---|---|
+| `-dry-run` | 只打印会改什么，什么都不改 |
+| `-prune` | 同时删掉文件里没有的规则，并把文件里没有提到的、存在节点里的传输层设置收回 |
+
+```
+$ tcpraid config apply nas-a.yaml
+changed: node: transport settings hol=250ms
+changed: rule "more": added
+changed: rule "zfs": changed
+```
+
+每一处改动打印一行。节点拒绝某一处改动时，命令就停在那里，说明在它之前已经做了几处，已经做的不撤销。文件可以再 apply 一次，第二次会补上还没做的改动。同一份文件 apply 两次，第二次什么都不改。
+
+有三种情况，命令在动手之前就结束：文件里有这个版本不认识的字段，文件是另一个格式版本，或者文件设置了一项正在运行的节点由命令行给出的传输层设置。命令行优先于存下来的值(见“transport”)，所以要么把这一项从文件里拿掉，要么启动节点时不带这个参数。
+
+文件里的代理不带用户名和密码，apply 会让节点里原有的保持不变。想用文件来设它们，就自己把它们写进代理的 URL，这样文件里就有秘密了。
+
+节点拒绝了某一处改动、文件读不了、或者文件里有对端没有和节点配对时，命令以状态 1 退出。
+
 ## version
 
 ```
 $ tcpraid version
-tcpraid 0.9.0 (wire protocol 1)
+tcpraid 0.10.0 (wire protocol 1)
 ```

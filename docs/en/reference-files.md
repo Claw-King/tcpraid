@@ -20,6 +20,9 @@
 | `-ui-password-file FILE` | none | file with the password of the web page |
 | `-no-ui` | off | switches the web page off. Its files and the login answer `404` and no password is made. The API with its token works as before |
 | `-spares N` | `2` | spare connections, 0 to 8. A node asks a peer that it holds no path to for this many, and keeps at most this many to a peer that asks. `0` switches them off (`connecting.md`, "Spare connections") |
+| `-metrics ADDR` | off | listen address for the node's figures: the Prometheus text format at `/metrics` and JSON at `/metrics.json`, read-only and without the token (see "The figures and the hook") |
+| `-hook COMMAND` | none | a program that the node runs when a peer comes online or goes offline, a session begins or ends, or a connection of a rule fails (see "The figures and the hook") |
+| `-hook-timeout DURATION` | `30s` | how long a run of `-hook` may last before the node ends it. `1s` to `1h` |
 | `-stats DURATION` | off | log the node's totals this often, and one line for each session that runs then (`troubleshooting.md` explains the lines) |
 | `-window SIZE` | `128MB` | per session: how much data this node holds that the peer has not yet reported received, and the space it offers the peer for data that arrives out of order. Whole MB |
 | `-budget SIZE` | `256MB` | all sessions together: the most data held unacknowledged, and as much again held out of order |
@@ -40,7 +43,7 @@
 The start-up lines of the log repeat what is in effect:
 
 ```
-node 0.9.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+node 0.10.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
 transport window=128MB budget=256MB grace=20m0s hol=1s timeline=off maxrss=off
 tuned target=500ms
 ```
@@ -193,6 +196,150 @@ table inet tcpraid {
 - `-redirect-print` shows what the node would give `nft` without installing
   anything, which needs neither `nft` nor the capability.
 
+### The figures and the hook
+
+**`-metrics ADDR`** serves the node's figures on an address of their own.
+That address answers `GET /metrics` in the Prometheus text format and
+`GET /metrics.json` with the same samples as JSON, and nothing else. It asks
+for no token. The API keeps its own `/metrics`, which needs the token like
+every path of the API.
+
+```
+$ curl -s http://127.0.0.1:9900/metrics
+# TYPE tcpraid_sessions_total counter
+tcpraid_sessions_total 1
+# TYPE tcpraid_bytes_tx counter
+tcpraid_bytes_tx 50331648
+...
+# TYPE tcpraid_peer_online gauge
+tcpraid_peer_online{peer="nas-b"} 1
+# TYPE tcpraid_rule_listening gauge
+tcpraid_rule_listening{rule="zfs"} 1
+# TYPE tcpraid_rule_sessions gauge
+tcpraid_rule_sessions{rule="zfs"} 0
+```
+
+| Figure | Meaning |
+|---|---|
+| `tcpraid_sessions_total`, `tcpraid_sessions_aborted`, `tcpraid_sessions_active` | sessions created, sessions that were cut off, sessions that run now |
+| `tcpraid_subs_up`, `tcpraid_subs_lost` | sub-connections that came up, and sub-connections that were lost |
+| `tcpraid_kicks_slow`, `tcpraid_kicks_silent`, `tcpraid_kicks_write` | sub-connections replaced for being slow, for making no progress, for taking no write |
+| `tcpraid_bytes_tx`, `tcpraid_chunks_tx`, `tcpraid_resend_chunks`, `tcpraid_resend_by{cause=...}` | stream data sent for the first time, in bytes and in chunks, and chunks queued to be sent again, in all and by cause |
+| `tcpraid_unacked_mb`, `tcpraid_rss_mb`, `tcpraid_runtime_memory_mb` | data held unacknowledged by all sessions, the memory of the process as the system counts it (Linux only), and the memory the program has from the system |
+| `tcpraid_peer_online{peer=...}` | 1 while a control connection with the peer is up, else 0 |
+| `tcpraid_rule_listening{rule=...}`, `tcpraid_rule_sessions{rule=...}` | 1 while the rule takes connections, and the sessions it carries now |
+| `tcpraid_hook_running`, `tcpraid_hook_runs`, `tcpraid_hook_events_dropped`, `tcpraid_hook_runs_failed`, `tcpraid_hook_runs_timed_out` | only with `-hook`: runs that go on now, runs started, events not given to the hook, runs that failed, runs that were ended |
+
+The rest are further counters of the transport.
+
+The figures are numbers. The names of the peers and of the rules are in
+them, as the values of the labels `peer` and `rule`. No address is in them,
+no destination, no key or token, and no text of a failure. Whoever can reach
+the address can read them, so leave the option off where the names alone say
+too much. The node answers four requests for the figures at one time and
+tells a fifth to come back, and a request changes nothing in the node. On an
+address that is not loopback the node logs at its start that the figures
+there need no token.
+
+**`-hook COMMAND`** names a program that the node runs when something
+happens. `COMMAND` is the program itself, a path or a name that is looked up
+in `PATH`. It is executed directly, without a shell, and it gets no
+arguments. A command that cannot be run stops the node at its start. What
+happened is given to the program twice: as environment variables, and as
+one line of JSON on its standard input.
+
+| Event (`TCPRAID_EVENT`) | When | Fields |
+|---|---|---|
+| `peer_online` | the first control connection with a peer is up | peer |
+| `peer_offline` | the last control connection with a peer is gone | peer |
+| `session_start` | a session was created at this node | peer, rule, session, role, destination |
+| `session_end` | a session ended at this node | the same, and tx_bytes, rx_bytes, clean, reason |
+| `rule_failure` | a connection of a rule, or of `tcpraid connect`, was not carried | rule, reason |
+
+| Variable | JSON field | Content |
+|---|---|---|
+| `TCPRAID_EVENT` | `event` | the event |
+| `TCPRAID_TIME` | `time` | when it happened, RFC 3339 |
+| `TCPRAID_PEER` | `peer` | the name of the peer |
+| `TCPRAID_RULE` | `rule` | the name of the rule. It is not set for a session that the peer brought, and for `tcpraid connect` |
+| `TCPRAID_SESSION` | `session` | the id of the session, 32 hex digits. `tcpraid sessions` shows the first six |
+| `TCPRAID_ROLE` | `role` | `client` where this node took the application's connection, `server` where the peer brought the session |
+| `TCPRAID_DESTINATION` | `destination` | where the connection goes at the far node |
+| `TCPRAID_TX_BYTES`, `TCPRAID_RX_BYTES` | `tx_bytes`, `rx_bytes` | stream data sent and received by this node |
+| `TCPRAID_CLEAN` | `clean` | `true` when the stream ended completely in both directions, `false` when it was cut off |
+| `TCPRAID_REASON` | `reason` | how the session ended, as the log has it, or why the connection was not carried |
+
+```
+{"event":"session_end","time":"2026-01-15T10:00:48.232907258Z","peer":"nas-b","rule":"zfs","session":"7dc9fd4e6c7faf75936b2d4c871cf2d4","role":"client","destination":"192.0.2.10:5000","tx_bytes":50331648,"rx_bytes":0,"clean":true,"reason":"done"}
+```
+
+A variable that does not belong to an event is not set. A reason can hold
+text that the peer sent. It reaches the program only in these values and
+never on a command line, and in the variable the control characters 0 to 31
+and 127 are spaces. The program gets the environment of the node without
+the node's own variables that begin with `TCPRAID_`. No value holds a key, a
+token or a pairing code.
+
+The hook runs beside the node and cannot hold it up. At most four runs go on
+at one time. An event that happens while four run is not given to the hook.
+The node counts it and logs how many were left out. So a hook sees every
+event only while it is quicker than the events come, and a program that must
+not miss one reads the sessions and the peers from the API as well. A run
+that lasts longer than `-hook-timeout` is ended. That ends the program the
+node started, and not the programs which that one started in its turn, so a
+script should not leave any behind. The status a run returns is
+logged when it is not 0 and changes nothing in the node. Runs can overlap
+and can end in another order than their events happened. Sessions of a path
+test are not told.
+
+### The exported configuration
+
+`tcpraid config export` writes this file, and `tcpraid config apply` reads
+it (`reference-cli.md`):
+
+```
+version: 1
+node:
+  name: nas-a
+  fingerprint: 2b7e151628aed2a6abf7158809cf4f3c762e7160f38b4da56a784d9045190cfe
+  transport:
+    hol: 500ms
+peers:
+  - name: nas-b
+    fingerprint: 1979efc900f372edcde2db07d83fe6eb000973864bde0d5d2c12ab194950edf9
+    allow: 192.0.2.10/32:5000
+    udp_dial: ""
+    transport:
+      window: 8MB
+    paths:
+      - name: default
+        type: tcp
+        addr: nas-b.example:9851
+        security: tls
+        roles:
+          - data
+        subs: 8
+rules:
+  - name: zfs
+    peer: nas-b
+    listen: 127.0.0.1:5000
+    destination: 192.0.2.10:5000
+    enabled: true
+    subs: 3
+```
+
+| Field | Content |
+|---|---|
+| `version` | the version of this format, `1` |
+| `node.name`, `node.fingerprint`, `node.transport` | the name of the node, the fingerprint that says which node the file was exported from, and the transport settings stored in the node while it ran, by name |
+| `peers[].name`, `fingerprint` | which peer. Apply changes a peer only where both fit one that the node is paired with |
+| `peers[].allow`, `udp_dial`, `transport` | the allow list, where UDP feedback for the peer is sent, and the peer's transport settings |
+| `peers[].paths[]` | `name`, `type`, `addr`, `addrs`, `proxy`, `security`, `verify`, `pin`, `roles`, `subs`, `mark`, as `tcpraid peers path set` takes them. `proxy` is written without its user and password, and `proxy_login` is a note that the node has them |
+| `rules[]` | `name`, `peer`, one of `listen` with `destination`, `match` or `socks`, then `enabled`, `paths`, `subs`, `dial` and `transport`, as `tcpraid rules add` takes them. A rule that does not say `enabled` is enabled |
+
+A list or a setting that is empty is left out. A field that this version
+does not know is an error when the file is applied.
+
 ### The password of the web page
 
 Where it comes from, in this order:
@@ -292,6 +439,7 @@ drwx------  .
 | any TCP, 1080 by custom | a SOCKS5 rule's address | applications that speak SOCKS5 |
 | any TCP | `-transparent` | redirected connections |
 | any UDP | `-udp-listen` | feedback from peers |
+| any TCP | `-metrics` | the node's figures, without a token |
 
 Only 9850 has a built-in default. Port 9851 and the range 50000-50010 for
 rules are what the container image and the templates in `deploy/` use.

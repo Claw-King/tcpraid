@@ -11,6 +11,8 @@ tcpraid peers   path set NAME PATH [flags] | path remove NAME PATH
 tcpraid rules   [list] | add NAME [flags] | set NAME -SETTING VALUE... | remove NAME | enable NAME | disable NAME
 tcpraid sessions [-json] [-watch]             what the node carries right now
 tcpraid transport [-json] | set -SETTING VALUE...    the node's transport settings
+tcpraid connect -peer PEER HOST:PORT          one connection on standard input and output
+tcpraid config  export [-o FILE] | apply FILE [-dry-run] [-prune]
 tcpraid version
 ```
 
@@ -39,7 +41,7 @@ after telling its peers and resetting the application connections it carries.
 $ tcpraid status
 node         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
-version      0.9.0 (wire protocol 1)
+version      0.10.0 (wire protocol 1)
 uptime       1s
 sessions     0
 peers        0
@@ -92,7 +94,7 @@ name         nas-a
 fingerprint  e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86
 paired       2026-01-15T10:00:00Z
 addresses    nas-a.example.org:9851
-state        online, runs 0.9.0, last heard 2026-01-15T10:00:05Z
+state        online, runs 0.10.0, last heard 2026-01-15T10:00:05Z
 spares       2 connections wait for a session to begin on them
 
 PATH     TYPE  ADDRESS                 PROXY  SECURITY  VERIFY  PIN  ROLES  SUBS  MARK
@@ -657,8 +659,9 @@ sending until its input ends.
 | 3 | the node took the request, and no connection to the destination began. The reason is on the standard error: the peer is not connected, the allow list, the destination, the name |
 | 4 | the connection began and was cut off |
 
-The destination never reads the end of a complete stream after a part of the
-input. A cut reaches it as a reset. The status of the command says less than
+The destination does not read the end of a complete stream after a part of
+the input, except in the rare case that the README describes under "Known
+limits". A cut reaches it as a reset. The status of the command says less than
 that. Status 0 says that the node took all of the input, which the node may
 still hold when the command ends. When the connection is cut off after that,
 the destination sees the reset and the command, which has ended, does not
@@ -680,9 +683,80 @@ host name and `%p` for the remote port. That is what the second example
 uses. The tokens are put in "without quoting or escaping of shell
 characters", so the quoting of the command line is yours to check.
 
+## config
+
+```
+$ tcpraid config export -o nas-a.yaml
+$ tcpraid config apply nas-a.yaml -dry-run
+nothing to change, because the node is as the file describes it
+```
+
+`config export` writes the configuration of the running node as one YAML
+file, to the standard output or to the file of `-o`. The file holds the
+node's name, its peers with their paths and settings, its rules, and the
+transport settings that were stored while the node ran. `reference-files.md`
+shows one and names every field.
+
+The file holds no secret. The node's private key, the pair secrets, the
+token, the password of the web page and pairing codes that are still open
+are not in it, so it can be kept where configuration is kept. The user and
+the password of a path's proxy are left out as well, and the path gets the
+line `proxy_login` to say that the node has them. The file is not a backup.
+The identity of a node and its pairings exist in the data directory only.
+
+`config apply FILE` makes the running node match the file. It compares the
+two and changes what differs:
+
+- **The node** gets the transport settings the file stores for it. It gets
+  the name of the file only when the file was exported from this node, which
+  `node.fingerprint` in the file says. A file of another node can serve as a
+  pattern, and its name stays with the node it came from.
+- **A peer** of the file is looked for by its name and its fingerprint
+  together. Where the node is paired with it, the peer gets the paths, the
+  allow list, the UDP address and the transport settings of the file. Where
+  it is not, the command says so and goes on. Apply never pairs, and it never
+  ends a pairing: a peer that the file does not have stays as it is, with
+  `-prune` as well.
+- **A rule** of the file is added, or changed where it differs. A rule that
+  the file does not have stays, and the command says how many there are. A
+  rule whose peer is in the file and not paired with this node is left out,
+  and the command says so. With `-prune` the rules that go are removed first,
+  so that a rule of the file can take the address of one that goes.
+
+| Flag | Meaning |
+|---|---|
+| `-dry-run` | print what would be changed, and change nothing |
+| `-prune` | also remove the rules that the file does not have, and take back the stored transport settings of the node that the file does not name |
+
+```
+$ tcpraid config apply nas-a.yaml
+changed: node: transport settings hol=250ms
+changed: rule "more": added
+changed: rule "zfs": changed
+```
+
+Each change is one line. When the node refuses a change, the command stops
+there, says how many changes were made before it, and undoes nothing. The
+file can be applied again, and the second run makes the changes that are
+still missing. The same file applied twice changes nothing the second time.
+
+Three things end the command before it changes anything: a file with a field
+that this version does not know, a file of another format version, and a
+file that sets a transport setting which the command line of the running
+node gives. The command line goes before a stored value (see "transport"),
+so take that setting out of the file or start the node without the flag.
+
+A proxy in the file is written without its user and password, and apply
+leaves the ones in the node as they are. To set them with a file, write them
+into the proxy URL yourself. The file then holds a secret.
+
+The command exits with status 1 when the node refused a change, when the
+file could not be read, and when a peer of the file is not paired with the
+node.
+
 ## version
 
 ```
 $ tcpraid version
-tcpraid 0.9.0 (wire protocol 1)
+tcpraid 0.10.0 (wire protocol 1)
 ```

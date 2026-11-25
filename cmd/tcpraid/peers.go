@@ -21,13 +21,12 @@ package main
 // standard input, which keeps it out of the process list and the shell's history.
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -35,6 +34,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/Claw-King/tcpraid/client"
 	"github.com/Claw-King/tcpraid/internal/api"
 	"github.com/Claw-King/tcpraid/internal/forward"
 	"github.com/Claw-King/tcpraid/internal/link"
@@ -43,71 +43,20 @@ import (
 )
 
 // errNoNode: the node could not be asked at all.
-var errNoNode = errors.New("the node is not running or -data is not its data directory")
+var errNoNode = client.ErrNoNode
 
 // errTimeout: the node was asked and did not answer in time.
-var errTimeout = errors.New("timed out")
+var errTimeout = client.ErrTimeout
 
 // apiCall sends one request to the node whose data directory is dataDir and decodes the
 // answer into out (nil: the answer has no body that matters). in, if not nil, is sent as
 // the JSON body. An error that matches errNoNode means the node could not be asked; any
-// other error is what the node answered.
+// other error is what the node answered. The commands reach the node the way any
+// program does, through package client.
 func apiCall(dataDir, method, path string, in, out any, timeout time.Duration) error {
-	a, err := openAPI(dataDir, timeout)
-	if err != nil {
-		return fmt.Errorf("%w (%v)", errNoNode, err)
-	}
-	defer a.close()
-	addr, token := a.addr, a.token
-	var body io.Reader
-	if in != nil {
-		b, err := json.Marshal(in)
-		if err != nil {
-			return err
-		}
-		body = bytes.NewReader(b)
-	}
-	req, err := http.NewRequest(method, a.base+path, body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := a.client.Do(req)
-	if err != nil {
-		var ne net.Error
-		if errors.As(err, &ne) && ne.Timeout() {
-			// the node is there and busy: not the same as no node
-			return fmt.Errorf("%w: the node did not answer within %v", errTimeout, timeout)
-		}
-		return fmt.Errorf("%w (%v)", errNoNode, err)
-	}
-	defer resp.Body.Close()
-	answer, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		var e struct {
-			Error string `json:"error"`
-		}
-		if json.Unmarshal(answer, &e) != nil || e.Error == "" {
-			// not this API: something else listens at the recorded address
-			return fmt.Errorf("%w (%s answered %s)", errNoNode, addr, resp.Status)
-		}
-		return errors.New(e.Error)
-	}
-	if out == nil || len(bytes.TrimSpace(answer)) == 0 {
-		// nothing to read, or a node that answers this request without a body: out
-		// stays as it was
-		return nil
-	}
-	if err := json.Unmarshal(answer, out); err != nil {
-		return fmt.Errorf("%w (%s did not answer as the node does: %v)", errNoNode, addr, err)
-	}
-	return nil
+	c := client.New(dataDir)
+	c.Timeout = timeout
+	return c.Call(context.Background(), method, path, in, out)
 }
 
 // command is one of the pair or peers commands: its flags, the number of arguments it

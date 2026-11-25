@@ -60,7 +60,7 @@ that ran out of time.
 ### GET /api/v1/status
 
 ```
-{"version":"0.9.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
+{"version":"0.10.0","wire_version":1,"started":"2026-01-15T10:00:00.634920968Z","uptime_seconds":11,
  "node":{"name":"nas-b","fingerprint":"cb5a2afa6a827183541b967ed101aba925e7b9289447e21cdf5327599e688e83"},
  "sessions":2,"peers":1,"rules":2,"listen":["0.0.0.0:9851"],"advertise":["nas-b.example:9851"]}
 ```
@@ -70,6 +70,9 @@ at which the node takes connections of other nodes with TLS, as it is bound,
 and is empty for a node without `-listen`. `advertise` holds the addresses of
 `-advertise`, which go into a pairing code that is asked for without
 addresses. Both are lists, and a client of an older node finds neither.
+`metrics` came with version 0.10.0. It holds the address at which the node
+serves its figures without a token, as it is bound, and is not there for a
+node that was started without `-metrics`.
 
 ### PUT /api/v1/node
 
@@ -122,7 +125,13 @@ sets one (see "Transport settings").
 
 ### GET /metrics
 
-Counters in the Prometheus text format, prefixed `tcpraid_`.
+The node's figures in the Prometheus text format, prefixed `tcpraid_`: the
+counters of the transport, for each peer whether it is online, for each rule
+whether it listens and how many sessions it carries, the memory of the
+process, and, with `-hook`, how the hook fares. `reference-files.md` lists
+them under "The figures and the hook". Like every path of the API it needs
+the token. A node started with `-metrics` serves the same figures on an
+address of their own without a token, there also as JSON at `/metrics.json`.
 
 ## Pairing codes
 
@@ -167,7 +176,7 @@ code. The answer is the new peer, as below.
 [{"name":"nas-a","fingerprint":"e5645f9b28e9434c67a7c434c15142e742bd9459afae8fc979e1640f7795ec86",
   "addresses":["nas-a.example.org:9851"],"paired_at":"2026-01-15T10:00:20Z",
   "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":8}],
-  "allow":"","udp_dial":"","online":true,"version":"0.9.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
+  "allow":"","udp_dial":"","online":true,"version":"0.10.0","last_message":"2026-01-15T10:00:26.938712846Z"}]
 ```
 
 `online` means that a control connection with the peer is up. `version` and
@@ -178,7 +187,10 @@ wait for a session to begin on them, and is absent when there is none.
 sessions with the peer use at this node in the place of the node's, and is
 absent when the peer has none (see "Transport settings"). A peer that joined
 this node has no `addresses` and no `paths` here. The pair secret is never in
-an answer, and a proxy is shown without its user and password.
+an answer, and a proxy is shown without its user and password. Since version
+0.10.0 a path whose proxy has a user and a password in the node says so with
+`"proxy_login": true`. The field is for reading: in a request it changes
+nothing.
 
 Since version 0.5.0 a path may have two more fields. `addrs` holds further
 addresses of the same listener, which the node tries in their order after
@@ -203,7 +215,7 @@ peer.
 ```
 $ curl -X PUT ... -d '{"allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":""}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"cb5a2afa...9e688e83","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.9.0",
+ "allow":"192.0.2.10/32:7000,192.0.2.10/32:50100-50102","udp_dial":"","online":true,"version":"0.10.0",
  "last_message":"2026-01-15T10:00:30.643951578Z"}
 ```
 
@@ -220,7 +232,7 @@ is:
 ```
 $ curl -X PUT ... -d '{"transport":{"window":"8MB","grace":null}}' http://127.0.0.1:9850/api/v1/peers/nas-b
 {"name":"nas-b","fingerprint":"9d875c73...b9a2cd07","addresses":[],"paired_at":"2026-01-15T10:00:20Z","paths":[],
- "allow":"","udp_dial":"","online":true,"version":"0.9.0","last_message":"2026-01-15T10:00:28.39632723Z",
+ "allow":"","udp_dial":"","online":true,"version":"0.10.0","last_message":"2026-01-15T10:00:28.39632723Z",
  "spares":2,"transport":{"window":"8MB"}}
 ```
 
@@ -243,7 +255,7 @@ $ curl -X PUT ... -d '{"subs":4}' http://127.0.0.1:9850/api/v1/peers/nas-a/paths
 {"created":false,"peer":{"name":"nas-a","fingerprint":"e5645f9b...7795ec86","addresses":["nas-a.example.org:9851"],
  "paired_at":"2026-01-15T10:00:20Z",
  "paths":[{"name":"default","type":"tcp","addr":"nas-a.example.org:9851","security":"tls","roles":["data"],"subs":4}],
- "allow":"","udp_dial":"","online":true,"version":"0.9.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
+ "allow":"","udp_dial":"","online":true,"version":"0.10.0","last_message":"2026-01-15T10:00:30.643951578Z"}}
 ```
 
 The `DELETE` removes the path and answers with the peer. A peer without that

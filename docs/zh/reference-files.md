@@ -20,6 +20,9 @@
 | `-ui-password-file FILE` | 无 | 存放网页界面密码的文件 |
 | `-no-ui` | 关闭 | 关掉网页界面。它的文件和登录接口回答 `404`，也不生成密码。带令牌的 API 照常可用 |
 | `-spares N` | `2` | 备用连接的条数，0 到 8。节点向它没有路径可拨的对端要这么多条，并且最多给来要的对端保持这么多条。`0` 是关掉(见 `connecting.md` 的“备用连接”) |
+| `-metrics ADDR` | 关闭 | 节点各项数字的监听地址：`/metrics` 是 Prometheus 文本格式，`/metrics.json` 是 JSON，只读，不需要令牌(见“各项数字和钩子”) |
+| `-hook COMMAND` | 无 | 一个程序。对端上线或下线、会话开始或结束、规则的连接失败时，节点运行它(见“各项数字和钩子”) |
+| `-hook-timeout DURATION` | `30s` | `-hook` 的一次运行最长多久，超过就被节点结束。`1s` 到 `1h` |
 | `-stats DURATION` | 关闭 | 每隔这么久在日志里记一行节点的合计数字，并为当时在跑的每个会话各记一行(这些行的含义见 `troubleshooting.md`) |
 | `-window SIZE` | `128MB` | 每个会话：本节点最多持有多少“对端还没报告收到”的数据，以及它为乱序到达的数据向对端提供的空间。整数 MB |
 | `-budget SIZE` | `256MB` | 所有会话合计：最多持有多少未确认的数据，另外还能持有同样多的乱序数据 |
@@ -40,7 +43,7 @@
 日志的启动行会把实际生效的设置重复一遍：
 
 ```
-node 0.9.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
+node 0.10.0 name="nas-a" fingerprint=e5645f9b...7795ec86 data=/var/lib/tcpraid api=127.0.0.1:9850 listen=0.0.0.0:9851 listen-plain=off transparent=off udp-listen=off
 transport window=128MB budget=256MB grace=20m0s hol=1s timeline=off maxrss=off
 tuned target=500ms
 ```
@@ -121,6 +124,117 @@ table inet tcpraid {
 - **需要什么。** Linux，节点的 `PATH` 里有 `nft` 程序，以及 `CAP_NET_ADMIN` 权限。缺任何一样，带 `-redirect` 启动的节点会退出并说明缺的是什么。容器镜像里没有 `nft`。`deploy/` 里的 systemd 单元不给节点任何权限，所以配合它用 `-redirect` 之前，要在单元里那两行权限设置中加上 `CAP_NET_ADMIN`。
 - `-redirect-print` 显示节点本来要交给 `nft` 的内容，什么都不安装，既不需要 `nft` 也不需要这项权限。
 
+### 各项数字和钩子
+
+**`-metrics ADDR`** 在一个单独的地址上提供节点的各项数字。这个地址只回答两种请求：`GET /metrics` 是 Prometheus 文本格式，`GET /metrics.json` 是同样的样本，写成 JSON。它不要令牌。API 自己的 `/metrics` 照旧存在，和 API 的每个路径一样需要令牌。
+
+```
+$ curl -s http://127.0.0.1:9900/metrics
+# TYPE tcpraid_sessions_total counter
+tcpraid_sessions_total 1
+# TYPE tcpraid_bytes_tx counter
+tcpraid_bytes_tx 50331648
+...
+# TYPE tcpraid_peer_online gauge
+tcpraid_peer_online{peer="nas-b"} 1
+# TYPE tcpraid_rule_listening gauge
+tcpraid_rule_listening{rule="zfs"} 1
+# TYPE tcpraid_rule_sessions gauge
+tcpraid_rule_sessions{rule="zfs"} 0
+```
+
+| 数字 | 含义 |
+|---|---|
+| `tcpraid_sessions_total`、`tcpraid_sessions_aborted`、`tcpraid_sessions_active` | 建过的会话数、被切断的会话数、现在在跑的会话数 |
+| `tcpraid_subs_up`、`tcpraid_subs_lost` | 建起来的子连接数、丢掉的子连接数 |
+| `tcpraid_kicks_slow`、`tcpraid_kicks_silent`、`tcpraid_kicks_write` | 因为慢、因为没有进展、因为写不进去而被换掉的子连接数 |
+| `tcpraid_bytes_tx`、`tcpraid_chunks_tx`、`tcpraid_resend_chunks`、`tcpraid_resend_by{cause=...}` | 第一次发出的数据，按字节和按块，以及排队重发的块数，总数和按原因分的 |
+| `tcpraid_unacked_mb`、`tcpraid_rss_mb`、`tcpraid_runtime_memory_mb` | 所有会话还没被确认的数据、系统算出的进程内存(只在 Linux 上有)、程序从系统拿到的内存 |
+| `tcpraid_peer_online{peer=...}` | 和这个对端之间有控制连接时是 1，否则是 0 |
+| `tcpraid_rule_listening{rule=...}`、`tcpraid_rule_sessions{rule=...}` | 规则在接连接时是 1，以及它现在承载的会话数 |
+| `tcpraid_hook_running`、`tcpraid_hook_runs`、`tcpraid_hook_events_dropped`、`tcpraid_hook_runs_failed`、`tcpraid_hook_runs_timed_out` | 只在带 `-hook` 时有：正在进行的运行数、启动过的运行数、没有交给钩子的事件数、失败的运行数、被结束的运行数 |
+
+其余的是传输层另外的一些计数器。
+
+这些都是数字。对端和规则的名字在里面，作为标签 `peer` 和 `rule` 的值。里面没有地址，没有目的地，没有密钥和令牌，也没有失败原因的文字。能连到这个地址的人都能读到它们，所以光是这些名字就嫌多的地方，不要开这个选项。节点同时回答四个取数字的请求，第五个会被告知稍后再来，而请求不会改变节点的任何东西。地址不是回环地址时，节点在启动时的日志里说明这个地址上的数字不需要令牌。
+
+**`-hook COMMAND`** 指定一个程序，有事发生时节点运行它。`COMMAND` 就是程序本身，可以是一个路径，也可以是一个要在 `PATH` 里找的名字。它被直接执行，不经过 shell，也不带参数。程序不能运行时，节点在启动时就停下。发生的事用两种方式交给程序：环境变量，以及标准输入上的一行 JSON。
+
+| 事件(`TCPRAID_EVENT`) | 什么时候 | 带的字段 |
+|---|---|---|
+| `peer_online` | 和一个对端之间的第一条控制连接建起来了 | peer |
+| `peer_offline` | 和一个对端之间的最后一条控制连接没有了 | peer |
+| `session_start` | 本节点建了一个会话 | peer、rule、session、role、destination |
+| `session_end` | 本节点的一个会话结束了 | 同上，另有 tx_bytes、rx_bytes、clean、reason |
+| `rule_failure` | 规则的一条连接、或者 `tcpraid connect` 的一条连接没有被承载 | rule、reason |
+
+| 变量 | JSON 字段 | 内容 |
+|---|---|---|
+| `TCPRAID_EVENT` | `event` | 事件 |
+| `TCPRAID_TIME` | `time` | 发生的时间，RFC 3339 |
+| `TCPRAID_PEER` | `peer` | 对端的名字 |
+| `TCPRAID_RULE` | `rule` | 规则的名字。对端带来的会话和 `tcpraid connect` 没有这一项 |
+| `TCPRAID_SESSION` | `session` | 会话的编号，32 位十六进制。`tcpraid sessions` 显示它的前六位 |
+| `TCPRAID_ROLE` | `role` | 本节点接了应用的连接时是 `client`，会话是对端带来的时是 `server` |
+| `TCPRAID_DESTINATION` | `destination` | 连接在对面节点那边去哪里 |
+| `TCPRAID_TX_BYTES`、`TCPRAID_RX_BYTES` | `tx_bytes`、`rx_bytes` | 本节点发出和收到的数据 |
+| `TCPRAID_CLEAN` | `clean` | 数据流在两个方向都完整结束时是 `true`，被切断时是 `false` |
+| `TCPRAID_REASON` | `reason` | 会话是怎么结束的，和日志里的说法一样，或者连接为什么没有被承载 |
+
+```
+{"event":"session_end","time":"2026-01-15T10:00:48.232907258Z","peer":"nas-b","rule":"zfs","session":"7dc9fd4e6c7faf75936b2d4c871cf2d4","role":"client","destination":"192.0.2.10:5000","tx_bytes":50331648,"rx_bytes":0,"clean":true,"reason":"done"}
+```
+
+不属于某个事件的变量不会被设置。原因里可能有对端发来的文字。它只出现在这些值里，绝不会出现在命令行上，而且在变量里，0 到 31 和 127 这些控制字符都换成了空格。程序拿到的是节点的环境，去掉了节点自己那些以 `TCPRAID_` 开头的变量。任何一个值里都没有密钥、令牌和配对码。
+
+钩子在节点旁边运行，不会拖住节点。同时最多有四次运行。已经有四次在跑的时候发生的事件不交给钩子，节点会计数，并在日志里说漏掉了几个。所以只有在钩子比事件来得快的时候，它才看得到每一个事件，不能漏事件的程序还要从 API 读会话和对端。一次运行超过 `-hook-timeout` 就被结束。被结束的是节点启动的那个程序，它自己又启动的程序不在其内，所以脚本不要留下还在跑的程序。运行返回的状态不是 0 时记进日志，不影响节点。几次运行可以重叠，结束的先后也可以和事件发生的先后不同。路径测试的会话不通知钩子。
+
+### 导出的配置
+
+`tcpraid config export` 写出这份文件，`tcpraid config apply` 读它(`reference-cli.md`)：
+
+```
+version: 1
+node:
+  name: nas-a
+  fingerprint: 2b7e151628aed2a6abf7158809cf4f3c762e7160f38b4da56a784d9045190cfe
+  transport:
+    hol: 500ms
+peers:
+  - name: nas-b
+    fingerprint: 1979efc900f372edcde2db07d83fe6eb000973864bde0d5d2c12ab194950edf9
+    allow: 192.0.2.10/32:5000
+    udp_dial: ""
+    transport:
+      window: 8MB
+    paths:
+      - name: default
+        type: tcp
+        addr: nas-b.example:9851
+        security: tls
+        roles:
+          - data
+        subs: 8
+rules:
+  - name: zfs
+    peer: nas-b
+    listen: 127.0.0.1:5000
+    destination: 192.0.2.10:5000
+    enabled: true
+    subs: 3
+```
+
+| 字段 | 内容 |
+|---|---|
+| `version` | 这种格式的版本，`1` |
+| `node.name`、`node.fingerprint`、`node.transport` | 节点的名字，说明文件是从哪个节点导出的指纹，以及节点运行中存下来的传输层设置，按名字 |
+| `peers[].name`、`fingerprint` | 是哪个对端。只有两者都和节点已配对的某个对端相符时，apply 才改它 |
+| `peers[].allow`、`udp_dial`、`transport` | 允许列表、给这个对端的 UDP 回执发到哪里、这个对端的传输层设置 |
+| `peers[].paths[]` | `name`、`type`、`addr`、`addrs`、`proxy`、`security`、`verify`、`pin`、`roles`、`subs`、`mark`，写法和 `tcpraid peers path set` 的参数相同。`proxy` 不带用户名和密码，`proxy_login` 是一条说明，表示节点里有它们 |
+| `rules[]` | `name`、`peer`，`listen` 加 `destination`、`match`、`socks` 三者之一，然后是 `enabled`、`paths`、`subs`、`dial` 和 `transport`，写法和 `tcpraid rules add` 的参数相同。不写 `enabled` 的规则是开启的 |
+
+空的列表和空的设置不写出来。apply 时遇到这个版本不认识的字段会报错。
+
 ### 网页界面的密码
 
 它从哪里来，按下面的顺序：
@@ -188,6 +302,7 @@ drwx------  .
 | 任意 TCP，习惯上用 1080 | SOCKS5 规则的地址 | 会说 SOCKS5 的应用 |
 | 任意 TCP | `-transparent` | 被重定向的连接 |
 | 任意 UDP | `-udp-listen` | 对端的回执 |
+| 任意 TCP | `-metrics` | 节点的各项数字，不需要令牌 |
 
 只有 9850 是程序内置的默认值。9851 和给规则用的 50000-50010 这一段，是容器镜像和 `deploy/` 里的模板所采用的。
 

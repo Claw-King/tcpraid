@@ -118,6 +118,11 @@ type Runtime struct {
 	// socksOpening, if not zero, is the time a client of a SOCKS5 rule has for its
 	// request, in the place of socksOpeningTime (a test sets it before Start).
 	socksOpening time.Duration
+	// Notify, if not nil, is told when a peer comes online or goes offline (the
+	// first control connection with it is up, the last one is gone) and when a
+	// connection of a rule, or one of the connect route, was not carried. It must
+	// return at once. Set before Start.
+	Notify func(Notice)
 	// RulesChanged, if not nil, is called after the rules of the node changed and
 	// the listeners were brought in line (AddRule, ReplaceRule, RemoveRule). Set
 	// before Start.
@@ -173,6 +178,29 @@ type RuleStatus struct {
 	// PeerDials: new connections of the rule are opened by the peer for now, although
 	// this node has a path to it, because that path is down.
 	PeerDials bool
+}
+
+// Notice is what Runtime.Notify is told. Kind is NoticeOnline, NoticeOffline or
+// NoticeFailure; Rule and Reason belong to a failure, and Rule is empty for a
+// connection of the connect route.
+type Notice struct {
+	Kind   string
+	Peer   string
+	Rule   string
+	Reason string
+}
+
+// The kinds of a Notice.
+const (
+	NoticeOnline  = "online"
+	NoticeOffline = "offline"
+	NoticeFailure = "failure"
+)
+
+func (rt *Runtime) notify(n Notice) {
+	if rt.Notify != nil {
+		rt.Notify(n)
+	}
 }
 
 func (rt *Runtime) logf(format string, args ...any) {

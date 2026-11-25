@@ -46,7 +46,12 @@ taken  0.0.0.0:9700  nas-a  192.0.2.10:873  0         FAILED: listening on 0.0.0
 | SOCKS5 客户端报告应答码 2、4 或 1 | 规则没能承载这条连接。2 是对面节点的允许列表，4 是对面节点连不上目的地或找不到名字，1 是其余情况。`tcpraid rules` 里有最近一次的原因(见 `reference-cli.md` 的“SOCKS5 规则”) |
 | SOCKS5 客户端或 `tcpraid connect` 的连接刚开始就被重置 | 对面节点接下了连接，事后才发现目的地没有回应。SOCKS5 规则的原因在 `tcpraid rules` 里。`tcpraid connect` 的原因在节点的日志里，那一行以 `connect:` 开头 |
 | `tcpraid connect` 以状态 3 结束 | 到目的地的连接没有开始。原因在它的标准错误里，说法和上面各行相同 |
-| `tcpraid connect` 以状态 1 结束，并说 "does not carry connections for this command" | 本机上的节点比 0.9.0 旧。更新它 |
+| `tcpraid connect` 以状态 1 结束，并说 "does not carry connections for other programs" | 本机上的节点比 0.9.0 旧。更新它 |
+| "hook: N events were not given to the hook, because 4 runs of it were going on" | 事件来得比钩子返回得快，而节点不等它。让 `-hook` 的程序快一些，或者让它把活儿启动起来就返回。`reference-files.md` 写了钩子能指望什么 |
+| "hook: the run for EVENT lasted longer than 30s and was ended" | 钩子的一次运行没有在 `-hook-timeout` 之内返回 |
+| 启动时 "-hook: the hook ... cannot be run" | `-hook` 指定的程序不存在，或者不能执行。它只接受一个程序，不带参数。把需要的东西写进一个脚本，再指定这个脚本 |
+| `tcpraid config apply` 说 "the node did not take it" 然后停下 | 节点拒绝了一处改动，原因写在后面。它之前的改动保留。改好文件再 apply 一次 |
+| `tcpraid config apply` 说某个对端 "is in the file and not paired with this node" | apply 不配对。先让两个节点配对，再 apply 这份文件。名字相符而指纹不符时也是这一行，意思是这个对端不是文件所写的那个节点 |
 | 启动时 "-redirect: the program nft was not found" | 节点用 `nft` 安装重定向规则，而它的 `PATH` 里没有这个程序。安装 nftables，或者不用 `-redirect`、自己写规则。容器镜像里没有 `nft` |
 | 启动时 "-redirect: nft did not take the rules ... Operation not permitted" | 节点没有 `CAP_NET_ADMIN` 权限。给它这项权限，或者不用 `-redirect` |
 | "nothing arrived from peer ... for the whole grace time" | 两个节点之间的线路断开的时间超过了 `-grace`。见下一节 |

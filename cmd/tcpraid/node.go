@@ -29,10 +29,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Claw-King/tcpraid/client"
 	"github.com/Claw-King/tcpraid/internal/api"
 	"github.com/Claw-King/tcpraid/internal/control"
 	"github.com/Claw-King/tcpraid/internal/engine"
 	"github.com/Claw-King/tcpraid/internal/forward"
+	"github.com/Claw-King/tcpraid/internal/hook"
 	"github.com/Claw-King/tcpraid/internal/link"
 	"github.com/Claw-King/tcpraid/internal/node"
 	"github.com/Claw-King/tcpraid/internal/pair"
@@ -81,9 +83,11 @@ func subcommand(args []string, stdout, stderr io.Writer) (code int, ok bool) {
 		return cmdTransport(args[1:], stdout, stderr), true
 	case "connect":
 		return cmdConnect(args[1:], connectStdin, stdout, stderr), true
+	case "config":
+		return cmdConfig(args[1:], stdout, stderr), true
 	}
 	fmt.Fprintf(stderr, "tcpraid: unknown command %q\n"+
-		"commands: run, status, version, pair, peers, rules, sessions, transport, connect (tcpraid COMMAND -h lists a command's flags)\n"+
+		"commands: run, status, version, pair, peers, rules, sessions, transport, connect, config (tcpraid COMMAND -h lists a command's flags)\n"+
 		"without a command, tcpraid takes the manual-mode flags (tcpraid -h)\n", args[0])
 	return 2, true
 }
@@ -156,6 +160,9 @@ func runFlags(args []string, stderr io.Writer) (o runOptions, code int, done boo
 	fs.StringVar(&o.apiKeyFile, "api-key", "", "private key (PEM) of -api-cert")
 	fs.StringVar(&o.redirect, "redirect", "", "install the redirect rules for the transparent rules with the nft program of the host, in a table of the node, and remove them when the node stops: forwarded (connections that pass through this host), local (connections that programs on this host open) or both. Linux only, with -transparent, nft and the capability CAP_NET_ADMIN (empty: you install them)")
 	fs.BoolVar(&o.redirectPrint, "redirect-print", false, "with -redirect: log the rules that the node would give nft, at the start and whenever its rules change, and install none")
+	fs.StringVar(&o.metrics, "metrics", "", "listen address for the node's figures, for a monitoring system: Prometheus text at /metrics and JSON at /metrics.json, read-only and without the token (empty: off)")
+	fs.StringVar(&o.hook, "hook", "", "`command` that the node runs when a peer comes online or goes offline, a session begins or ends, or a connection of a rule fails. It is executed directly, with what happened in its environment and as one line of JSON on its standard input (empty: none)")
+	fs.DurationVar(&o.hookTimeout, "hook-timeout", hook.DefaultTimeout, "how long a run of -hook may last before it is ended")
 	fs.BoolVar(&o.noUI, "no-ui", false, "switch the web interface off: its pages and the login answer 404, and the local API with its token stays")
 	fs.StringVar(&o.uiPasswordFile, "ui-password-file", "", "file with the password of the web interface (default: the environment variable "+uiPasswordEnv+", or else a password made at the first start and logged once)")
 	transport := defaultTransport()
@@ -200,6 +207,9 @@ type runOptions struct {
 	spares                 *int              // spare connections asked for and kept; nil: defaultSpares
 	transport              *transportOptions // nil: the defaults
 	stats                  time.Duration     // how often the totals are logged; 0: never
+	metrics                string            // listen address of the figures without a token; empty: off
+	hook                   string            // command run on events; empty: none
+	hookTimeout            time.Duration     // how long a run of it may last
 }
 
 // check reports what in the options cannot work, before anything is opened.
@@ -220,6 +230,9 @@ func (o *runOptions) check() error {
 	}
 	if o.stats < 0 {
 		return errors.New("-stats must not be negative (0: off)")
+	}
+	if o.hook != "" && (o.hookTimeout < time.Second || o.hookTimeout > time.Hour) {
+		return fmt.Errorf("-hook-timeout is %v. Give 1s to 1h.", o.hookTimeout)
 	}
 	if o.spares != nil && (*o.spares < 0 || *o.spares > control.MaxSpares) {
 		return fmt.Errorf("-spares is %d. Give 0 to %d.", *o.spares, control.MaxSpares)
@@ -363,6 +376,23 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 
 	dialer := &link.Dialer{Identity: n.Identity}
 	rules := &forward.Runtime{Node: n, Engine: e, Dialer: dialer, Version: version, Logf: log.Printf, Spares: defaultSpares, Pinned: given}
+	// The hook, if there is one: a command that cannot be run ends the start here,
+	// before anything is bound.
+	var hooks *hook.Runner
+	if o.hook != "" {
+		if hooks, err = hook.New(o.hook, o.hookTimeout, log.Printf); err != nil {
+			return fmt.Errorf("-hook: %w", err)
+		}
+		e.Watch = func(ev engine.SessionEvent) {
+			if !ev.Owner.Test {
+				hooks.Emit(sessionEvent(ev))
+			}
+		}
+		rules.Notify = func(nt forward.Notice) { hooks.Emit(noticeEvent(nt)) }
+		log.Printf("hook: %s is run on events, at most %d runs at one time, each for at most %v", hooks.Path(), hook.MaxRunning, o.hookTimeout)
+		// the runs for what the stop itself causes get a moment to end
+		defer hooks.Wait(5 * time.Second)
+	}
 	if o.spares != nil {
 		rules.Spares = *o.spares
 	}
@@ -414,6 +444,12 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 	if o.transparent != "" {
 		listeners = append(listeners, &listener{flag: "-transparent", addr: o.transparent, serve: rules.ServeTransparent})
 	}
+	// The figures on an address of their own, where no token is asked for.
+	extra := func() []api.MetricsSample { return hookSamples(hooks) }
+	if o.metrics != "" {
+		ms := api.NewMetricsServer(api.MetricsSource{Engine: e, Node: svc, Rules: rules, Extra: extra})
+		listeners = append(listeners, &listener{flag: "-metrics", addr: o.metrics, serve: ms.Serve})
+	}
 	closeAll := func() {
 		for _, l := range listeners {
 			if l.ln != nil {
@@ -436,9 +472,12 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 		}
 		bound["-udp-listen"] = o.udpListen
 	}
-	apiConfig := api.Config{Version: version, Token: n.Token, Node: svc, Engine: e, Rules: rules, UI: ui, Advertise: o.advertise}
+	apiConfig := api.Config{Version: version, Token: n.Token, Node: svc, Engine: e, Rules: rules, UI: ui, Advertise: o.advertise, MetricsExtra: extra}
 	if o.listen != "" {
 		apiConfig.Listen = []string{bound["-listen"]}
+	}
+	if o.metrics != "" {
+		apiConfig.Metrics = bound["-metrics"]
 	}
 	apiSrv := api.New(apiConfig)
 	listeners[0].serve = apiSrv.Serve
@@ -506,6 +545,13 @@ func runNodeWith(ctx context.Context, o runOptions) error {
 			log.Printf("the API at %s is plain HTTP and reachable from other hosts. Use it on a network you trust, or put a reverse proxy with TLS in front.", a)
 		} else {
 			log.Printf("the web interface and the API at %s are plain HTTP and reachable from other hosts. Use them on a network you trust, or put a reverse proxy with TLS in front.", a)
+		}
+	}
+	if o.metrics != "" {
+		if a, err := net.ResolveTCPAddr("tcp", bound["-metrics"]); err == nil && !a.IP.IsLoopback() {
+			log.Printf("the figures at %s need no token and are reachable from other hosts. They hold numbers and the names of the peers and the rules. Use them on a network you trust.", bound["-metrics"])
+		} else {
+			log.Printf("the figures of the node are served at http://%s%s without a token", bound["-metrics"], api.PathMetrics)
 		}
 	}
 	// The redirect rules for the transparent rules, if the node is to install them:
@@ -631,89 +677,22 @@ func cmdStatus(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// nodeAPI is how a command on this host reaches the API of a node: where it is, the
-// token, and a client that talks to that node and to nothing else.
-type nodeAPI struct {
-	base   string // "http://HOST:PORT" or "https://HOST:PORT"
-	addr   string
-	token  string
-	client *http.Client
-	close  func()
-	// tls is how a connection to the API is checked when the API is served over TLS;
-	// nil when it is not.
-	tls *tls.Config
-}
-
-// openAPI reads, from the files the node keeps in its data directory, where the API is,
-// the token, and whether the API is served over TLS. With TLS the client accepts one
-// certificate only: the one the node recorded in the data directory, by its key.
-// Nothing is sent, the token least of all, to an API that presents another.
-func openAPI(dataDir string, timeout time.Duration) (*nodeAPI, error) {
-	token, err := node.ReadToken(dataDir)
-	if err != nil {
-		return nil, err
-	}
-	addr, err := node.ReadAPIAddr(dataDir)
-	if err != nil {
-		return nil, err
-	}
-	// no proxy from the environment: the token goes to the node and nowhere else
-	tr := &http.Transport{Proxy: nil}
-	a := &nodeAPI{base: "http://" + addr, addr: addr, token: token, close: tr.CloseIdleConnections}
-	switch cert, err := node.ReadAPITLS(dataDir); {
-	case err == nil:
-		want := node.FingerprintBytes(cert)
-		a.base = "https://" + addr
-		tr.TLSClientConfig = &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			// The certificate is not checked against the authorities of the system or
-			// against a name: it has to be the one in the data directory, which is
-			// checked here, before the handshake ends and anything is sent.
-			InsecureSkipVerify: true,
-			VerifyConnection: func(cs tls.ConnectionState) error {
-				if len(cs.PeerCertificates) == 0 {
-					return errors.New("the API presented no certificate")
-				}
-				if got := node.FingerprintBytes(cs.PeerCertificates[0]); got != want {
-					return fmt.Errorf("the API at %s presents another certificate than %s holds. Nothing was sent to it.", addr, node.APITLSFile)
-				}
-				return nil
-			},
-		}
-	case !errors.Is(err, os.ErrNotExist):
-		return nil, err
-	}
-	a.tls = tr.TLSClientConfig
-	a.client = &http.Client{Transport: tr, Timeout: timeout}
-	return a, nil
-}
-
 // queryStatus asks the node whose data directory is dataDir for its status: the token
-// and the API address are read from files the node keeps there. It returns the decoded
-// status and the answer as received.
+// and the API address are read from files the node keeps there (package client). It
+// returns the decoded status and the answer as received.
 func queryStatus(dataDir string) (*api.Status, []byte, error) {
-	a, err := openAPI(dataDir, 5*time.Second)
+	c := client.New(dataDir)
+	c.Timeout = 5 * time.Second
+	status, body, err := c.Raw(context.Background(), http.MethodGet, api.PathStatus, nil)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer a.close()
-	addr := a.addr
-	req, err := http.NewRequest(http.MethodGet, a.base+api.PathStatus, nil)
-	if err != nil {
-		return nil, nil, err
+	addr, _ := node.ReadAPIAddr(dataDir)
+	if status != http.StatusOK {
+		return nil, nil, fmt.Errorf("%s answered %d %s", addr, status, http.StatusText(status))
 	}
-	req.Header.Set("Authorization", "Bearer "+a.token)
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("%s answered %s", addr, resp.Status)
+	if len(body) > 1<<20 {
+		return nil, nil, fmt.Errorf("%s did not answer with a status", addr)
 	}
 	var st api.Status
 	if err := json.Unmarshal(body, &st); err != nil {

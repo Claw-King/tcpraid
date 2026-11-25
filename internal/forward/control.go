@@ -312,9 +312,13 @@ func (rt *Runtime) runControl(peer node.Peer, conn net.Conn, dialed bool) {
 		conn.Close()
 		return
 	}
+	first := len(pc.conns) == 0
 	pc.conns = append(pc.conns, cc)
 	rt.mu.Unlock()
 	rt.logf("peer %q: control connection with %s is up", peer.Name, conn.RemoteAddr())
+	if first {
+		rt.notify(Notice{Kind: NoticeOnline, Peer: peer.Name})
+	}
 	stop := context.AfterFunc(pc.ctx, func() { cc.Close() })
 	done := make(chan struct{})
 	why := rt.serveControl(pc, cc, done)
@@ -343,6 +347,9 @@ func (rt *Runtime) runControl(peer node.Peer, conn net.Conn, dialed bool) {
 		rt.kickSpares(pc) // the keeper sees that none are wanted and ends
 	}
 	rt.logf("peer %q: control connection with %s is down: %v", peer.Name, conn.RemoteAddr(), why)
+	if gone {
+		rt.notify(Notice{Kind: NoticeOffline, Peer: peer.Name})
+	}
 }
 
 // serveControl says hello, pings, and handles the messages of cc until it fails; it

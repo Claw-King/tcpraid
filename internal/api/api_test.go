@@ -375,8 +375,10 @@ func TestMetrics(t *testing.T) {
 		}
 		samples++
 	}
-	if want := len(engine.New(engine.DefaultConfig()).Counters()); samples != want {
-		t.Errorf("%d samples, the engine has %d counters", samples, want)
+	// the engine's counters, and since 0.10.0 the memory the runtime reports; this node
+	// has no peer and no rule to give a figure for
+	if want := len(engine.New(engine.DefaultConfig()).Counters()) + 1; samples != want {
+		t.Errorf("%d samples, the engine has %d counters and the runtime one figure", samples, want-1)
 	}
 	for _, want := range []string{
 		"# TYPE tcpraid_sessions_total counter\ntcpraid_sessions_total 0\n",

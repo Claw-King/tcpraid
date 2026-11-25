@@ -41,9 +41,10 @@ It adds, on top of the speed:
   resets the application's connection on both sides. That holds when a node
   is stopped, and also when its process is killed or runs out of memory,
   because each node configures the application's connection so that the
-  system resets it if the process dies. Two cases remain and are listed under
-  "Known limits": an empty connection at the stop of a node, and a machine
-  that loses power.
+  system resets it if the process dies. Three cases remain and are listed
+  under "Known limits": an application that resets its connection while the
+  node is writing to it, an empty connection at the stop of a node, and a
+  machine that loses power.
 - **Encryption between the two nodes** by default (TLS 1.3). Each node checks
   the other's key against the one it stored when the two were paired.
 
@@ -88,6 +89,13 @@ SOCKS5, each of which names the destination it wants. And
 `tcpraid connect` puts a single connection on the standard input and output
 of a command, for programs such as `ssh` that run a command to reach a
 server. `docs/en/reference-cli.md` describes all of them.
+
+For the people who run it there are four more things. `tcpraid config export`
+writes the configuration of a node as one file without a secret in it, and
+`tcpraid config apply` makes a node match such a file. `-metrics` serves the
+node's figures to a monitoring system. `-hook` runs a program of yours when
+a peer comes or goes and when a session begins or ends. And Go programs can
+use a node through the package `client`.
 
 When something goes wrong, the node says where to look. `tcpraid rules`
 shows why the last connection of a rule failed, with the reason the other
@@ -170,7 +178,8 @@ this slowly.
 | `docs/en/troubleshooting.md` | what to look at when it does not work or is slow |
 | `docs/en/reference-cli.md` | every command |
 | `docs/en/reference-api.md` | the local HTTP API, with examples |
-| `docs/en/reference-files.md` | the data directory and the options of `tcpraid run` |
+| `docs/en/reference-files.md` | the data directory, the options of `tcpraid run`, the figures for monitoring, the hook, the exported configuration |
+| `docs/en/go-package.md` | using a node from a Go program |
 | `docs/en/manual-mode.md` | the mode without nodes: one client, one server, flags or a file |
 | `PROTOCOL.md` | the wire protocol |
 | `deploy/README.md` | the build script, the image, the container templates |
@@ -210,6 +219,16 @@ This is a first version, made by one developer in spare time. What is known:
 - **A host name as the destination of a rule needs version 0.4.0 or later on
   both nodes.** The peer looks the name up for every connection. Nothing is
   kept between two connections, so each one waits for that lookup first.
+- **An application that resets its connection while the node writes to it.**
+  The system reports a reset to one call only. If the node's write is that
+  call, the node's read of the same connection sees an ordinary end, and in
+  rare cases this end reaches the other node before the session is ended.
+  The application at the other site then reads the end of a complete stream,
+  although the first application was cut off. In a test written to provoke
+  this, a few of every hundred such connections ended that way. The same can
+  happen, far more rarely, to a program that resets its connection to the
+  API without `-api-tls` at the moment the node takes its `connect` request.
+  The destination may then see an empty stream.
 - **Stopping a node while a destination is still being connected.** If a node
   is stopped at the very moment a session that has just begun is connecting to
   its destination at that node, the destination may see a connection that is
@@ -262,6 +281,13 @@ This is a first version, made by one developer in spare time. What is known:
   the whole input. A cut after that reaches the destination as a reset and
   is not seen by the command, which has ended. Both came with version 0.9.0
   and were run in containers, with `curl` as the SOCKS5 client.
+- **The exported configuration is not a backup.** It holds no key and no
+  pair secret, so it cannot bring a node back or pair one. Keep the data
+  directory for that.
+- **A hook does not see every event.** The node runs at most four at a time
+  and does not wait. Events that come faster than the hook returns are left
+  out and counted.
+- **The Go package `client` may still change** before version 1.0.
 - **The redirect rules that a node installs itself (`-redirect`)** were run
   in containers with nftables 1.0.9, for IPv4. The container image holds no
   `nft`, so the image cannot install them. A node that is killed leaves its
